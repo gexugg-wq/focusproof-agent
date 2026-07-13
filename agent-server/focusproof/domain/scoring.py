@@ -93,9 +93,17 @@ def score_learning_session(
     goal_terms = _meaningful_terms(f"{goal.title} {goal.goal}")
     submitted_terms = _meaningful_terms(f"{joined_text} {answer_text}")
     has_goal_alignment = bool(goal_terms & submitted_terms)
+    has_successful_verification = any(
+        observation.status == "success" for observation in observations
+    )
 
     text_items = [item for item in evidence if item.evidenceType == "text"]
-    if text_items and all(_is_generic(_text(item)) for item in text_items):
+    if (
+        text_items
+        and all(_is_generic(_text(item)) for item in text_items)
+        and not has_answer
+        and not has_successful_verification
+    ):
         findings.append(
             Finding(
                 severity="warning",

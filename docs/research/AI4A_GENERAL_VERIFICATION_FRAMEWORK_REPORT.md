@@ -142,6 +142,9 @@ Fragments are stripped, scheme/host are normalized, and DNS policy is applied
 immediately before the first request and again before every redirect request.
 Each request connects to the policy-validated IP while retaining the original
 hostname for HTTP Host and TLS SNI, closing the DNS validation/connection race.
+The production client disables HTTP/2 and keep-alive pooling; verifier requests
+also request connection close and remove Cookie headers so hostnames sharing an
+IP cannot reuse a TLS connection or cookie state.
 
 `BoundedUrlFetcher` requires an `httpx.Client` with automatic redirects disabled,
 allows at most three explicitly revalidated redirects, maps connection/read
@@ -178,7 +181,8 @@ block-explorer concept rewards and no longer has a transaction-shaped shortcut.
 It uses domain-neutral text specificity, overlap with meaningful goal terms,
 and learner answers while preserving the existing dimensions, score bounds,
 public response fields, and weak-evidence behavior. URL-only evidence is no
-longer treated as an empty generic-text set, and CJK specificity uses
+longer treated as an empty generic-text set, generic notes do not override a
+specific answer or successful verifier fact, and CJK specificity uses
 Unicode-aware lexical units. Successful verification observations remain
 supporting facts and cannot set `VerifiedLearning`.
 
@@ -202,15 +206,15 @@ Task 4 URL safety/tool: 28 passed; Ruff passed; Mypy 3 files passed
 Task 5 assembly/factory/registry/restart: 16 passed; Ruff passed; Mypy 21 files passed
 Task 6 native flow/projection/lifecycle: 12 passed; Ruff passed; Mypy 21 files passed
 Task 7 scoring/API: 13 passed, 1 warning; Ruff passed; Mypy 5 files passed
-Final review hardening (URL safety/redaction, scoring, CJK, toolset diagnostics):
-62 passed
+Final review hardening (URL safety/redaction/isolation, scoring, CJK, toolset
+diagnostics): 64 passed
 ```
 
 Full verification:
 
 ```text
 .venv/bin/python -m pytest agent-server/tests -q -m "not real_llm"
-165 passed, 1 deselected, 8 warnings
+167 passed, 1 deselected, 8 warnings
 
 .venv/bin/ruff check agent-server
 All checks passed!
@@ -219,7 +223,7 @@ All checks passed!
 Success: no issues found in 111 source files
 
 .venv/bin/python -m pytest agent-server/tests/persistence agent-server/tests/api/test_restart_persistence.py agent-server/tests/openhands_runtime -q -m "not real_llm"
-115 passed, 1 deselected, 8 warnings
+116 passed, 1 deselected, 8 warnings
 ```
 
 The warnings are the existing Starlette/httpx TestClient deprecation and Python

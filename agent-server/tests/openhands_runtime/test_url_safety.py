@@ -123,6 +123,40 @@ def test_fetcher_pins_connection_to_policy_validated_address() -> None:
     assert requests[0].extensions["sni_hostname"] == "example.com"
 
 
+def test_fetcher_disables_connection_and_cookie_reuse_for_pinned_requests() -> None:
+    from focusproof.openhands_runtime.tools.url_fetcher import BoundedUrlFetcher
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/plain", "set-cookie": "next=secret"},
+            content=b"safe",
+        )
+
+    client = client_for(httpx.MockTransport(handler))
+    client.cookies.set("prior", "secret", domain="93.184.216.34")
+    try:
+        fetcher = BoundedUrlFetcher(
+            policy=UrlSafetyPolicy(allow_http=False, resolver=public_resolver),
+            client=client,
+        )
+        fetcher.fetch("https://one.example/guide")
+        fetcher.fetch("https://two.example/guide")
+    finally:
+        client.close()
+
+    assert len(requests) == 2
+    assert [request.headers["host"] for request in requests] == [
+        "one.example",
+        "two.example",
+    ]
+    assert all(request.headers["connection"] == "close" for request in requests)
+    assert all("cookie" not in request.headers for request in requests)
+
+
 def test_fetcher_rejects_more_than_three_redirects() -> None:
     from focusproof.openhands_runtime.tools.url_fetcher import (
         BoundedUrlFetcher,

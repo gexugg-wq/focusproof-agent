@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from contextlib import closing
 from dataclasses import dataclass
 from html import unescape
 from urllib.parse import urljoin
@@ -65,12 +66,19 @@ class BoundedUrlFetcher:
         while True:
             request_url, host_header = _pinned_request_target(safe)
             try:
-                with self._client.stream(
+                request = self._client.build_request(
                     "GET",
                     request_url,
-                    headers={"Host": host_header},
-                    follow_redirects=False,
+                    headers={"Host": host_header, "Connection": "close"},
                     extensions={"sni_hostname": safe.hostname},
+                )
+                request.headers.pop("cookie", None)
+                with closing(
+                    self._client.send(
+                        request,
+                        stream=True,
+                        follow_redirects=False,
+                    )
                 ) as response:
                     if response.status_code in _REDIRECT_STATUSES:
                         location = response.headers.get("location")

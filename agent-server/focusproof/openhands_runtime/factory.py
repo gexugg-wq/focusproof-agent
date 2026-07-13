@@ -63,6 +63,8 @@ class ConversationFactory:
         if url_fetcher is None:
             client = httpx.Client(
                 follow_redirects=False,
+                http2=False,
+                limits=httpx.Limits(max_keepalive_connections=0),
                 timeout=httpx.Timeout(15.0, connect=5.0),
             )
             url_fetcher = BoundedUrlFetcher(

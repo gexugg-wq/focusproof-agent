@@ -190,6 +190,38 @@ def test_url_only_evidence_with_specific_answer_is_not_generic_text() -> None:
     assert result.status == "LikelyLearning"
 
 
+def test_generic_text_does_not_poison_url_evidence_and_specific_answer() -> None:
+    goal = general_goal(
+        "Understand retry guidance",
+        "Explain retry guidance from the referenced documentation",
+    )
+    evidence = [
+        text_evidence("ev_note", "I learned a lot."),
+        Evidence(
+            evidenceId="ev_url",
+            evidenceType="url",
+            contentHash="sha256:url",
+            sourceUrl="https://example.com/retry-guide",
+        ),
+    ]
+    observation = Observation(
+        toolName="focusproof_url_evidence_verification",
+        status="success",
+        facts={"status_code": 200, "title": "Retry guide"},
+        sourceRefs=["ev_url", "sha256:url", "https://example.com/retry-guide"],
+    )
+
+    result = score_learning_session(
+        goal,
+        evidence,
+        ["Retry guidance uses bounded exponential delays to reduce contention."],
+        [observation],
+    )
+
+    assert result.score >= 60
+    assert result.status == "LikelyLearning"
+
+
 def test_substantive_cjk_text_is_not_treated_as_generic() -> None:
     goal = general_goal("理解实验对照", "解释为什么实验需要对照组")
     evidence = [
