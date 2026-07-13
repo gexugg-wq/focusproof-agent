@@ -1,0 +1,398 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, ContextManager, Protocol, cast
+from uuid import UUID
+
+from openhands.sdk.conversation.types import ConversationCallbackType
+from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
+from openhands.sdk.event.base import Event as OpenHandsEvent
+
+from focusproof.openhands_runtime.factory import ConversationFactory, LLMFactory
+from focusproof.openhands_runtime.handle import ConversationHandle, RuntimeReviewResult
+from focusproof.openhands_runtime.locks import SessionRunLock
+from focusproof.openhands_runtime.projector import AuditProjection, OpenHandsEventProjector
+from focusproof.openhands_runtime.result_extractor import AuditQuery, RuntimeResultExtractor
+from focusproof.openhands_runtime.synchronizer import ConversationSynchronizer
+from focusproof.openhands_runtime.tools import SessionEvidenceRepository
+from focusproof.openhands_runtime.tools.learner_input import LearnerInputObservation
+from focusproof.openhands_runtime.tools.review_draft import ReviewDraftObservation
+from focusproof.persistence.repositories import StoredSession
+from focusproof.persistence.unit_of_work import UnitOfWorkFactoryLike
+from focusproof.runtime.evidence import Evidence, LearningGoal
+
+
+class _NoopSessionRunLock:
+    def acquire(self, session_id: str) -> ContextManager[None]:
+        del session_id
+        from contextlib import nullcontext
+
+        return nullcontext()
+
+
+class _AuditStore(AuditProjection, AuditQuery, Protocol):
+    pass
+
+
+class ConversationManager:
+    def __init__(
+        self,
+        *,
+        repository: SessionEvidenceRepository,
+        audit_log: _AuditStore,
+        project_root: Path | None = None,
+        data_dir: Path | None = None,
+        llm_factory: LLMFactory | None = None,
+        uow_factory: UnitOfWorkFactoryLike | None = None,
+        run_lock: SessionRunLock | None = None,
+    ) -> None:
+        self._audit_log = audit_log
+        self._handles: dict[str, ConversationHandle] = {}
+        self._projectors: dict[str, OpenHandsEventProjector] = {}
+        self._evidence_ids: dict[str, set[str]] = {}
+        self._evidence: dict[str, dict[str, Evidence]] = {}
+        self._answers: dict[str, dict[str, str]] = {}
+        self._goals: dict[str, LearningGoal] = {}
+        self._uow_factory = uow_factory
+        self._run_lock = run_lock or _NoopSessionRunLock()
+        self._synchronizer = (
+            ConversationSynchronizer(uow_factory) if uow_factory is not None else None
+        )
+        self._result_extractor = RuntimeResultExtractor(audit_log, uow_factory)
+        self._factory = ConversationFactory(
+            repository=repository,
+            project_root=project_root,
+            data_dir=data_dir,
+            llm_factory=llm_factory,
+            callback_factory=self._create_projector_callback,
+        )
+        self._accepting_reviews = True
+
+    def create(
+        self,
+        session_id: str,
+        goal: LearningGoal,
+        verified_user_id: str | None = None,
+    ) -> ConversationHandle:
+        if self._uow_factory is not None:
+            if verified_user_id is None:
+                raise ValueError("verified_user_id is required")
+            return self.get_or_restore(session_id, verified_user_id)
+        with self._run_lock.acquire(session_id):
+            return self._create_legacy_unlocked(session_id, goal)
+
+    def get(self, session_id: str) -> ConversationHandle:
+        try:
+            return self._handles[session_id]
+        except KeyError as exc:
+            raise KeyError(f"No OpenHands conversation for session {session_id}") from exc
+
+    def get_or_restore(
+        self,
+        session_id: str,
+        verified_user_id: str,
+    ) -> ConversationHandle:
+        if self._uow_factory is None:
+            return self.get(session_id)
+        with self._run_lock.acquire(session_id):
+            return self._get_or_restore_unlocked(session_id, verified_user_id)
+
+    def send_evidence(
+        self,
+        session_id: str,
+        evidence_or_user_id: Evidence | str,
+    ) -> None:
+        if isinstance(evidence_or_user_id, Evidence):
+            with self._run_lock.acquire(session_id):
+                self._send_legacy_evidence_unlocked(session_id, evidence_or_user_id)
+            return
+        self._sync_persistent_session(session_id, evidence_or_user_id)
+
+    def send_answer(
+        self,
+        session_id: str,
+        question_or_user_id: str,
+        answer: str | None = None,
+    ) -> None:
+        if answer is not None:
+            with self._run_lock.acquire(session_id):
+                self._send_legacy_answer_unlocked(session_id, question_or_user_id, answer)
+            return
+        self._sync_persistent_session(session_id, question_or_user_id)
+
+    def run_review(
+        self,
+        session_id: str,
+        verified_user_id: str | None = None,
+    ) -> RuntimeReviewResult:
+        if not self._accepting_reviews:
+            raise RuntimeError("Conversation manager is shutting down")
+        with self._run_lock.acquire(session_id):
+            if self._uow_factory is not None:
+                if verified_user_id is None:
+                    raise ValueError("verified_user_id is required")
+                handle = self._get_or_restore_unlocked(session_id, verified_user_id)
+                goal, evidence, answers = self._load_scoring_facts(session_id)
+            else:
+                handle = self.get(session_id)
+                goal = self._goals[session_id]
+                evidence = list(self._evidence[session_id].values())
+                answers = list(self._answers[session_id].values())
+            try:
+                cast(Any, handle.conversation).run()
+            except Exception as exc:
+                return self._failure_result(handle, type(exc).__name__)
+
+            native_events = list(handle.conversation.state.events)
+            projector = self._projectors[session_id]
+            projector.reconcile(native_events)
+            handle.projected_event_ids = {
+                str(event.payload["sourceOpenHandsEventId"])
+                for event in self._audit_log.list(session_id)
+                if "sourceOpenHandsEventId" in event.payload
+            }
+            return self._result_extractor.extract(
+                handle=handle,
+                native_events=native_events,
+                goal=goal,
+                evidence=evidence,
+                answers=answers,
+            )
+
+    def close(self, session_id: str) -> None:
+        with self._run_lock.acquire(session_id):
+            self._close_unlocked(session_id)
+
+    def close_all(self) -> None:
+        self._accepting_reviews = False
+        for session_id in list(self._handles):
+            with self._run_lock.acquire(session_id):
+                self._close_unlocked(session_id)
+
+    def _get_or_restore_unlocked(
+        self,
+        session_id: str,
+        verified_user_id: str,
+    ) -> ConversationHandle:
+        existing = self._handles.get(session_id)
+        if existing is not None:
+            self._assert_owner(session_id, verified_user_id)
+            assert self._synchronizer is not None
+            self._synchronizer.sync(existing, verified_user_id=verified_user_id)
+            return existing
+
+        session = self._load_session(session_id)
+        if session.owner_user_id != verified_user_id:
+            raise PermissionError("Verified identity does not own this session")
+        goal = _learning_goal(session)
+        handle = self._factory.create(
+            session_id,
+            goal,
+            conversation_id=UUID(session.conversation_id),
+            user_id=verified_user_id,
+        )
+        self._handles[session_id] = handle
+        try:
+            assert self._synchronizer is not None
+            self._synchronizer.sync(handle, verified_user_id=verified_user_id)
+            self._projectors[session_id].reconcile(
+                list(handle.conversation.state.events)
+            )
+        except Exception:
+            self._close_unlocked(session_id)
+            raise
+        return handle
+
+    def _sync_persistent_session(
+        self,
+        session_id: str,
+        verified_user_id: str,
+    ) -> None:
+        if self._uow_factory is None:
+            raise RuntimeError("Persistent synchronization is not configured")
+        with self._run_lock.acquire(session_id):
+            handle = self._get_or_restore_unlocked(session_id, verified_user_id)
+            assert self._synchronizer is not None
+            self._synchronizer.sync(handle, verified_user_id=verified_user_id)
+
+    def _load_session(self, session_id: str) -> StoredSession:
+        assert self._uow_factory is not None
+        with self._uow_factory() as uow:
+            session = uow.sessions.get(session_id)
+        if session is None:
+            raise KeyError(f"Session {session_id} does not exist")
+        return session
+
+    def _assert_owner(self, session_id: str, verified_user_id: str) -> None:
+        if self._load_session(session_id).owner_user_id != verified_user_id:
+            raise PermissionError("Verified identity does not own this session")
+
+    def _load_scoring_facts(
+        self,
+        session_id: str,
+    ) -> tuple[LearningGoal, list[Evidence], list[str]]:
+        assert self._uow_factory is not None
+        with self._uow_factory() as uow:
+            session = uow.sessions.get(session_id)
+            if session is None:
+                raise KeyError(f"Session {session_id} does not exist")
+            stored_evidence = uow.evidence.list_for_session(session_id)
+            stored_answers = uow.answers.list_for_session(session_id)
+        evidence = [
+            Evidence(
+                evidenceId=item.evidence_id,
+                evidenceType=item.evidence_type,
+                contentHash=item.content_hash,
+                textContent=item.text_content,
+                sourceUrl=item.source_url,
+                metadata=item.metadata,
+            )
+            for item in stored_evidence
+        ]
+        return _learning_goal(session), evidence, [item.answer for item in stored_answers]
+
+    def _create_legacy_unlocked(
+        self,
+        session_id: str,
+        goal: LearningGoal,
+    ) -> ConversationHandle:
+        existing = self._handles.get(session_id)
+        if existing is not None:
+            return existing
+        handle = self._factory.create(session_id, goal)
+        self._handles[session_id] = handle
+        self._evidence_ids[session_id] = set()
+        self._evidence[session_id] = {}
+        self._answers[session_id] = {}
+        self._goals[session_id] = goal
+        _send_message(
+            handle.conversation,
+            json.dumps(
+                {
+                    "kind": "goal",
+                    "session_id": session_id,
+                    "goal": goal.model_dump(mode="json"),
+                },
+                sort_keys=True,
+            ),
+        )
+        return handle
+
+    def _send_legacy_evidence_unlocked(
+        self,
+        session_id: str,
+        evidence: Evidence,
+    ) -> None:
+        handle = self.get(session_id)
+        known = self._evidence_ids.setdefault(session_id, set())
+        if evidence.evidenceId in known:
+            return
+        known.add(evidence.evidenceId)
+        self._evidence.setdefault(session_id, {})[evidence.evidenceId] = evidence
+        _send_message(
+            handle.conversation,
+            json.dumps(
+                {
+                    "kind": "evidence",
+                    "session_id": session_id,
+                    "evidence": evidence.model_dump(mode="json"),
+                },
+                sort_keys=True,
+            ),
+        )
+
+    def _send_legacy_answer_unlocked(
+        self,
+        session_id: str,
+        question_id: str,
+        answer: str,
+    ) -> None:
+        handle = self.get(session_id)
+        answers = self._answers.setdefault(session_id, {})
+        if answers.get(question_id) == answer:
+            return
+        answers[question_id] = answer
+        _send_message(
+            handle.conversation,
+            json.dumps(
+                {
+                    "kind": "answer",
+                    "session_id": session_id,
+                    "question_id": question_id,
+                    "answer": answer,
+                },
+                sort_keys=True,
+            ),
+        )
+
+    def _close_unlocked(self, session_id: str) -> None:
+        handle = self._handles.pop(session_id, None)
+        if handle is not None:
+            handle.conversation.close()
+        self._projectors.pop(session_id, None)
+        self._evidence_ids.pop(session_id, None)
+        self._evidence.pop(session_id, None)
+        self._answers.pop(session_id, None)
+        self._goals.pop(session_id, None)
+
+    def _create_projector_callback(
+        self,
+        session_id: str,
+        conversation_id: UUID,
+    ) -> ConversationCallbackType:
+        projector = OpenHandsEventProjector(session_id, conversation_id, self._audit_log)
+        self._projectors[session_id] = projector
+
+        def callback(event: OpenHandsEvent) -> None:
+            projector.on_event(event)
+            if not isinstance(event, ObservationEvent):
+                return
+            if not isinstance(
+                event.observation,
+                (LearnerInputObservation, ReviewDraftObservation),
+            ):
+                return
+            handle = self._handles.get(session_id)
+            if handle is not None:
+                handle.conversation.pause()
+
+        return callback
+
+    @staticmethod
+    def _failure_result(
+        handle: ConversationHandle,
+        exception_name: str,
+    ) -> RuntimeReviewResult:
+        native_events = list(handle.conversation.state.events)
+        return RuntimeReviewResult(
+            sessionId=handle.session_id,
+            conversationMode="failed",
+            usedOpenHandsConversation=False,
+            conversationId=str(handle.conversation_id),
+            nativeEventCount=len(native_events),
+            messageEventsCount=sum(isinstance(event, MessageEvent) for event in native_events),
+            actionEventsCount=sum(isinstance(event, ActionEvent) for event in native_events),
+            observationEventsCount=sum(
+                isinstance(event, ObservationEvent) for event in native_events
+            ),
+            projectedEventsCount=0,
+            reviewStatus="failed",
+            error=f"{exception_name}: OpenHands conversation run failed",
+        )
+
+
+def _learning_goal(session: StoredSession) -> LearningGoal:
+    return LearningGoal(
+        domain=session.domain,
+        title=session.title,
+        goal=session.goal,
+        expectedOutput=session.expected_output,
+        plannedMinutes=session.planned_minutes,
+    )
+
+
+def _send_message(conversation: object, message: str) -> None:
+    # The installed SDK's exported LocalConversation type resolves this argument
+    # to Never under strict Mypy, while the runtime signature accepts str | Message.
+    cast(Any, conversation).send_message(message)

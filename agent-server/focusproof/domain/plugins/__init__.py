@@ -1,0 +1,1 @@
+"""Domain plugin registry placeholder."""

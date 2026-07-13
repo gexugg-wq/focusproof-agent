@@ -1,0 +1,11 @@
+{
+  "name": "focusproof-agent",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Monorepo scaffold for FocusProof Agent. Frontend implementation will use Next.js and TypeScript.",
+  "scripts": {
+    "test": "python -m pytest agent-server/tests -v",
+    "lint:python": "python -m ruff check agent-server",
+    "typecheck:python": "python -m mypy agent-server"
+  }
+}

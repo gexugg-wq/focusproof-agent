@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "focusproof-agent"
+version = "0.1.0"
+description = "OpenHands-inspired Python Agent Server scaffold for FocusProof learning verification."
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.13,<2",
+    "fastapi",
+    "filelock>=3.16,<4",
+    "httpx",
+    "pydantic",
+    "sqlalchemy>=2.0,<3",
+    "uvicorn",
+    "python-dotenv",
+    "openhands-sdk @ file:///mnt/d/%E7%A0%94%E4%B8%80/code_study/OpenHands/software-agent-sdk-main/openhands-sdk",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy",
+    "pytest",
+    "ruff",
+]
+
+[tool.setuptools.packages.find]
+where = ["agent-server"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = ["agent-server"]
+
+[tool.pytest.ini_options]
+markers = [
+    "real_llm: runs the explicit OpenHands real-LLM integration test",
+]
