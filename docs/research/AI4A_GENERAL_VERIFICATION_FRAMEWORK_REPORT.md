@@ -182,9 +182,10 @@ It uses domain-neutral text specificity, overlap with meaningful goal terms,
 and learner answers while preserving the existing dimensions, score bounds,
 public response fields, and weak-evidence behavior. URL-only evidence is no
 longer treated as an empty generic-text set, generic notes do not override a
-specific answer or successful verifier fact, and CJK specificity uses
-Unicode-aware lexical units. Successful verification observations remain
-supporting facts and cannot set `VerifiedLearning`.
+Unicode-aware specific answer or successful verifier fact, and trivial answers
+do not receive understanding credit. CJK specificity uses Unicode-aware lexical
+units. Successful verification observations remain supporting facts and cannot
+set `VerifiedLearning`.
 
 ## Verification Evidence
 
@@ -207,14 +208,14 @@ Task 5 assembly/factory/registry/restart: 16 passed; Ruff passed; Mypy 21 files 
 Task 6 native flow/projection/lifecycle: 12 passed; Ruff passed; Mypy 21 files passed
 Task 7 scoring/API: 13 passed, 1 warning; Ruff passed; Mypy 5 files passed
 Final review hardening (URL safety/redaction/isolation, scoring, CJK, toolset
-diagnostics): 64 passed
+diagnostics): 65 passed
 ```
 
 Full verification:
 
 ```text
 .venv/bin/python -m pytest agent-server/tests -q -m "not real_llm"
-167 passed, 1 deselected, 8 warnings
+168 passed, 1 deselected, 8 warnings
 
 .venv/bin/ruff check agent-server
 All checks passed!

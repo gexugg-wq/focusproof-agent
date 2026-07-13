@@ -222,6 +222,24 @@ def test_generic_text_does_not_poison_url_evidence_and_specific_answer() -> None
     assert result.status == "LikelyLearning"
 
 
+def test_trivial_answer_does_not_elevate_generic_goal_aligned_text() -> None:
+    goal = general_goal(
+        "Understand retry guidance",
+        "Explain retry guidance from the referenced documentation",
+    )
+    evidence = [
+        text_evidence(
+            "ev_generic",
+            "I learned a lot about retry guidance and referenced documentation today.",
+        )
+    ]
+
+    result = score_learning_session(goal, evidence, ["yes"])
+
+    assert result.score < 60
+    assert result.status == "WeakEvidence"
+
+
 def test_substantive_cjk_text_is_not_treated_as_generic() -> None:
     goal = general_goal("理解实验对照", "解释为什么实验需要对照组")
     evidence = [

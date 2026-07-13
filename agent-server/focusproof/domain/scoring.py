@@ -47,6 +47,13 @@ def _lexical_unit_count(text: str) -> int:
     return cjk_count + len(_NON_CJK_WORD_RE.findall(non_cjk_text))
 
 
+def _has_specific_answer(text: str) -> bool:
+    lowered = text.lower()
+    return _lexical_unit_count(text) >= 5 and not any(
+        phrase in lowered for phrase in _GENERIC_PHRASES
+    )
+
+
 def _meaningful_terms(text: str) -> set[str]:
     return {
         term
@@ -89,7 +96,7 @@ def score_learning_session(
     answer_text = " ".join(answers)
     first_id = evidence[0].evidenceId
     has_specific_text = any(item.evidenceType == "text" and not _is_generic(_text(item)) for item in evidence)
-    has_answer = bool(answer_text.strip())
+    has_specific_answer = _has_specific_answer(answer_text)
     goal_terms = _meaningful_terms(f"{goal.title} {goal.goal}")
     submitted_terms = _meaningful_terms(f"{joined_text} {answer_text}")
     has_goal_alignment = bool(goal_terms & submitted_terms)
@@ -101,7 +108,7 @@ def score_learning_session(
     if (
         text_items
         and all(_is_generic(_text(item)) for item in text_items)
-        and not has_answer
+        and not has_specific_answer
         and not has_successful_verification
     ):
         findings.append(
@@ -129,7 +136,7 @@ def score_learning_session(
     if has_goal_alignment:
         score += 8
         understanding += 4
-    if has_answer:
+    if has_specific_answer:
         score += 10
         understanding += 6
     final_score = min(score, 82)
