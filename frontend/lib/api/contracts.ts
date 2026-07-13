@@ -1,0 +1,103 @@
+export type LearningGoal = {
+  domain: string;
+  title: string;
+  goal: string;
+  expectedOutput?: string | null;
+  plannedMinutes?: number | null;
+};
+
+export type Evidence = {
+  evidenceId: string;
+  evidenceType: string;
+  contentHash: string;
+  textContent?: string | null;
+  sourceUrl?: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type Finding = {
+  severity: "info" | "warning" | "error";
+  message: string;
+  evidenceIds: string[];
+  observationRefs: string[];
+};
+
+export type ReviewResult = {
+  status: string;
+  score: number;
+  confidence: number;
+  dimensions: Record<string, number>;
+  findings: Finding[];
+  summary: string;
+  nextStep: string;
+};
+
+export type RuntimeReviewResult = {
+  sessionId: string;
+  conversationMode: string;
+  usedOpenHandsConversation: boolean;
+  conversationId?: string | null;
+  nativeEventCount?: number;
+  messageEventsCount?: number;
+  actionEventsCount?: number;
+  observationEventsCount?: number;
+  projectedEventsCount?: number;
+  reviewStatus: "completed" | "awaiting_user" | "failed";
+  agentQuestions?: Array<{ questionId: string; question: string }>;
+  reviewResult?: ReviewResult | null;
+  error?: string | null;
+  status?: string;
+  latestEventType?: string | null;
+  eventsCount?: number;
+};
+
+export type SessionDetail = {
+  sessionId: string;
+  state: {
+    sessionId: string;
+    ownerUserId: string;
+    status: string;
+    goal: LearningGoal;
+    evidence: Evidence[];
+    answers: Record<string, string>;
+    observations: unknown[];
+    previousActions: unknown[];
+    reviewResult: ReviewResult | null;
+    adapterMode: string;
+    conversationId: string;
+    runtimeMode: string;
+  };
+  view: Record<string, unknown>;
+};
+
+export type FocusProofEvent = {
+  id: string;
+  sessionId: string;
+  type: string;
+  sequence: number;
+  createdAt: string;
+  actor: string;
+  payload: Record<string, unknown>;
+};
+
+export type CreateSessionInput = {
+  domain: string;
+  title: string;
+  goal: string;
+  expectedOutput?: string | null;
+  plannedMinutes?: number | null;
+};
+
+export type SubmitEvidenceRequest = {
+  evidenceType: string;
+  textContent?: string;
+  sourceUrl?: string;
+  metadata: Record<string, unknown>;
+};
+
+export type SyncResponse = {
+  sessionId: string;
+  evidenceId?: string;
+  questionId?: string;
+  syncPending: boolean;
+};
