@@ -17,14 +17,12 @@ from focusproof.openhands_runtime.handle import (
     RuntimeReviewResult,
     RuntimeReviewStatus,
 )
-from focusproof.openhands_runtime.tools.evidence_verification import (
-    EvidenceVerificationObservation,
-)
 from focusproof.openhands_runtime.tools.learner_input import (
     LearnerInputAction,
     LearnerInputObservation,
 )
 from focusproof.openhands_runtime.tools.review_draft import ReviewDraftObservation
+from focusproof.openhands_runtime.tools.verification import VerificationObservation
 from focusproof.persistence.repositories import StoredReview
 from focusproof.persistence.unit_of_work import UnitOfWorkFactoryLike
 from focusproof.runtime.evidence import Evidence, LearningGoal
@@ -120,7 +118,10 @@ class RuntimeResultExtractor:
 
         if drafts:
             draft_event = drafts[-1][1]
-            observations = _focusproof_observations(native_events)
+            observations = _focusproof_observations(
+                native_events,
+                after_index=last_answer_index,
+            )
             review = score_learning_session(
                 goal=goal,
                 evidence=evidence,
@@ -313,23 +314,35 @@ def _message_kind(event: MessageEvent) -> str | None:
 
 def _focusproof_observations(
     native_events: Sequence[OpenHandsEvent],
+    *,
+    after_index: int = -1,
 ) -> list[Observation]:
     observations: list[Observation] = []
-    for event in native_events:
+    for index, event in enumerate(native_events):
+        if index <= after_index:
+            continue
         if not isinstance(event, ObservationEvent):
             continue
         native_observation = event.observation
-        if not isinstance(native_observation, EvidenceVerificationObservation):
+        if not isinstance(native_observation, VerificationObservation):
             continue
+        status = (
+            native_observation.status
+            if native_observation.status in {"success", "failed", "inconclusive"}
+            else "inconclusive"
+        )
         observations.append(
             Observation(
-                toolName="FocusProofEvidenceVerificationTool",
-                status="success" if native_observation.verified else "inconclusive",
-                facts=native_observation.model_dump(
-                    mode="json",
-                    exclude={"content", "is_error"},
-                ),
+                toolName=event.tool_name,
+                status=status,
+                facts={
+                    **native_observation.facts,
+                    "capability": native_observation.capability,
+                    "weak_signals": native_observation.weak_signals,
+                    "verifier_version": native_observation.verifier_version,
+                },
                 sourceRefs=native_observation.source_refs,
+                error=native_observation.safe_error_message,
             )
         )
     return observations

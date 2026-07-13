@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -6,9 +7,9 @@ from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
 from openhands.sdk.llm import Message, MessageToolCall, TextContent
 from openhands.sdk.tool.builtins.finish import FinishAction
 
-from focusproof.openhands_runtime.tools.evidence_verification import (
-    EvidenceVerificationAction,
-    EvidenceVerificationObservation,
+from focusproof.openhands_runtime.tools.verification import (
+    EvidenceReferenceAction,
+    VerificationObservation,
 )
 from focusproof.runtime.event_log import InMemoryEventLog
 from focusproof.runtime.events import Actor, Event, EventType
@@ -17,14 +18,14 @@ from focusproof.runtime.events import Actor, Event, EventType
 def _native_action() -> ActionEvent:
     tool_call = MessageToolCall(
         id="call_ev_1",
-        name="focusproof_evidence_verification",
+        name="focusproof_text_evidence_verification",
         arguments='{"evidence_id":"ev_1"}',
         origin="completion",
     )
     return ActionEvent(
         thought=[TextContent(text="Verify authoritative evidence")],
-        action=EvidenceVerificationAction(evidence_id="ev_1"),
-        tool_name="focusproof_evidence_verification",
+        action=EvidenceReferenceAction(evidence_id="ev_1"),
+        tool_name="focusproof_text_evidence_verification",
         tool_call_id=tool_call.id,
         tool_call=tool_call,
         llm_response_id="response_1",
@@ -32,15 +33,18 @@ def _native_action() -> ActionEvent:
 
 
 def _native_observation(action: ActionEvent) -> ObservationEvent:
-    observation = EvidenceVerificationObservation.from_text(
+    now = datetime.now(UTC)
+    observation = VerificationObservation.from_text(
         "verified",
         evidence_id="ev_1",
-        verified=True,
-        evidence_type="text",
-        findings=["specific"],
+        capability="text",
+        status="success",
+        facts={"has_text": True},
         weak_signals=[],
         source_refs=["ev_1"],
-        verifier="test",
+        verifier_version="1",
+        started_at=now,
+        completed_at=now,
     )
     return ObservationEvent(
         tool_name=action.tool_name,

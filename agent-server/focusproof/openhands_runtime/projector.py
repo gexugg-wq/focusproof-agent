@@ -11,9 +11,9 @@ from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.llm import TextContent
 from openhands.sdk.tool.builtins.finish import FinishAction
 
-from focusproof.openhands_runtime.tools.evidence_verification import (
-    EvidenceVerificationAction,
-    EvidenceVerificationObservation,
+from focusproof.openhands_runtime.tools.verification import (
+    EvidenceReferenceAction,
+    VerificationObservation,
 )
 from focusproof.openhands_runtime.tools.learner_input import (
     LearnerInputAction,
@@ -122,7 +122,7 @@ class OpenHandsEventProjector:
 
     def _project_action(self, native_event: ActionEvent, source_index: int) -> Event | None:
         action = native_event.action
-        if isinstance(action, EvidenceVerificationAction):
+        if isinstance(action, EvidenceReferenceAction):
             payload = action.model_dump(mode="json")
             event_type: EventType = "verification.requested"
             related = [action.evidence_id]
@@ -154,8 +154,11 @@ class OpenHandsEventProjector:
         source_index: int,
     ) -> Event | None:
         observation = native_event.observation
-        if isinstance(observation, EvidenceVerificationObservation):
-            payload = observation.model_dump(mode="json")
+        if isinstance(observation, VerificationObservation):
+            payload = observation.model_dump(
+                mode="json",
+                exclude={"content", "is_error"},
+            )
             event_type: EventType = "verification.completed"
             actor: Actor = "tool"
             related = [observation.evidence_id]

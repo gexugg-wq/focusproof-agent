@@ -1,10 +1,61 @@
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
+from openhands.sdk.llm import Message, TextContent
 
+from focusproof.openhands_runtime.prompts import FOCUSPROOF_SYSTEM_PROMPT
+from focusproof.openhands_runtime.tools.verification import VerificationObservation
 from focusproof.runtime.evidence import Evidence, LearningGoal
 
 from .conftest import SessionRepository, completed_review_llm
+
+
+def test_prompt_is_capability_neutral_and_preserves_scoring_boundary() -> None:
+    assert "only the three" not in FOCUSPROOF_SYSTEM_PROMPT
+    assert "tools exposed" in FOCUSPROOF_SYSTEM_PROMPT
+    assert "inconclusive" in FOCUSPROOF_SYSTEM_PROMPT
+    assert "does not establish learner understanding" in FOCUSPROOF_SYSTEM_PROMPT
+    assert "numeric final score" in FOCUSPROOF_SYSTEM_PROMPT
+
+
+def test_result_extraction_uses_verifications_after_latest_answer_boundary() -> None:
+    from focusproof.openhands_runtime.result_extractor import _focusproof_observations
+
+    def observation_event(evidence_id: str) -> ObservationEvent:
+        now = datetime.now(UTC)
+        observation = VerificationObservation.from_text(
+            "facts",
+            evidence_id=evidence_id,
+            capability="text",
+            status="success",
+            facts={"has_text": True},
+            weak_signals=[],
+            source_refs=[evidence_id],
+            verifier_version="1",
+            started_at=now,
+            completed_at=now,
+        )
+        return ObservationEvent(
+            tool_name="focusproof_text_evidence_verification",
+            tool_call_id=f"call_{evidence_id}",
+            observation=observation,
+            action_id=f"action_{evidence_id}",
+        )
+
+    answer = MessageEvent(
+        source="user",
+        llm_message=Message(
+            role="user",
+            content=[TextContent(text=json.dumps({"kind": "answer"}))],
+        ),
+    )
+    observations = _focusproof_observations(
+        [observation_event("ev_old"), answer, observation_event("ev_new")],
+        after_index=1,
+    )
+    assert [item.sourceRefs for item in observations] == [["ev_new"]]
 
 
 def test_manager_run_uses_native_action_tool_and_observation_flow(
@@ -33,13 +84,13 @@ def test_manager_run_uses_native_action_tool_and_observation_flow(
         event
         for event in native_events
         if isinstance(event, ActionEvent)
-        and event.tool_name == "focusproof_evidence_verification"
+        and event.tool_name == "focusproof_text_evidence_verification"
     )
     verification_observation = next(
         event
         for event in native_events
         if isinstance(event, ObservationEvent)
-        and event.tool_name == "focusproof_evidence_verification"
+        and event.tool_name == "focusproof_text_evidence_verification"
     )
 
     assert result.conversationMode == "openhands-local-scripted-test"
@@ -48,6 +99,7 @@ def test_manager_run_uses_native_action_tool_and_observation_flow(
     assert result.reviewResult is not None
     assert any(isinstance(event, MessageEvent) for event in native_events)
     assert verification_action.tool_call_id == verification_observation.tool_call_id
+    assert isinstance(verification_observation.observation, VerificationObservation)
     assert native_events.index(verification_action) < native_events.index(
         verification_observation
     )
