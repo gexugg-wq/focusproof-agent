@@ -1,5 +1,19 @@
 from focusproof.domain.scoring import score_learning_session
 from focusproof.runtime.evidence import Evidence, LearningGoal
+from focusproof.runtime.observations import Observation
+
+
+def general_goal(title: str, goal: str) -> LearningGoal:
+    return LearningGoal(domain="general", title=title, goal=goal)
+
+
+def text_evidence(evidence_id: str, text: str) -> Evidence:
+    return Evidence(
+        evidenceId=evidence_id,
+        evidenceType="text",
+        contentHash=f"sha256:{evidence_id}",
+        textContent=text,
+    )
 
 
 def _goal() -> LearningGoal:
@@ -76,3 +90,70 @@ def test_text_evidence_plus_answer_can_improve_score() -> None:
 
     assert result.score >= 60
     assert result.status in {"LikelyLearning", "VerifiedLearning"}
+
+
+def test_specific_non_web3_explanation_can_show_learning() -> None:
+    goal = general_goal(
+        "Understand photosynthesis",
+        "Explain photosynthesis using a concrete example",
+    )
+    evidence = [
+        text_evidence(
+            "ev_photo",
+            "Chlorophyll absorbs light; I compared a shaded leaf with a lit "
+            "leaf and recorded the color change as a concrete example.",
+        )
+    ]
+    result = score_learning_session(
+        goal,
+        evidence,
+        ["The control isolates light as the changed variable."],
+    )
+    assert result.score >= 60
+    assert result.status == "LikelyLearning"
+
+
+def test_web3_keywords_alone_do_not_raise_general_understanding() -> None:
+    goal = general_goal("Understand transactions", "Explain transaction ordering")
+    evidence = [
+        text_evidence(
+            "ev_keywords",
+            "nonce gas transaction block confirmation",
+        )
+    ]
+    result = score_learning_session(goal, evidence, [])
+    assert result.score < 60
+
+
+def test_long_web3_vocabulary_list_does_not_raise_general_understanding() -> None:
+    goal = general_goal("Understand controls", "Explain an experimental control")
+    evidence = [
+        text_evidence(
+            "ev_long_keywords",
+            "nonce gas signature sender receiver block confirmation transaction wallet "
+            "chain network token",
+        )
+    ]
+    result = score_learning_session(goal, evidence, [])
+    assert result.score < 60
+
+
+def test_observation_success_does_not_assign_final_learning() -> None:
+    goal = general_goal(
+        "Understand controls",
+        "Explain why an experiment uses a control",
+    )
+    evidence = [
+        text_evidence(
+            "ev_control",
+            "I compared two groups and changed one variable.",
+        )
+    ]
+    observation = Observation(
+        toolName="focusproof_text_evidence_verification",
+        status="success",
+        facts={"has_text": True, "word_count": 9},
+        sourceRefs=["ev_control"],
+    )
+    result = score_learning_session(goal, evidence, [], [observation])
+    assert result.status != "VerifiedLearning"
