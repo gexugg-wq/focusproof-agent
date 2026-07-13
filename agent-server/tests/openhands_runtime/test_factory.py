@@ -71,9 +71,10 @@ def test_initialized_agent_contains_only_focusproof_tools(tmp_path: Path) -> Non
         cast(Any, handle.conversation).send_message("initialize safe FocusProof tools")
         names = set(handle.conversation.agent.tools_map)
         assert names == {
-            "focusproof_evidence_verification",
             "focusproof_learner_input",
             "focusproof_review_draft",
+            "focusproof_text_evidence_verification",
+            "focusproof_url_evidence_verification",
         }
         forbidden = {
             "terminal",
@@ -84,6 +85,26 @@ def test_initialized_agent_contains_only_focusproof_tools(tmp_path: Path) -> Non
             "apply_patch",
         }
         assert names.isdisjoint(forbidden)
+    finally:
+        handle.conversation.close()
+
+
+def test_factory_narrows_verifiers_for_known_evidence_types(tmp_path: Path) -> None:
+    from focusproof.openhands_runtime.factory import ConversationFactory
+
+    factory = ConversationFactory(
+        project_root=tmp_path,
+        repository=EmptyRepository(),
+        llm_factory=_test_llm,
+    )
+    handle = factory.create("sess_text_tools", _goal(), evidence_types={"text"})
+    try:
+        cast(Any, handle.conversation).send_message("initialize text tools")
+        assert set(handle.conversation.agent.tools_map) == {
+            "focusproof_learner_input",
+            "focusproof_review_draft",
+            "focusproof_text_evidence_verification",
+        }
     finally:
         handle.conversation.close()
 

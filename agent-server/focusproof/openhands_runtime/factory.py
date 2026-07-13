@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from pathlib import Path
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -10,15 +10,25 @@ from openhands.sdk.conversation.impl.local_conversation import LocalConversation
 from openhands.sdk.conversation.types import ConversationCallbackType
 from openhands.sdk.testing import TestLLM
 from openhands.sdk.tool import Tool
+import httpx
 
 from focusproof.openhands_adapter.llm_config import build_openhands_llm_config
+from focusproof.openhands_runtime.capabilities import (
+    VerificationCapabilityRegistry,
+    build_builtin_capabilities,
+)
 from focusproof.openhands_runtime.handle import ConversationHandle, RuntimeMode
 from focusproof.openhands_runtime.prompts import FOCUSPROOF_SYSTEM_PROMPT
+from focusproof.openhands_runtime.tool_assembler import SessionToolAssembler
 from focusproof.openhands_runtime.tool_registry import (
     configure_repository_provider,
+    configure_url_fetcher_provider,
     ensure_focusproof_tools_registered,
 )
 from focusproof.openhands_runtime.tools import SessionEvidenceRepository
+from focusproof.openhands_runtime.tools.url_evidence import UrlFetcher
+from focusproof.openhands_runtime.tools.url_fetcher import BoundedUrlFetcher
+from focusproof.openhands_runtime.tools.url_safety import UrlSafetyPolicy
 from focusproof.runtime.evidence import LearningGoal
 
 LLMFactory = Callable[[str], LLM]
@@ -44,9 +54,28 @@ class ConversationFactory:
         data_dir: Path | None = None,
         llm_factory: LLMFactory | None = None,
         callback_factory: CallbackFactory | None = None,
+        capability_registry: VerificationCapabilityRegistry | None = None,
+        tool_assembler: SessionToolAssembler | None = None,
+        url_fetcher: UrlFetcher | None = None,
     ) -> None:
         self._repository = repository
         configure_repository_provider(repository)
+        if url_fetcher is None:
+            client = httpx.Client(
+                follow_redirects=False,
+                timeout=httpx.Timeout(15.0, connect=5.0),
+            )
+            url_fetcher = BoundedUrlFetcher(
+                policy=UrlSafetyPolicy(allow_http=False),
+                client=client,
+            )
+            configure_url_fetcher_provider(url_fetcher, close=client.close)
+        else:
+            configure_url_fetcher_provider(url_fetcher)
+        registry = capability_registry or VerificationCapabilityRegistry(
+            build_builtin_capabilities()
+        )
+        self._tool_assembler = tool_assembler or SessionToolAssembler(registry)
         self._project_root = project_root or Path(__file__).resolve().parents[3]
         self._data_dir = (data_dir or self._project_root / "var").resolve()
         self._llm_factory = llm_factory
@@ -59,11 +88,10 @@ class ConversationFactory:
         *,
         conversation_id: UUID | None = None,
         user_id: str | None = None,
+        evidence_types: Collection[str] | None = None,
     ) -> ConversationHandle:
         if not _SAFE_SESSION_ID_RE.fullmatch(session_id):
             raise ValueError("session_id contains unsafe path characters")
-        del goal
-
         conversation_id = conversation_id or uuid5(
             NAMESPACE_URL, f"focusproof:{session_id}"
         )
@@ -83,7 +111,11 @@ class ConversationFactory:
         runtime_mode = self._runtime_mode_for(llm)
         agent = Agent(
             llm=llm,
-            tools=self._session_tools(session_id),
+            tools=self._session_tools(
+                session_id,
+                goal.domain,
+                evidence_types,
+            ),
             include_default_tools=[],
             system_prompt=FOCUSPROOF_SYSTEM_PROMPT,
         )
@@ -139,11 +171,11 @@ class ConversationFactory:
             base_url=config.base_url,
         )
 
-    def _session_tools(self, session_id: str) -> list[Tool]:
+    def _session_tools(
+        self,
+        session_id: str,
+        domain: str,
+        evidence_types: Collection[str] | None,
+    ) -> list[Tool]:
         ensure_focusproof_tools_registered()
-        params = {"session_id": session_id}
-        return [
-            Tool(name="FocusProofEvidenceVerificationTool", params=params),
-            Tool(name="FocusProofLearnerInputTool", params=params),
-            Tool(name="FocusProofReviewDraftTool", params=params),
-        ]
+        return self._tool_assembler.assemble(session_id, domain, evidence_types)

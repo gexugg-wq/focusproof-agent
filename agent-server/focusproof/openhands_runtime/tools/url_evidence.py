@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from datetime import datetime
-from importlib import import_module
 from typing import Any, ClassVar, Protocol, Self
 from urllib.parse import urlsplit
 
@@ -91,11 +90,11 @@ class UrlEvidenceVerificationExecutor(
         source_refs.append(source_url)
         fetcher = self._fetcher
         if fetcher is None:
-            provider = getattr(
-                import_module("focusproof.openhands_runtime.tool_registry"),
-                "get_url_fetcher_provider",
+            from focusproof.openhands_runtime.tool_registry import (
+                get_url_fetcher_provider,
             )
-            fetcher = provider()
+
+            fetcher = get_url_fetcher_provider()
         try:
             fetched = fetcher.fetch(source_url)
         except UrlPolicyError as exc:
