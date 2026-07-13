@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from openhands.sdk.testing import TestLLM
 
 from focusproof.runtime.evidence import Evidence, LearningGoal
@@ -94,8 +95,60 @@ def test_completed_review_score_is_owned_by_focusproof(
     assert result.reviewStatus == "completed"
     assert result.reviewResult is not None
     assert result.reviewResult.score == expected.score
-    assert not audit_log.get_by_type("sess_score", "score.calculated")
+    score_events = audit_log.get_by_type("sess_score", "score.calculated")
     review_events = audit_log.get_by_type("sess_score", "review.completed")
-    assert review_events
-    assert review_events[-1].payload["sourceOpenHandsEventType"] == "ObservationEvent"
+    assert len(score_events) == 1
+    assert len(review_events) == 1
+    assert score_events[0].sequence < review_events[0].sequence
+    completed = result.reviewResult
+    assert score_events[0].payload == {
+        "score": completed.score,
+        "confidence": completed.confidence,
+        "status": completed.status,
+        "dimensions": completed.dimensions,
+        "findings": [finding.model_dump(mode="json") for finding in completed.findings],
+        "evidenceRefs": [evidence.evidenceId],
+    }
+    assert review_events[0].payload == {
+        "reviewId": review_events[0].payload["reviewId"],
+        "summary": completed.summary,
+        "nextStep": completed.nextStep,
+        "scoreEventId": score_events[0].id,
+    }
     manager.close("sess_score")
+
+
+def test_scoring_failure_does_not_emit_review_completed(
+    tmp_path: Path,
+    repository: SessionRepository,
+    learning_goal: LearningGoal,
+    evidence: Evidence,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from focusproof.openhands_runtime import result_extractor
+    from focusproof.openhands_runtime.manager import ConversationManager
+    from focusproof.runtime.event_log import InMemoryEventLog
+
+    audit_log = InMemoryEventLog()
+    manager = ConversationManager(
+        repository=repository,
+        audit_log=audit_log,
+        project_root=tmp_path,
+        llm_factory=completed_review_llm,
+    )
+    manager.create("sess_score_failure", learning_goal)
+    repository.add_evidence("sess_score_failure", evidence)
+    manager.send_evidence("sess_score_failure", evidence)
+
+    def fail_scoring(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise RuntimeError("scoring failed")
+
+    monkeypatch.setattr(result_extractor, "score_learning_session", fail_scoring)
+
+    with pytest.raises(RuntimeError, match="scoring failed"):
+        manager.run_review("sess_score_failure")
+
+    assert not audit_log.get_by_type("sess_score_failure", "score.calculated")
+    assert not audit_log.get_by_type("sess_score_failure", "review.completed")
+    manager.close("sess_score_failure")

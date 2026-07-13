@@ -19,7 +19,11 @@ from focusproof.openhands_runtime.synchronizer import message_key_from_event
 from focusproof.persistence.database import create_database_engine, create_session_factory
 from focusproof.persistence.event_log import PersistentAuditEventLog
 from focusproof.persistence.models import Base
-from focusproof.persistence.repositories import StoredEvidence, StoredSession
+from focusproof.persistence.repositories import (
+    SqlReviewRepository,
+    StoredEvidence,
+    StoredSession,
+)
 from focusproof.persistence.unit_of_work import UnitOfWorkFactory
 
 from agent_server_test_support import PersistentEvidenceProvider
@@ -185,14 +189,59 @@ def test_restart_restores_native_history_without_duplicate_product_rows(
     completed = manager_2.run_review(session_id, "verified-user-1")
     assert completed.reviewStatus == "completed"
     assert completed.conversationId == first_conversation_id
+    retry_goal, retry_evidence, retry_answers = manager_2._load_scoring_facts(session_id)
+    retried = manager_2._result_extractor.extract(
+        handle=restored,
+        native_events=list(restored.conversation.state.events),
+        goal=retry_goal,
+        evidence=retry_evidence,
+        answers=retry_answers,
+    )
+    assert retried.reviewStatus == "completed"
     with uow_2() as uow:
         reviews = uow.reviews.list_for_session(session_id)
         source_ids = [review.source_openhands_event_id for review in reviews]
+        final_event_types = [event.type for event in uow.audit_events.list(session_id)]
     assert [review.review_status for review in reviews] == ["awaiting_user", "completed"]
     assert len(source_ids) == len(set(source_ids))
+    assert final_event_types.count("score.calculated") == 1
+    assert final_event_types.count("review.completed") == 1
 
     manager_2.close_all()
     engine_2.dispose()
+
+
+def test_review_persistence_failure_rolls_back_final_audit_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "sess_review_failure"
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'review-failure.sqlite3'}"
+    engine, uow_factory = _uow_factory(database_url)
+    _seed(uow_factory, session_id)
+    manager = _manager(tmp_path, uow_factory, _completed_llm)
+
+    def fail_review_persistence(
+        self: SqlReviewRepository, record: object
+    ) -> None:
+        del self, record
+        raise RuntimeError("review persistence failed")
+
+    monkeypatch.setattr(
+        SqlReviewRepository,
+        "add_from_native_event",
+        fail_review_persistence,
+    )
+
+    with pytest.raises(RuntimeError, match="review persistence failed"):
+        manager.run_review(session_id, "verified-user-1")
+
+    with uow_factory() as uow:
+        event_types = [event.type for event in uow.audit_events.list(session_id)]
+    assert "score.calculated" not in event_types
+    assert "review.completed" not in event_types
+    manager.close_all()
+    engine.dispose()
 
 
 def test_corrupt_openhands_persistence_does_not_create_a_new_conversation(

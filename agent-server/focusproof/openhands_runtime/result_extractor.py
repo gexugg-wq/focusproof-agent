@@ -28,11 +28,21 @@ from focusproof.openhands_runtime.tools.review_draft import ReviewDraftObservati
 from focusproof.persistence.repositories import StoredReview
 from focusproof.persistence.unit_of_work import UnitOfWorkFactoryLike
 from focusproof.runtime.evidence import Evidence, LearningGoal
+from focusproof.runtime.events import Actor, Event, EventType
 from focusproof.runtime.observations import Observation
 
 
 class AuditQuery(Protocol):
     def list(self, session_id: str) -> list[Any]: ...
+    def append_final(
+        self,
+        session_id: str,
+        event_type: EventType,
+        actor: Actor,
+        payload: dict[str, object],
+        *,
+        event_id: str,
+    ) -> Event: ...
 
 
 class RuntimeResultExtractor:
@@ -117,13 +127,12 @@ class RuntimeResultExtractor:
                 answers=answers,
                 observations=observations,
             )
-            self._persist_review(
+            self._persist_completed_review(
                 handle=handle,
                 native_event=draft_event,
-                review_status="completed",
                 native_event_count=len(native_events),
-                score=review.score,
-                result=review.model_dump(mode="json"),
+                review=review,
+                evidence_refs=[item.evidenceId for item in evidence],
             )
             return self._result(
                 handle=handle,
@@ -139,6 +148,85 @@ class RuntimeResultExtractor:
             review_status="failed",
             used=False,
             error="OpenHands run produced neither learner input nor an accepted review draft",
+        )
+
+    def _persist_completed_review(
+        self,
+        *,
+        handle: ConversationHandle,
+        native_event: ObservationEvent,
+        native_event_count: int,
+        review: ReviewResult,
+        evidence_refs: list[str],
+    ) -> None:
+        proposed_review_id = f"rev_{uuid4().hex}"
+        score_event_id = f"evt_score_{native_event.id}"
+        review_event_id = f"evt_review_{native_event.id}"
+        score_payload: dict[str, object] = {
+            "score": review.score,
+            "confidence": review.confidence,
+            "status": review.status,
+            "dimensions": review.dimensions,
+            "findings": [finding.model_dump(mode="json") for finding in review.findings],
+            "evidenceRefs": evidence_refs,
+        }
+
+        if self._uow_factory is not None:
+            record = StoredReview(
+                review_id=proposed_review_id,
+                session_id=handle.session_id,
+                conversation_id=str(handle.conversation_id),
+                review_status="completed",
+                score=review.score,
+                result=review.model_dump(mode="json"),
+                native_event_count=native_event_count,
+                source_openhands_event_id=native_event.id,
+                created_at=datetime.now(UTC),
+            )
+            with self._uow_factory() as uow:
+                stored_review = uow.reviews.add_from_native_event(record)
+                stored_score_event = uow.audit_events.append(
+                    handle.session_id,
+                    "score.calculated",
+                    "system",
+                    score_payload,
+                    source_openhands_event_id=None,
+                    event_id=score_event_id,
+                )
+                uow.audit_events.append(
+                    handle.session_id,
+                    "review.completed",
+                    "system",
+                    {
+                        "reviewId": stored_review.review_id,
+                        "summary": review.summary,
+                        "nextStep": review.nextStep,
+                        "scoreEventId": stored_score_event.event_id,
+                    },
+                    source_openhands_event_id=None,
+                    event_id=review_event_id,
+                )
+                uow.commit()
+            return
+
+        runtime_score_event = self._audit_log.append_final(
+            handle.session_id,
+            "score.calculated",
+            "system",
+            score_payload,
+            event_id=score_event_id,
+        )
+        self._audit_log.append_final(
+            handle.session_id,
+            "review.completed",
+            "system",
+            {
+                "reviewId": proposed_review_id,
+                "summary": review.summary,
+                "nextStep": review.nextStep,
+                "scoreEventId": runtime_score_event.id,
+            },
+            event_id=review_event_id,
         )
 
     def _persist_review(

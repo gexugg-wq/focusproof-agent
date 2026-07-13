@@ -133,3 +133,38 @@ Git is local-only on branch `ai2.1-persistence-runtime-hardening`. No remote is
 configured. Local `user.name` and `user.email` are absent, so no identity was
 fabricated and no commit was created. The branch and working tree are deliberately
 left in place for AI0 review.
+
+## AI0 P1 Corrections
+
+The corrections were applied on branch
+`ai2.1-persistence-runtime-hardening` from baseline commit `72d598c`. The private
+`origin` configured by AI0 was retained and no push was performed.
+
+ReviewDraft Observation is now only an OpenHands-native draft submission. It no
+longer projects directly to `review.completed`. Session creation writes
+`session.created` before goal synchronization. After deterministic FocusProof
+scoring succeeds, the completed Review row, protocol-complete
+`score.calculated`, and `review.completed` are committed in one Unit of Work.
+`review.completed.scoreEventId` references the preceding score event. Stable
+event IDs derived from the native ReviewDraft Observation make retry, restart,
+and reconcile idempotent. Scoring failure or Review persistence failure cannot
+commit `review.completed`.
+
+Evidence and Answer endpoints continue to commit product facts before attempting
+OpenHands synchronization. Successful immediate synchronization returns
+`syncPending=false`; `SessionRunLock` contention returns HTTP 200 with
+`syncPending=true`, and the next review synchronizes the pending fact. Review
+lock contention remains top-level HTTP 409. Other database failures retain the
+sanitized 503 handling.
+
+P1 verification on 2026-07-13:
+
+- Directed audit, rollback, restart/retry, deferred Evidence/Answer sync, and
+  review-lock tests: 11 passed.
+- `pytest agent-server/tests -m "not real_llm" -q`: 103 passed, 1 deselected.
+- `ruff check agent-server`: passed.
+- `mypy agent-server`: passed for 98 source files.
+- `git diff --check`: passed.
+- No real LLM test was run, as explicitly excluded from this correction round.
+- No protected protocol, architecture, project-management, frontend, or contract
+  files were modified.

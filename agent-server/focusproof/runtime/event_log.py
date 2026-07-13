@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from typing import List
+from uuid import uuid4
 
 from focusproof.runtime.events import Actor, Event, EventType
 
@@ -17,7 +18,37 @@ class InMemoryEventLog:
         actor: Actor,
         payload: dict[str, object],
     ) -> Event:
+        return self._append(session_id, event_type, actor, payload)
+
+    def append_final(
+        self,
+        session_id: str,
+        event_type: EventType,
+        actor: Actor,
+        payload: dict[str, object],
+        *,
+        event_id: str,
+    ) -> Event:
+        return self._append(session_id, event_type, actor, payload, event_id=event_id)
+
+    def _append(
+        self,
+        session_id: str,
+        event_type: EventType,
+        actor: Actor,
+        payload: dict[str, object],
+        *,
+        event_id: str | None = None,
+    ) -> Event:
+        if event_id is not None:
+            existing = next(
+                (event for event in self._events[session_id] if event.id == event_id),
+                None,
+            )
+            if existing is not None:
+                return existing.model_copy(deep=True)
         event = Event(
+            id=event_id or f"evt_{uuid4().hex}",
             sessionId=session_id,
             type=event_type,
             sequence=self._next_sequence(session_id),

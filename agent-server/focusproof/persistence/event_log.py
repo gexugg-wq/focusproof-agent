@@ -19,6 +19,28 @@ class PersistentAuditEventLog:
         actor: Actor,
         payload: dict[str, object],
     ) -> Event:
+        return self._append(session_id, event_type, actor, payload)
+
+    def append_final(
+        self,
+        session_id: str,
+        event_type: EventType,
+        actor: Actor,
+        payload: dict[str, object],
+        *,
+        event_id: str,
+    ) -> Event:
+        return self._append(session_id, event_type, actor, payload, event_id=event_id)
+
+    def _append(
+        self,
+        session_id: str,
+        event_type: EventType,
+        actor: Actor,
+        payload: dict[str, object],
+        *,
+        event_id: str | None = None,
+    ) -> Event:
         source_id = payload.get("sourceOpenHandsEventId")
         with self._uow_factory() as uow:
             stored = uow.audit_events.append(
@@ -27,6 +49,7 @@ class PersistentAuditEventLog:
                 actor,
                 dict(payload),
                 source_openhands_event_id=(source_id if isinstance(source_id, str) else None),
+                event_id=event_id,
             )
             uow.commit()
         return _runtime_event(stored)

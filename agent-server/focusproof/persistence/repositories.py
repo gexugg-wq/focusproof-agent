@@ -128,6 +128,7 @@ class AuditEventRepository(Protocol):
         payload: dict[str, Any],
         *,
         source_openhands_event_id: str | None,
+        event_id: str | None = None,
     ) -> StoredAuditEvent: ...
     def list(self, session_id: str) -> list[StoredAuditEvent]: ...
     def latest(self, session_id: str) -> StoredAuditEvent | None: ...
@@ -334,7 +335,12 @@ class SqlAuditEventRepository:
         payload: dict[str, Any],
         *,
         source_openhands_event_id: str | None,
+        event_id: str | None = None,
     ) -> StoredAuditEvent:
+        if event_id is not None:
+            existing_model = self._session.get(AuditEventModel, event_id)
+            if existing_model is not None:
+                return _stored_audit_event(existing_model)
         if source_openhands_event_id is not None:
             existing = self._by_source(session_id, source_openhands_event_id)
             if existing is not None:
@@ -345,7 +351,7 @@ class SqlAuditEventRepository:
             )
         )
         model = AuditEventModel(
-            event_id=f"evt_{uuid4().hex}",
+            event_id=event_id or f"evt_{uuid4().hex}",
             session_id=session_id,
             sequence=(latest_sequence or 0) + 1,
             type=event_type,

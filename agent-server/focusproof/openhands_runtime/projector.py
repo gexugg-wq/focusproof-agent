@@ -19,7 +19,6 @@ from focusproof.openhands_runtime.tools.learner_input import (
     LearnerInputAction,
     question_id_for,
 )
-from focusproof.openhands_runtime.tools.review_draft import ReviewDraftObservation
 from focusproof.runtime.events import Actor, Event, EventType
 
 
@@ -160,11 +159,6 @@ class OpenHandsEventProjector:
             event_type: EventType = "verification.completed"
             actor: Actor = "tool"
             related = [observation.evidence_id]
-        elif isinstance(observation, ReviewDraftObservation):
-            payload = observation.model_dump(mode="json")
-            event_type = "review.completed"
-            actor = "agent"
-            related = []
         else:
             return None
         payload.update(

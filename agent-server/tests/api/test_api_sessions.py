@@ -77,6 +77,9 @@ def test_session_evidence_review_and_events_flow(tmp_path: Path) -> None:
         )
         assert session_response.status_code == 200
         session_id = session_response.json()["sessionId"]
+        created_events = client.get(f"/sessions/{session_id}/events").json()["events"]
+        assert created_events[0]["type"] == "session.created"
+        assert sum(event["type"] == "session.created" for event in created_events) == 1
         evidence_response = client.post(
             f"/sessions/{session_id}/evidence",
             json={
@@ -87,6 +90,7 @@ def test_session_evidence_review_and_events_flow(tmp_path: Path) -> None:
         )
         assert evidence_response.status_code == 200
         assert evidence_response.json()["sessionId"] == session_id
+        assert evidence_response.json()["syncPending"] is False
 
         answer_response = client.post(
             f"/sessions/{session_id}/answer",
@@ -96,6 +100,7 @@ def test_session_evidence_review_and_events_flow(tmp_path: Path) -> None:
             },
         )
         assert answer_response.status_code == 200
+        assert answer_response.json()["syncPending"] is False
 
         review_response = client.post(f"/sessions/{session_id}/review")
         assert review_response.status_code == 200
@@ -111,3 +116,14 @@ def test_session_evidence_review_and_events_flow(tmp_path: Path) -> None:
         events_response = client.get(f"/sessions/{session_id}/events")
         assert events_response.status_code == 200
         assert len(events_response.json()["events"]) == review_json["eventsCount"]
+        final_events = events_response.json()["events"]
+        final_types = [event["type"] for event in final_events]
+        assert final_types[0] == "session.created"
+        assert final_types.index("score.calculated") < final_types.index("review.completed")
+        score_event = next(
+            event for event in final_events if event["type"] == "score.calculated"
+        )
+        review_event = next(
+            event for event in final_events if event["type"] == "review.completed"
+        )
+        assert review_event["payload"]["scoreEventId"] == score_event["id"]

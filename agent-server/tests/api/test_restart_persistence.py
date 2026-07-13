@@ -121,6 +121,9 @@ def test_fastapi_restart_preserves_session_events_and_reviews(tmp_path: Path) ->
         llm_factory=_review_llm,
     )
     with TestClient(app_2) as client:
+        app_2.state.conversation_manager.get_or_restore(
+            session_id, "dev-anonymous-user"
+        )
         state = client.get(f"/sessions/{session_id}")
         events = client.get(f"/sessions/{session_id}/events")
         reviews = client.get(f"/sessions/{session_id}/reviews")
@@ -130,6 +133,9 @@ def test_fastapi_restart_preserves_session_events_and_reviews(tmp_path: Path) ->
     assert state.json()["state"]["conversationId"] == conversation_id
     assert events.status_code == 200
     assert events.json()["events"] == events_before
+    event_types = [event["type"] for event in events.json()["events"]]
+    assert event_types.count("score.calculated") == 1
+    assert event_types.count("review.completed") == 1
     assert reviews.status_code == 200
     assert len(reviews.json()["reviews"]) == 1
 
@@ -155,6 +161,66 @@ def test_review_lock_timeout_returns_top_level_409(tmp_path: Path) -> None:
         "sessionId": session_id,
         "retryable": True,
     }
+
+
+def test_evidence_commit_succeeds_with_sync_pending_while_review_lock_is_held(
+    tmp_path: Path,
+) -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'evidence-sync-pending.sqlite3'}"
+    _migrate(project_root, database_url)
+    app = create_app(
+        database_url=database_url,
+        data_dir=tmp_path,
+        lock_timeout_seconds=0.05,
+        llm_factory=_review_llm,
+    )
+    with TestClient(app) as client:
+        session_id = _create_session(client)
+        with app.state.run_lock.acquire(session_id):
+            response = client.post(
+                f"/sessions/{session_id}/evidence",
+                json={"evidenceType": "text", "textContent": "durable evidence"},
+            )
+        state = client.get(f"/sessions/{session_id}").json()["state"]
+        review = client.post(f"/sessions/{session_id}/review")
+        events = client.get(f"/sessions/{session_id}/events").json()["events"]
+
+    assert response.status_code == 200
+    assert response.json()["syncPending"] is True
+    assert [item["textContent"] for item in state["evidence"]] == ["durable evidence"]
+    assert review.status_code == 200
+    assert sum(event["type"] == "evidence.submitted" for event in events) == 1
+
+
+def test_answer_commit_succeeds_with_sync_pending_while_review_lock_is_held(
+    tmp_path: Path,
+) -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'answer-sync-pending.sqlite3'}"
+    _migrate(project_root, database_url)
+    app = create_app(
+        database_url=database_url,
+        data_dir=tmp_path,
+        lock_timeout_seconds=0.05,
+        llm_factory=_review_llm,
+    )
+    with TestClient(app) as client:
+        session_id = _create_session(client)
+        with app.state.run_lock.acquire(session_id):
+            response = client.post(
+                f"/sessions/{session_id}/answer",
+                json={"questionId": "q_busy", "answer": "durable answer"},
+            )
+        state = client.get(f"/sessions/{session_id}").json()["state"]
+        review = client.post(f"/sessions/{session_id}/review")
+        events = client.get(f"/sessions/{session_id}/events").json()["events"]
+
+    assert response.status_code == 200
+    assert response.json()["syncPending"] is True
+    assert state["answers"] == {"q_busy": "durable answer"}
+    assert review.status_code == 200
+    assert sum(event["type"] == "answer.submitted" for event in events) == 1
 
 
 def test_restart_can_get_session_while_review_is_awaiting_user(

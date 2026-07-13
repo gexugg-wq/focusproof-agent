@@ -244,6 +244,14 @@ def _install_routes(
         )
         with uow_factory() as uow:
             uow.sessions.create(record)
+            uow.audit_events.append(
+                session_id,
+                "session.created",
+                "system",
+                {"status": "running"},
+                source_openhands_event_id=None,
+                event_id=f"evt_session_created_{session_id}",
+            )
             uow.commit()
         try:
             manager.get_or_restore(session_id, identity.verified_user_id)
@@ -258,7 +266,7 @@ def _install_routes(
         identity: Annotated[VerifiedIdentity, Depends(get_verified_identity)],
         uow_factory: Annotated[UnitOfWorkFactory, Depends(get_uow_factory)],
         manager: Annotated[ConversationManager, Depends(get_conversation_manager)],
-    ) -> dict[str, str]:
+    ) -> dict[str, str | bool]:
         _owned_session(uow_factory, session_id, identity.verified_user_id)
         evidence_id = f"ev_{uuid4().hex}"
         record = StoredEvidence(
@@ -275,11 +283,21 @@ def _install_routes(
         with uow_factory() as uow:
             uow.evidence.add(record)
             uow.commit()
+        sync_pending = False
         try:
             manager.send_evidence(session_id, identity.verified_user_id)
-        except (RuntimeUnavailableError, RuntimeCreationError, ValueError):
-            pass
-        return {"evidenceId": evidence_id, "sessionId": session_id}
+        except (
+            SessionBusyError,
+            RuntimeUnavailableError,
+            RuntimeCreationError,
+            ValueError,
+        ):
+            sync_pending = True
+        return {
+            "evidenceId": evidence_id,
+            "sessionId": session_id,
+            "syncPending": sync_pending,
+        }
 
     @application.post("/sessions/{session_id}/answer")
     def submit_answer(
@@ -288,16 +306,26 @@ def _install_routes(
         identity: Annotated[VerifiedIdentity, Depends(get_verified_identity)],
         uow_factory: Annotated[UnitOfWorkFactory, Depends(get_uow_factory)],
         manager: Annotated[ConversationManager, Depends(get_conversation_manager)],
-    ) -> dict[str, str]:
+    ) -> dict[str, str | bool]:
         _owned_session(uow_factory, session_id, identity.verified_user_id)
         with uow_factory() as uow:
             uow.answers.upsert(session_id, request.questionId, request.answer)
             uow.commit()
+        sync_pending = False
         try:
             manager.send_answer(session_id, identity.verified_user_id)
-        except (RuntimeUnavailableError, RuntimeCreationError, ValueError):
-            pass
-        return {"sessionId": session_id, "questionId": request.questionId}
+        except (
+            SessionBusyError,
+            RuntimeUnavailableError,
+            RuntimeCreationError,
+            ValueError,
+        ):
+            sync_pending = True
+        return {
+            "sessionId": session_id,
+            "questionId": request.questionId,
+            "syncPending": sync_pending,
+        }
 
     @application.post("/sessions/{session_id}/review", response_model=None)
     def review_session(

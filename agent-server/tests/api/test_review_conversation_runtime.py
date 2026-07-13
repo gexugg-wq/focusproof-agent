@@ -101,9 +101,11 @@ def test_review_uses_injected_sdk_local_conversation_without_public_mode_flag(
         assert data["error"] is None
 
         events = client.get(f"/sessions/{session_id}/events").json()["events"]
+        score_event = next(
+            event for event in events if event["type"] == "score.calculated"
+        )
         review_event = next(event for event in events if event["type"] == "review.completed")
-        assert review_event["payload"]["sourceOpenHandsEventType"] == "ObservationEvent"
-        assert review_event["payload"]["sourceOpenHandsEventId"]
+        assert review_event["payload"]["scoreEventId"] == score_event["id"]
 
 
 def test_review_returns_structured_503_when_llm_config_is_missing(
