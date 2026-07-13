@@ -1,0 +1,170 @@
+from focusproof.openhands_runtime.tools.url_fetcher import FetchedUrl, UrlFetchError
+from focusproof.openhands_runtime.tools.url_safety import UrlPolicyError
+from focusproof.openhands_runtime.tools.verification import EvidenceReferenceAction
+from focusproof.runtime.evidence import Evidence
+
+
+class RecordingRepository:
+    def __init__(self, stored: Evidence) -> None:
+        self.stored = stored
+        self.requested: list[tuple[str, str]] = []
+
+    def get_evidence(self, session_id: str, evidence_id: str) -> Evidence:
+        self.requested.append((session_id, evidence_id))
+        if evidence_id != self.stored.evidenceId:
+            raise KeyError(evidence_id)
+        return self.stored
+
+
+class FakeFetcher:
+    def __init__(
+        self,
+        result: FetchedUrl | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.result = result
+        self.error = error
+        self.requested: list[str] = []
+
+    def fetch(self, source_url: str) -> FetchedUrl:
+        self.requested.append(source_url)
+        if self.error is not None:
+            raise self.error
+        assert self.result is not None
+        return self.result
+
+
+def evidence(
+    evidence_id: str = "ev_url",
+    evidence_type: str = "url",
+    source_url: str | None = "https://example.com/guide",
+) -> Evidence:
+    return Evidence(
+        evidenceId=evidence_id,
+        evidenceType=evidence_type,
+        contentHash=f"sha256:{evidence_id}",
+        sourceUrl=source_url,
+    )
+
+
+def fetched() -> FetchedUrl:
+    return FetchedUrl(
+        final_url="https://example.com/guide",
+        status_code=200,
+        content_type="text/html",
+        content_length=120,
+        redirect_chain=("https://www.example.com/guide",),
+        title="Guide",
+        text_excerpt="A bounded guide excerpt.",
+    )
+
+
+def test_url_executor_reads_source_url_from_authoritative_repository() -> None:
+    from focusproof.openhands_runtime.tools.url_evidence import (
+        UrlEvidenceVerificationExecutor,
+    )
+
+    repository = RecordingRepository(evidence())
+    fetcher = FakeFetcher(result=fetched())
+    result = UrlEvidenceVerificationExecutor(repository, "sess_1", fetcher)(
+        EvidenceReferenceAction(evidence_id="ev_url")
+    )
+    assert repository.requested == [("sess_1", "ev_url")]
+    assert fetcher.requested == ["https://example.com/guide"]
+    assert result.status == "success"
+    assert result.facts == {
+        "normalized_url": "https://example.com/guide",
+        "hostname": "example.com",
+        "status_code": 200,
+        "content_type": "text/html",
+        "content_length": 120,
+        "redirect_chain": ["https://www.example.com/guide"],
+        "title": "Guide",
+        "text_excerpt": "A bounded guide excerpt.",
+    }
+    assert result.source_refs == [
+        "ev_url",
+        "sha256:ev_url",
+        "https://example.com/guide",
+    ]
+
+
+def test_url_executor_maps_blocked_url_to_failed_observation() -> None:
+    from focusproof.openhands_runtime.tools.url_evidence import (
+        UrlEvidenceVerificationExecutor,
+    )
+
+    result = UrlEvidenceVerificationExecutor(
+        RecordingRepository(evidence()),
+        "sess_1",
+        FakeFetcher(error=UrlPolicyError("url_address_blocked", "Blocked URL.")),
+    )(EvidenceReferenceAction(evidence_id="ev_url"))
+    assert result.status == "failed"
+    assert result.error_code == "url_blocked"
+    assert result.safe_error_message == "Blocked URL."
+
+
+def test_url_executor_maps_network_timeout_to_inconclusive() -> None:
+    from focusproof.openhands_runtime.tools.url_evidence import (
+        UrlEvidenceVerificationExecutor,
+    )
+
+    result = UrlEvidenceVerificationExecutor(
+        RecordingRepository(evidence()),
+        "sess_1",
+        FakeFetcher(error=UrlFetchError("network_timeout", "Timed out.")),
+    )(EvidenceReferenceAction(evidence_id="ev_url"))
+    assert result.status == "inconclusive"
+    assert result.error_code == "network_timeout"
+
+
+def test_url_executor_maps_binary_content_to_unsupported() -> None:
+    from focusproof.openhands_runtime.tools.url_evidence import (
+        UrlEvidenceVerificationExecutor,
+    )
+
+    result = UrlEvidenceVerificationExecutor(
+        RecordingRepository(evidence()),
+        "sess_1",
+        FakeFetcher(
+            error=UrlFetchError(
+                "content_type_unsupported",
+                "Content type unsupported.",
+            )
+        ),
+    )(EvidenceReferenceAction(evidence_id="ev_url"))
+    assert result.status == "unsupported"
+    assert result.error_code == "content_type_unsupported"
+
+
+def test_url_executor_rejects_missing_or_wrong_type_evidence_safely() -> None:
+    from focusproof.openhands_runtime.tools.url_evidence import (
+        UrlEvidenceVerificationExecutor,
+    )
+
+    repository = RecordingRepository(evidence(evidence_type="text", source_url=None))
+    fetcher = FakeFetcher(result=fetched())
+    unsupported = UrlEvidenceVerificationExecutor(repository, "sess_1", fetcher)(
+        EvidenceReferenceAction(evidence_id="ev_url")
+    )
+    missing = UrlEvidenceVerificationExecutor(repository, "sess_1", fetcher)(
+        EvidenceReferenceAction(evidence_id="ev_missing")
+    )
+    assert unsupported.status == "unsupported"
+    assert unsupported.error_code == "evidence_type_unsupported"
+    assert missing.status == "failed"
+    assert missing.error_code == "evidence_not_found"
+    assert fetcher.requested == []
+
+
+def test_url_tool_is_read_only_and_accepts_only_evidence_id() -> None:
+    from focusproof.openhands_runtime.tools.url_evidence import (
+        FocusProofUrlEvidenceVerificationTool,
+    )
+
+    assert set(EvidenceReferenceAction.model_fields) == {"evidence_id"}
+    annotations = FocusProofUrlEvidenceVerificationTool.annotations_for_focusproof()
+    assert annotations.readOnlyHint is True
+    assert annotations.destructiveHint is False
+    assert annotations.idempotentHint is True
+    assert annotations.openWorldHint is False
