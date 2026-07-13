@@ -6,7 +6,7 @@ import { ArrowRight, BookOpen } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { focusProofApi } from "@/lib/api/client";
+import { focusProofApi, getSafeErrorMessage } from "@/lib/api/client";
 import { saveRecentSession } from "@/lib/storage/recent-sessions";
 
 const schema = z.object({
@@ -37,17 +37,23 @@ export function CreateSessionForm() {
   });
   const selectedDomain = form.watch("domain");
   const busy = form.formState.isSubmitting;
+  const [submitMessage, setSubmitMessage] = React.useState("");
   async function onSubmit(values: FormValues) {
+    setSubmitMessage("");
     const domain = values.domain === "custom" ? values.customDomain?.trim() || "custom" : values.domain;
-    const response = await focusProofApi.createSession({
-      domain,
-      title: values.title,
-      goal: values.goal,
-      expectedOutput: values.expectedOutput || null,
-      plannedMinutes: values.plannedMinutes
-    });
-    saveRecentSession({ sessionId: response.sessionId, title: values.title, domain, visitedAt: new Date().toISOString() });
-    router.push("/sessions/" + response.sessionId);
+    try {
+      const response = await focusProofApi.createSession({
+        domain,
+        title: values.title,
+        goal: values.goal,
+        expectedOutput: values.expectedOutput || null,
+        plannedMinutes: values.plannedMinutes
+      });
+      saveRecentSession({ sessionId: response.sessionId, title: values.title, domain, visitedAt: new Date().toISOString() });
+      router.push("/sessions/" + response.sessionId);
+    } catch (error) {
+      setSubmitMessage(getSafeErrorMessage(error));
+    }
   }
   return (
     <form className="panel grid gap-4 p-5" onSubmit={form.handleSubmit(onSubmit)} aria-label="Create learning verification Session">
@@ -91,6 +97,7 @@ export function CreateSessionForm() {
         <ArrowRight size={18} aria-hidden />
         {busy ? "Creating..." : "Start Session"}
       </button>
+      <p aria-live="polite" role="status" className="text-sm text-red-700">{submitMessage}</p>
     </form>
   );
 }

@@ -1,6 +1,6 @@
 import React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { EvidencePanel } from "@/features/evidence/EvidencePanel";
@@ -32,6 +32,14 @@ function wrap(children: React.ReactNode) {
 }
 
 describe("EvidencePanel", () => {
+  it("shows structured evidence submission errors", async () => {
+    const submit = vi.fn().mockRejectedValue(new Error("Connection failed. Nothing was submitted."));
+    render(wrap(<EvidencePanel sessionId="sess_1" domain="general" walletAddress={null} onSubmitEvidence={submit} />));
+    await userEvent.type(screen.getByLabelText(/learning notes/i), "Some notes");
+    await userEvent.click(screen.getByRole("button", { name: /submit evidence/i }));
+    expect(await screen.findByText(/connection failed/i)).toBeInTheDocument();
+  });
+
   it("submits Web3 evidence without requiring a wallet", async () => {
     const submit = vi.fn().mockResolvedValue({ syncPending: true });
     render(wrap(<EvidencePanel sessionId="sess_1" domain="web3" walletAddress={null} onSubmitEvidence={submit} />));
@@ -46,6 +54,29 @@ describe("EvidencePanel", () => {
 });
 
 describe("ReviewPanel", () => {
+  it("preserves answer text, shows the specific failure, and prevents duplicate answer submits", async () => {
+    const awaiting: RuntimeReviewResult = {
+      sessionId: "sess_1",
+      conversationMode: "openhands-local-real",
+      usedOpenHandsConversation: true,
+      reviewStatus: "awaiting_user",
+      agentQuestions: [{ questionId: "q1", question: "What changed in your understanding?" }]
+    };
+    const requestReview = vi.fn().mockResolvedValue(awaiting);
+    const submitAnswer = vi.fn().mockRejectedValue(new Error("Connection failed. Nothing was submitted."));
+    render(wrap(<ReviewPanel session={session} onRequestReview={requestReview} onSubmitAnswer={submitAnswer} />));
+    await userEvent.click(screen.getByRole("button", { name: /end learning/i }));
+    const answer = await screen.findByLabelText(/answer for q1/i);
+    await userEvent.type(answer, "Replay separates facts from views.");
+    const form = screen.getByRole("button", { name: /submit answer/i }).closest("form");
+    expect(form).not.toBeNull();
+    fireEvent.submit(form!);
+    fireEvent.submit(form!);
+    expect(submitAnswer).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/connection failed/i)).toBeInTheDocument();
+    expect(answer).toHaveValue("Replay separates facts from views.");
+  });
+
   it("handles awaiting_user answers and completed review display", async () => {
     const awaiting: RuntimeReviewResult = {
       sessionId: "sess_1",

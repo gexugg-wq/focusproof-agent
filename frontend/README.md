@@ -7,8 +7,6 @@ Next.js App Router frontend for the AI3 FocusProof MVP.
 Copy `.env.example` to `.env.local` for local frontend-only work.
 
 - `FOCUSPROOF_API_BASE_URL`: server-side BFF target, default `http://127.0.0.1:8000`.
-- `NEXT_PUBLIC_MONAD_CHAIN_ID`: optional future UI display value.
-- `NEXT_PUBLIC_MONAD_RPC_URL`: optional future UI display value. The MVP does not send transactions.
 
 No LLM API key is stored or read by the browser.
 

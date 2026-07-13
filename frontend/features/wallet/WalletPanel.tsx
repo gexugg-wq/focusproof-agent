@@ -34,6 +34,8 @@ export function WalletPanel({ onWalletChange }: { onWalletChange: (address: stri
       setChainId(typeof chain === "string" ? chain : null);
       onWalletChange(first);
       setMessage(first ? "Wallet connected as optional metadata." : "No wallet account returned.");
+    } catch {
+      setMessage("Wallet connection was rejected or failed.");
     } finally {
       setBusy(false);
     }
@@ -45,7 +47,7 @@ export function WalletPanel({ onWalletChange }: { onWalletChange: (address: stri
     setMessage("Wallet disconnected locally.");
   }
   return (
-    <section className="panel grid gap-3 p-4" aria-labelledby="wallet-heading">
+    <section className="grid gap-3 border-t border-line pt-4" aria-labelledby="wallet-heading">
       <h2 id="wallet-heading" className="text-base font-semibold">Wallet metadata</h2>
       {address ? (
         <>

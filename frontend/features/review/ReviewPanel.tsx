@@ -1,8 +1,9 @@
 "use client";
 
-import React from "react";
+import React, { useRef } from "react";
 import { CheckCircle2, HelpCircle, RotateCw } from "lucide-react";
 import { useState } from "react";
+import { getSafeErrorMessage } from "@/lib/api/client";
 import type { RuntimeReviewResult, SessionDetail, SyncResponse } from "@/lib/api/contracts";
 import { ProofRecording } from "./ProofRecording";
 
@@ -23,6 +24,8 @@ export function ReviewPanel({
     reviewResult: session.state.reviewResult
   } : null);
   const [busy, setBusy] = useState(false);
+  const [answerBusy, setAnswerBusy] = useState<Record<string, boolean>>({});
+  const answerBusyRef = useRef<Record<string, boolean>>({});
   const [message, setMessage] = useState("");
   async function reviewAgain() {
     setBusy(true);
@@ -30,18 +33,30 @@ export function ReviewPanel({
     try {
       setResult(await onRequestReview());
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Review failed. Please retry.");
+      setMessage(getSafeErrorMessage(error));
     } finally {
       setBusy(false);
     }
   }
   async function submitAnswer(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     const questionId = String(formData.get("questionId") || "");
     const answer = String(formData.get("answer") || "");
-    const response = await onSubmitAnswer({ questionId, answer });
-    setMessage(response.syncPending ? "Answer saved, waiting for Agent sync." : "Answer submitted.");
+    if (answerBusyRef.current[questionId]) return;
+    answerBusyRef.current = { ...answerBusyRef.current, [questionId]: true };
+    setAnswerBusy((current) => ({ ...current, [questionId]: true }));
+    setMessage("");
+    try {
+      const response = await onSubmitAnswer({ questionId, answer });
+      setMessage(response.syncPending ? "Answer saved, waiting for Agent sync." : "Answer submitted.");
+    } catch (error) {
+      setMessage(getSafeErrorMessage(error));
+    } finally {
+      answerBusyRef.current = { ...answerBusyRef.current, [questionId]: false };
+      setAnswerBusy((current) => ({ ...current, [questionId]: false }));
+    }
   }
   const review = result?.reviewResult;
   return (
@@ -61,7 +76,7 @@ export function ReviewPanel({
                 <span>Answer for {question.questionId}</span>
                 <textarea name="answer" className="input min-h-20" required />
               </label>
-              <button className="btn secondary w-fit" type="submit">Submit answer</button>
+              <button className="btn secondary w-fit" disabled={answerBusy[question.questionId]} type="submit">{answerBusy[question.questionId] ? "Submitting answer..." : "Submit answer"}</button>
             </form>
           ))}
         </div>

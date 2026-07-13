@@ -16,7 +16,7 @@ AI3 implemented the FocusProof user-facing web MVP in `frontend/` on branch `ai3
 - `frontend/features/wallet`: optional injected-wallet metadata UX.
 - `frontend/lib/api`: TypeScript contracts, API client, proxy allowlist, error mapping.
 - `frontend/lib/storage`: recent-session metadata only.
-- `frontend/lib/wallet`: wagmi/viem config and wallet helpers.
+- `frontend/lib/wallet`: viem-only wallet address helpers. No wagmi provider is in the core app tree.
 
 ## BFF API Boundary
 
@@ -69,9 +69,9 @@ Executed in `/home/holy/web3/focusproof-agent/frontend` with local Linux Node on
 - `npm install`: completed, produced package-lock. npm reported dependency audit warnings.
 - `npm run lint`: passed.
 - `npm run typecheck`: passed.
-- `npm run test`: 4 files passed, 20 tests passed.
-- `npm run build`: passed with Next.js production build.
-- `npm run test:e2e`: 8 tests passed using mocked API.
+- `npm run test`: 4 files passed, 27 tests passed.
+- `npm run build`: passed with Next.js 15.5.18 production build.
+- `npm run test:e2e`: 12 tests passed using mocked API.
 
 Playwright required local WSL browser dependencies. Because sudo is unavailable, `libnspr4`, `libnss3`, and `libasound2t64` were downloaded with `apt-get download` and extracted under `/home/holy/.cache/focusproof-playwright-libs`; tests were run with `LD_LIBRARY_PATH` pointing to that cache.
 
@@ -79,12 +79,17 @@ Playwright required local WSL browser dependencies. Because sudo is unavailable,
 
 Mocked Playwright flow covered:
 
-- 1440x900: `docs/research/assets/ai3/chromium-session.png`
-- 1280x720: `docs/research/assets/ai3/desktop-1280-session.png`
-- 390x844: `docs/research/assets/ai3/mobile-session.png`
-- 360x800: `docs/research/assets/ai3/mobile-360-session.png`
+- 1440x900: `docs/research/assets/ai3/01-create-session-desktop.png`
+- 1440x900: `docs/research/assets/ai3/02-general-evidence-desktop.png`
+- 1440x900: `docs/research/assets/ai3/03-awaiting-user-desktop.png`
+- 1440x900: `docs/research/assets/ai3/04-review-completed-desktop.png`
+- 1440x900: `docs/research/assets/ai3/05-session-busy-desktop.png`
+- 1440x900: `docs/research/assets/ai3/06-runtime-unavailable-desktop.png`
+- 390x844: `docs/research/assets/ai3/07-awaiting-user-mobile.png`
+- 390x844: `docs/research/assets/ai3/08-review-completed-mobile.png`
+- 1280x720: `docs/research/assets/ai3/09-web3-evidence-desktop.png`
 
-The mocked flow covered create session, submit Web3 evidence without wallet, first review returning `awaiting_user`, answer submission, second review returning `completed`, score/result display, Build Log display, refresh recovery, and retryable 409/503 behavior.
+The mocked flow covered a general programming learning session, text evidence, first review returning `awaiting_user`, answer submission, second review returning `completed`, score/result/dimensions/findings/summary/next-step display, Build Log display, refresh recovery, precise retryable 409/503 behavior, and one isolated Web3 evidence screenshot.
 
 ## Real Backend Smoke
 
@@ -119,3 +124,37 @@ Protected backend, contracts, architecture docs, protocol docs, project-manageme
 ## Secret Handling
 
 No browser LLM key was added. No real secret was committed. The frontend `.env.example` contains only placeholder/public configuration.
+
+## AI3.1 Acceptance Corrections
+
+Baseline for this correction pass was accepted AI3 commit `bb643be` on branch `ai3-frontend-mvp`. No protected backend, contracts, architecture, protocol, project-management, `.env`, `var/`, or OpenHands SDK files were modified.
+
+- Structured API failures now throw real `ApiError extends Error` instances. `409 session_busy`, `503 backend_unavailable/runtime_unavailable`, access errors, network errors, invalid JSON, and non-JSON upstream failures are mapped to safe user messages without `SyntaxError` leakage.
+- The BFF proxy now has timeout/abort handling, returns structured `503 backend_unavailable` when FastAPI is down, returns structured `upstream_non_json` for non-JSON upstream failures, and still blocks debug or arbitrary proxy paths.
+- Create Session, Evidence, Review, and Answer flows catch failures locally, preserve form/page state, avoid false success copy, and keep answer text when submission fails. Answer submission has in-flight duplicate prevention.
+- `wagmi` was removed from production dependencies and the app provider tree. Optional wallet UX now uses injected `window.ethereum` only for metadata, with viem address validation. Monad RPC env vars were removed from frontend examples/docs because Monad RPC is not required for AI3 core browsing, evidence, review, or Build Log behavior.
+- The main E2E path is now a general programming learning case: `Understanding event sourcing`. Web3 is covered by one isolated optional evidence screenshot only. AI3 does not write proof on-chain, does not call proof APIs, and does not enter AI4.
+- Nested panels were reduced for wallet/proof subsections, and the Build Log desktop column is constrained with `h-fit`.
+
+Final validation commands run in `/home/holy/web3/focusproof-agent/frontend`:
+
+- `npm run lint`: passed.
+- `npm run typecheck`: passed.
+- `npm run test`: 4 files passed, 27 tests passed.
+- `npm run build`: passed on Next.js 15.5.18.
+- `npm run test:e2e`: 12 tests passed across 1440x900, 1280x720, 390x844, and 360x800 projects.
+- `npm audit --omit=dev`: 2 moderate vulnerabilities reported, 0 high, 0 critical. The remaining report is Next's internal `postcss <8.5.10` advisory; moving to Next 16 requires the ESLint 9/React 19 toolchain jump and was not taken in this AI3.1 correction pass.
+
+AI3.1 screenshot artifacts:
+
+- `docs/research/assets/ai3/01-create-session-desktop.png`
+- `docs/research/assets/ai3/02-general-evidence-desktop.png`
+- `docs/research/assets/ai3/03-awaiting-user-desktop.png`
+- `docs/research/assets/ai3/04-review-completed-desktop.png`
+- `docs/research/assets/ai3/05-session-busy-desktop.png`
+- `docs/research/assets/ai3/06-runtime-unavailable-desktop.png`
+- `docs/research/assets/ai3/07-awaiting-user-mobile.png`
+- `docs/research/assets/ai3/08-review-completed-mobile.png`
+- `docs/research/assets/ai3/09-web3-evidence-desktop.png`
+
+Remaining limitations are unchanged: no backend Session list endpoint, wallet connect is injected-provider metadata only, and proof recording remains intentionally disabled for AI3.

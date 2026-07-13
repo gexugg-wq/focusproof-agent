@@ -60,7 +60,7 @@ export function SessionWorkspace({ sessionId }: { sessionId: string }) {
         <EvidencePanel sessionId={sessionId} domain={session.state.goal.domain} walletAddress={walletAddress} onSubmitEvidence={(payload) => evidence.mutateAsync(payload)} />
         <ReviewPanel session={session} onRequestReview={() => review.mutateAsync()} onSubmitAnswer={(input) => answer.mutateAsync(input)} />
       </div>
-      <BuildLog events={eventsQuery.data?.events ?? []} />
+      <div className="h-fit"><BuildLog events={eventsQuery.data?.events ?? []} /></div>
     </main>
   );
 }

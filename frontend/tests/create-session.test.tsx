@@ -24,6 +24,17 @@ describe("CreateSessionForm", () => {
     expect(push).not.toHaveBeenCalled();
   });
 
+  it("shows a safe creation failure and stays on the form", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ code: "backend_unavailable", retryable: true }), { status: 503, headers: { "content-type": "application/json" } }));
+    render(<CreateSessionForm />);
+    await userEvent.type(screen.getByLabelText(/learning topic/i), "TypeScript reducers");
+    await userEvent.type(screen.getByLabelText(/this session goal/i), "Explain reducer state transitions clearly.");
+    await userEvent.click(screen.getByRole("button", { name: /start session/i }));
+    expect(await screen.findByText(/Agent Runtime current unavailable|runtime is unavailable/i)).toBeInTheDocument();
+    expect(push).not.toHaveBeenCalled();
+  });
+
   it("creates a session, saves recent metadata, and routes to the workspace", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ sessionId: "sess_abc", status: "running" }), { status: 200 }));

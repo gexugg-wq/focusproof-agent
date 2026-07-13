@@ -4,6 +4,7 @@ import React from "react";
 import { FileText, Link, Send, WalletCards } from "lucide-react";
 import { useState } from "react";
 import type { SubmitEvidenceRequest, SyncResponse } from "@/lib/api/contracts";
+import { getSafeErrorMessage } from "@/lib/api/client";
 import { buildEvidencePayload } from "@/lib/evidence/payloads";
 
 type EvidenceMode = "text" | "url" | "web3";
@@ -44,8 +45,8 @@ export function EvidencePanel({
             });
       const response = await onSubmitEvidence(payload);
       setMessage(response.syncPending ? "Evidence saved, waiting for Agent sync." : "Evidence submitted.");
-    } catch {
-      setMessage("Evidence was not submitted. Please retry.");
+    } catch (error) {
+      setMessage(getSafeErrorMessage(error));
     } finally {
       setBusy(false);
     }
