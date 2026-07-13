@@ -19,6 +19,27 @@ class VerificationCapability:
     version: str
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "registry_name", self.registry_name.strip().lower())
+        object.__setattr__(self, "tool_class_name", self.tool_class_name.strip())
+        object.__setattr__(
+            self,
+            "supported_evidence_types",
+            frozenset(
+                value.strip().lower()
+                for value in self.supported_evidence_types
+                if value.strip()
+            ),
+        )
+        object.__setattr__(
+            self,
+            "supported_domains",
+            frozenset(
+                value.strip().lower()
+                for value in self.supported_domains
+                if value.strip()
+            ),
+        )
+        object.__setattr__(self, "version", self.version.strip())
         if not self.registry_name.strip() or not self.tool_class_name.strip():
             raise ValueError("capability names must not be empty")
         if not self.supported_evidence_types:
@@ -29,6 +50,8 @@ class VerificationCapability:
             raise ValueError("AI4A verification capabilities must be read-only")
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
+        if not self.version:
+            raise ValueError("version must not be empty")
 
 
 class VerificationCapabilityRegistry:

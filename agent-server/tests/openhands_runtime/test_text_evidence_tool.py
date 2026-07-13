@@ -1,3 +1,5 @@
+from openhands.sdk.llm import TextContent
+
 from focusproof.openhands_runtime.tools.verification import EvidenceReferenceAction
 from focusproof.runtime.evidence import Evidence
 
@@ -93,7 +95,11 @@ def test_missing_evidence_returns_safe_failed_observation() -> None:
     assert result.status == "failed"
     assert result.error_code == "evidence_not_found"
     assert result.safe_error_message == "Evidence was not found."
-    assert "ev_missing" not in result.content
+    assert all(
+        "ev_missing" not in item.text
+        for item in result.content
+        if isinstance(item, TextContent)
+    )
 
 
 def test_text_facts_include_structure_examples_and_source_hash() -> None:

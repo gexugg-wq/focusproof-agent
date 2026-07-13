@@ -53,3 +53,16 @@ def test_idempotent_registration_returns_existing_value() -> None:
     item = capability()
     registry = VerificationCapabilityRegistry([item])
     assert registry.register(item) is item
+
+
+def test_capability_metadata_is_normalized_at_the_model_boundary() -> None:
+    item = capability(
+        " Text ",
+        evidence_types=frozenset({" Text "}),
+        domains=frozenset({" GENERAL "}),
+    )
+    registry = VerificationCapabilityRegistry([item])
+    assert item.registry_name == "text"
+    assert item.supported_evidence_types == frozenset({"text"})
+    assert item.supported_domains == frozenset({"general"})
+    assert registry.select("general", {"text"}) == (item,)
