@@ -191,7 +191,6 @@ class ConversationManager:
             goal,
             conversation_id=UUID(session.conversation_id),
             user_id=verified_user_id,
-            evidence_types=self._load_evidence_types(session_id),
         )
         self._handles[session_id] = handle
         try:
@@ -252,12 +251,6 @@ class ConversationManager:
             for item in stored_evidence
         ]
         return _learning_goal(session), evidence, [item.answer for item in stored_answers]
-
-    def _load_evidence_types(self, session_id: str) -> set[str]:
-        assert self._uow_factory is not None
-        with self._uow_factory() as uow:
-            stored_evidence = uow.evidence.list_for_session(session_id)
-        return {item.evidence_type for item in stored_evidence}
 
     def _create_legacy_unlocked(
         self,

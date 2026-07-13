@@ -109,6 +109,7 @@ class ConversationFactory:
             else self._create_production_llm(session_id)
         )
         runtime_mode = self._runtime_mode_for(llm)
+        toolset_version = self._tool_assembler.version(goal.domain, evidence_types)
         agent = Agent(
             llm=llm,
             tools=self._session_tools(
@@ -134,7 +135,11 @@ class ConversationFactory:
                 max_iteration_per_run=6,
                 visualizer=None,
                 delete_on_close=False,
-                tags={"application": "focusproof", "sessionid": session_id},
+                tags={
+                    "application": "focusproof",
+                    "sessionid": session_id,
+                    "toolsetversion": toolset_version,
+                },
                 user_id=user_id,
             )
         except Exception as exc:
@@ -144,6 +149,7 @@ class ConversationFactory:
         if not isinstance(conversation, LocalConversation):
             conversation.close()
             raise RuntimeCreationError("SDK did not create a LocalConversation")
+        persisted_toolset_version = conversation.state.tags.get("toolsetversion")
         return ConversationHandle(
             session_id=session_id,
             conversation=conversation,
@@ -151,6 +157,12 @@ class ConversationFactory:
             workspace_path=workspace_path,
             persistence_path=persistence_path,
             runtime_mode=runtime_mode,
+            toolset_version=toolset_version,
+            persisted_toolset_version=persisted_toolset_version,
+            toolset_version_mismatch=(
+                persisted_toolset_version is not None
+                and persisted_toolset_version != toolset_version
+            ),
         )
 
     def _runtime_mode_for(self, llm: LLM) -> RuntimeMode:

@@ -21,6 +21,16 @@ def test_general_session_gets_control_and_general_verification_tools() -> None:
     ]
 
 
+def test_session_without_evidence_types_gets_allowlisted_general_verifiers() -> None:
+    tools = assembler().assemble("sess_1", "general", set())
+    assert [tool.name for tool in tools] == [
+        "FocusProofLearnerInputTool",
+        "FocusProofReviewDraftTool",
+        "FocusProofTextEvidenceVerificationTool",
+        "FocusProofUrlEvidenceVerificationTool",
+    ]
+
+
 def test_known_text_evidence_narrows_general_verifiers() -> None:
     tools = assembler().assemble("sess_1", "general", {"text"})
     assert "FocusProofTextEvidenceVerificationTool" in {tool.name for tool in tools}

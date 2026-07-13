@@ -131,6 +131,26 @@ def test_text_facts_include_structure_examples_and_source_hash() -> None:
     assert result.source_refs == ["ev_structured", "sha256:ev_structured"]
 
 
+def test_substantive_cjk_text_uses_unicode_aware_word_count() -> None:
+    from focusproof.openhands_runtime.tools.text_evidence import (
+        TextEvidenceVerificationExecutor,
+    )
+
+    repository = RecordingRepository(
+        evidence(
+            "ev_cjk",
+            "text",
+            text="我比较了光照组和遮光组，只改变光照条件，并记录叶片颜色变化。",
+        )
+    )
+    result = TextEvidenceVerificationExecutor(repository, "sess_1")(
+        EvidenceReferenceAction(evidence_id="ev_cjk")
+    )
+
+    assert result.facts["word_count"] >= 9
+    assert "text_too_short" not in result.weak_signals
+
+
 def test_text_tool_accepts_only_evidence_reference_and_is_read_only() -> None:
     from focusproof.openhands_runtime.tools.text_evidence import (
         FocusProofTextEvidenceVerificationTool,

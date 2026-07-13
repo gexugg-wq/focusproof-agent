@@ -32,7 +32,7 @@ class SessionToolAssembler:
         tools = [Tool(name=name, params=dict(params)) for name in _CONTROL_TOOL_CLASSES]
         tools.extend(
             Tool(name=item.tool_class_name, params=dict(params))
-            for item in self._registry.select(domain, evidence_types)
+            for item in self._registry.select(domain, evidence_types or None)
         )
         return tools
 
@@ -41,7 +41,7 @@ class SessionToolAssembler:
         domain: str,
         evidence_types: Collection[str] | None,
     ) -> str:
-        return toolset_version(self._registry.select(domain, evidence_types))
+        return toolset_version(self._registry.select(domain, evidence_types or None))
 
 
 def toolset_version(capabilities: Iterable[VerificationCapability]) -> str:

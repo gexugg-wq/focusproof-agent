@@ -14,6 +14,10 @@ _GENERIC_PHRASES = (
     "??",
 )
 _TERM_RE = re.compile(r"[^\W\d_]{4,}", re.UNICODE)
+_CJK_CHARACTER_RE = re.compile(
+    r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]"
+)
+_NON_CJK_WORD_RE = re.compile(r"\b\w+\b", re.UNICODE)
 _GOAL_STOP_WORDS = {
     "about",
     "explain",
@@ -30,7 +34,17 @@ def _text(evidence: Evidence) -> str:
 
 def _is_generic(text: str) -> bool:
     lowered = text.lower()
-    return len(text.split()) < 9 or any(phrase in lowered for phrase in _GENERIC_PHRASES)
+    return _lexical_unit_count(text) < 9 or any(
+        phrase in lowered for phrase in _GENERIC_PHRASES
+    )
+
+
+def _lexical_unit_count(text: str) -> int:
+    cjk_count = len(_CJK_CHARACTER_RE.findall(text))
+    if cjk_count == 0:
+        return len(text.split())
+    non_cjk_text = _CJK_CHARACTER_RE.sub(" ", text)
+    return cjk_count + len(_NON_CJK_WORD_RE.findall(non_cjk_text))
 
 
 def _meaningful_terms(text: str) -> set[str]:
@@ -80,11 +94,8 @@ def score_learning_session(
     submitted_terms = _meaningful_terms(f"{joined_text} {answer_text}")
     has_goal_alignment = bool(goal_terms & submitted_terms)
 
-    if all(
-        _is_generic(_text(item))
-        for item in evidence
-        if item.evidenceType == "text"
-    ):
+    text_items = [item for item in evidence if item.evidenceType == "text"]
+    if text_items and all(_is_generic(_text(item)) for item in text_items):
         findings.append(
             Finding(
                 severity="warning",

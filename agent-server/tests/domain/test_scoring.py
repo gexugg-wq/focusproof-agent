@@ -157,3 +157,53 @@ def test_observation_success_does_not_assign_final_learning() -> None:
     )
     result = score_learning_session(goal, evidence, [], [observation])
     assert result.status != "VerifiedLearning"
+
+
+def test_url_only_evidence_with_specific_answer_is_not_generic_text() -> None:
+    goal = general_goal(
+        "Understand retry guidance",
+        "Explain retry guidance from the referenced documentation",
+    )
+    evidence = [
+        Evidence(
+            evidenceId="ev_url",
+            evidenceType="url",
+            contentHash="sha256:url",
+            sourceUrl="https://example.com/retry-guide",
+        )
+    ]
+    observation = Observation(
+        toolName="focusproof_url_evidence_verification",
+        status="success",
+        facts={"status_code": 200, "title": "Retry guide"},
+        sourceRefs=["ev_url", "sha256:url", "https://example.com/retry-guide"],
+    )
+
+    result = score_learning_session(
+        goal,
+        evidence,
+        ["Retry guidance uses bounded exponential delays to reduce contention."],
+        [observation],
+    )
+
+    assert result.score >= 60
+    assert result.status == "LikelyLearning"
+
+
+def test_substantive_cjk_text_is_not_treated_as_generic() -> None:
+    goal = general_goal("理解实验对照", "解释为什么实验需要对照组")
+    evidence = [
+        text_evidence(
+            "ev_cjk",
+            "我比较了光照组和遮光组，只改变光照条件，并记录叶片颜色变化来说明对照组的作用。",
+        )
+    ]
+
+    result = score_learning_session(
+        goal,
+        evidence,
+        ["对照组帮助排除其他变量，让观察到的差异能归因于光照。"],
+    )
+
+    assert result.score >= 60
+    assert result.status == "LikelyLearning"

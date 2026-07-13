@@ -109,6 +109,51 @@ def test_factory_narrows_verifiers_for_known_evidence_types(tmp_path: Path) -> N
         handle.conversation.close()
 
 
+def test_factory_records_toolset_version_on_fresh_conversation(tmp_path: Path) -> None:
+    from focusproof.openhands_runtime.factory import ConversationFactory
+
+    factory = ConversationFactory(
+        project_root=tmp_path,
+        repository=EmptyRepository(),
+        llm_factory=_test_llm,
+    )
+    handle = factory.create("sess_version", _goal(), evidence_types={"text"})
+    try:
+        assert len(handle.toolset_version) == 12
+        assert handle.persisted_toolset_version == handle.toolset_version
+        assert handle.toolset_version_mismatch is False
+        assert handle.conversation.state.tags["toolsetversion"] == (
+            handle.toolset_version
+        )
+    finally:
+        handle.conversation.close()
+
+
+def test_factory_reports_persisted_toolset_version_mismatch(tmp_path: Path) -> None:
+    from focusproof.openhands_runtime.factory import ConversationFactory
+
+    factory = ConversationFactory(
+        project_root=tmp_path,
+        repository=EmptyRepository(),
+        llm_factory=_test_llm,
+    )
+    initial = factory.create(
+        "sess_version_restore",
+        _goal(),
+        evidence_types={"text"},
+    )
+    initial_version = initial.toolset_version
+    initial.conversation.close()
+
+    restored = factory.create("sess_version_restore", _goal())
+    try:
+        assert restored.persisted_toolset_version == initial_version
+        assert restored.toolset_version != initial_version
+        assert restored.toolset_version_mismatch is True
+    finally:
+        restored.conversation.close()
+
+
 def test_factory_uses_explicit_validated_data_directory(tmp_path: Path) -> None:
     from focusproof.openhands_runtime.factory import ConversationFactory
 

@@ -4,7 +4,7 @@ import json
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, ClassVar, Protocol, Self
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from openhands.sdk.tool import ToolAnnotations, ToolDefinition, ToolExecutor
 
@@ -26,6 +26,16 @@ _VERIFIER_VERSION = "1"
 
 class UrlFetcher(Protocol):
     def fetch(self, source_url: str) -> FetchedUrl: ...
+
+
+def _sanitize_external_url(url: str) -> str:
+    """Keep a useful source reference without credentials, query, or fragment."""
+    parsed = urlsplit(url)
+    hostname = parsed.hostname or ""
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
 
 
 class UrlEvidenceVerificationExecutor(
@@ -87,7 +97,6 @@ class UrlEvidenceVerificationExecutor(
                 source_refs=source_refs,
                 started_at=started_at,
             )
-        source_refs.append(source_url)
         fetcher = self._fetcher
         if fetcher is None:
             from focusproof.openhands_runtime.tool_registry import (
@@ -98,10 +107,13 @@ class UrlEvidenceVerificationExecutor(
         try:
             fetched = fetcher.fetch(source_url)
         except UrlPolicyError as exc:
+            is_network_failure = exc.code == "dns_unavailable"
             return self._error_observation(
                 evidence.evidenceId,
-                status="failed",
-                error_code="url_blocked",
+                status="inconclusive" if is_network_failure else "failed",
+                error_code=(
+                    "network_unavailable" if is_network_failure else "url_blocked"
+                ),
                 safe_message=exc.safe_message,
                 source_refs=source_refs,
                 started_at=started_at,
@@ -123,13 +135,17 @@ class UrlEvidenceVerificationExecutor(
                 started_at=started_at,
             )
 
+        safe_final_url = _sanitize_external_url(fetched.final_url)
+        source_refs.append(safe_final_url)
         facts = {
-            "normalized_url": fetched.final_url,
+            "normalized_url": safe_final_url,
             "hostname": urlsplit(fetched.final_url).hostname or "",
             "status_code": fetched.status_code,
             "content_type": fetched.content_type,
             "content_length": fetched.content_length,
-            "redirect_chain": list(fetched.redirect_chain),
+            "redirect_chain": [
+                _sanitize_external_url(url) for url in fetched.redirect_chain
+            ],
             "title": fetched.title,
             "text_excerpt": fetched.text_excerpt,
         }
@@ -153,7 +169,6 @@ class UrlEvidenceVerificationExecutor(
             started_at=started_at,
             completed_at=utc_now(),
         )
-
     @staticmethod
     def _error_observation(
         evidence_id: str,

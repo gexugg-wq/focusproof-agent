@@ -7,7 +7,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from focusproof.openhands_runtime.tools.url_safety import UrlSafetyPolicy
+from focusproof.openhands_runtime.tools.url_safety import SafeUrl, UrlSafetyPolicy
 
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _SUPPORTED_CONTENT_TYPES = (
@@ -63,11 +63,14 @@ class BoundedUrlFetcher:
         safe = self._policy.validate(source_url)
         redirects: list[str] = []
         while True:
+            request_url, host_header = _pinned_request_target(safe)
             try:
                 with self._client.stream(
                     "GET",
-                    safe.normalized,
+                    request_url,
+                    headers={"Host": host_header},
                     follow_redirects=False,
+                    extensions={"sni_hostname": safe.hostname},
                 ) as response:
                     if response.status_code in _REDIRECT_STATUSES:
                         location = response.headers.get("location")
@@ -152,6 +155,17 @@ def _extract_title(text: str) -> str | None:
         return None
     title = _WHITESPACE_RE.sub(" ", unescape(_TAG_RE.sub(" ", match.group(1)))).strip()
     return title[:512] or None
+
+
+def _pinned_request_target(safe: SafeUrl) -> tuple[httpx.URL, str]:
+    original = httpx.URL(safe.normalized)
+    address = safe.addresses[0]
+    request_url = original.copy_with(host=address)
+    host = f"[{safe.hostname}]" if ":" in safe.hostname else safe.hostname
+    default_port = 443 if original.scheme == "https" else 80
+    if original.port is not None and original.port != default_port:
+        host = f"{host}:{original.port}"
+    return request_url, host
 
 
 def _extract_text(text: str, *, is_html: bool) -> str | None:

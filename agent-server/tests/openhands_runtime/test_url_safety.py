@@ -93,7 +93,34 @@ def test_fetcher_revalidates_redirect_target_before_request() -> None:
             fetcher.fetch("https://example.com/start")
     finally:
         client.close()
-    assert requested == ["https://example.com/start"]
+    assert requested == ["https://93.184.216.34/start"]
+
+
+def test_fetcher_pins_connection_to_policy_validated_address() -> None:
+    from focusproof.openhands_runtime.tools.url_fetcher import BoundedUrlFetcher
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/plain"},
+            content=b"safe",
+        )
+
+    client = client_for(httpx.MockTransport(handler))
+    try:
+        BoundedUrlFetcher(
+            policy=UrlSafetyPolicy(allow_http=False, resolver=public_resolver),
+            client=client,
+        ).fetch("https://example.com/guide")
+    finally:
+        client.close()
+    assert len(requests) == 1
+    assert requests[0].url.host == "93.184.216.34"
+    assert requests[0].headers["host"] == "example.com"
+    assert requests[0].extensions["sni_hostname"] == "example.com"
 
 
 def test_fetcher_rejects_more_than_three_redirects() -> None:

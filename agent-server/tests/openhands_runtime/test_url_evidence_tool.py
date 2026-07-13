@@ -95,13 +95,36 @@ def test_url_executor_maps_blocked_url_to_failed_observation() -> None:
     )
 
     result = UrlEvidenceVerificationExecutor(
-        RecordingRepository(evidence()),
+        RecordingRepository(
+            evidence(source_url="https://user:secret@example.com/private")
+        ),
         "sess_1",
         FakeFetcher(error=UrlPolicyError("url_address_blocked", "Blocked URL.")),
     )(EvidenceReferenceAction(evidence_id="ev_url"))
     assert result.status == "failed"
     assert result.error_code == "url_blocked"
     assert result.safe_error_message == "Blocked URL."
+    assert result.source_refs == ["ev_url", "sha256:ev_url"]
+    assert "secret" not in result.model_dump_json()
+
+
+def test_url_executor_maps_dns_failure_to_inconclusive_network_error() -> None:
+    from focusproof.openhands_runtime.tools.url_evidence import (
+        UrlEvidenceVerificationExecutor,
+    )
+
+    result = UrlEvidenceVerificationExecutor(
+        RecordingRepository(evidence()),
+        "sess_1",
+        FakeFetcher(
+            error=UrlPolicyError(
+                "dns_unavailable",
+                "Hostname could not be resolved.",
+            )
+        ),
+    )(EvidenceReferenceAction(evidence_id="ev_url"))
+    assert result.status == "inconclusive"
+    assert result.error_code == "network_unavailable"
 
 
 def test_url_executor_maps_network_timeout_to_inconclusive() -> None:
@@ -135,6 +158,37 @@ def test_url_executor_maps_binary_content_to_unsupported() -> None:
     )(EvidenceReferenceAction(evidence_id="ev_url"))
     assert result.status == "unsupported"
     assert result.error_code == "content_type_unsupported"
+
+
+def test_url_observation_redacts_query_secrets_from_facts_and_sources() -> None:
+    from focusproof.openhands_runtime.tools.url_evidence import (
+        UrlEvidenceVerificationExecutor,
+    )
+
+    stored = evidence(source_url="https://example.com/guide?token=secret")
+    fetched_url = fetched()
+    fetched_url = FetchedUrl(
+        final_url="https://example.com/guide?token=secret",
+        status_code=fetched_url.status_code,
+        content_type=fetched_url.content_type,
+        content_length=fetched_url.content_length,
+        redirect_chain=("https://example.com/next?key=secret",),
+        title=fetched_url.title,
+        text_excerpt=fetched_url.text_excerpt,
+    )
+    result = UrlEvidenceVerificationExecutor(
+        RecordingRepository(stored),
+        "sess_1",
+        FakeFetcher(result=fetched_url),
+    )(EvidenceReferenceAction(evidence_id="ev_url"))
+    assert result.facts["normalized_url"] == "https://example.com/guide"
+    assert result.facts["redirect_chain"] == ["https://example.com/next"]
+    assert result.source_refs == [
+        "ev_url",
+        "sha256:ev_url",
+        "https://example.com/guide",
+    ]
+    assert "secret" not in result.model_dump_json()
 
 
 def test_url_executor_rejects_missing_or_wrong_type_evidence_safely() -> None:

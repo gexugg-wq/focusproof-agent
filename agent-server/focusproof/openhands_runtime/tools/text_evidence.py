@@ -31,8 +31,20 @@ _EXAMPLE_MARKERS = (
     "compared",
 )
 _STRUCTURE_RE = re.compile(r"(?m)^(?:#{1,6}\s+|\d+[.)]\s+|[-*]\s+)|```")
+_CJK_CHARACTER_RE = re.compile(
+    r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]"
+)
+_NON_CJK_WORD_RE = re.compile(r"\b\w+\b", re.UNICODE)
 _MIN_SPECIFIC_WORDS = 9
 _VERIFIER_VERSION = "1"
+
+
+def _lexical_unit_count(text: str) -> int:
+    cjk_count = len(_CJK_CHARACTER_RE.findall(text))
+    if cjk_count == 0:
+        return len(text.split())
+    non_cjk_text = _CJK_CHARACTER_RE.sub(" ", text)
+    return cjk_count + len(_NON_CJK_WORD_RE.findall(non_cjk_text))
 
 
 class TextEvidenceVerificationExecutor(
@@ -97,7 +109,7 @@ class TextEvidenceVerificationExecutor(
 
         text = (evidence.textContent or "").strip()
         lowered = text.lower()
-        word_count = len(text.split())
+        word_count = _lexical_unit_count(text)
         weak_signals: list[str] = []
         if word_count < _MIN_SPECIFIC_WORDS:
             weak_signals.append("text_too_short")
