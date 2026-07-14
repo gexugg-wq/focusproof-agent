@@ -22,6 +22,7 @@ from focusproof.openhands_runtime.tools.learner_input import (
     LearnerInputObservation,
 )
 from focusproof.openhands_runtime.tools.review_draft import ReviewDraftObservation
+from focusproof.openhands_runtime.url_redaction import sanitize_source_refs
 from focusproof.openhands_runtime.tools.verification import VerificationObservation
 from focusproof.openhands_runtime.tools.evidence_verification import (
     EvidenceVerificationObservation,
@@ -339,7 +340,7 @@ def _focusproof_observations(
                         "weak_signals": native_observation.weak_signals,
                         "verifier_version": "legacy",
                     },
-                    sourceRefs=native_observation.source_refs,
+                    sourceRefs=sanitize_source_refs(native_observation.source_refs),
                     error=None,
                 )
             )
@@ -361,7 +362,7 @@ def _focusproof_observations(
                     "weak_signals": native_observation.weak_signals,
                     "verifier_version": native_observation.verifier_version,
                 },
-                sourceRefs=native_observation.source_refs,
+                sourceRefs=sanitize_source_refs(native_observation.source_refs),
                 error=native_observation.safe_error_message,
             )
         )

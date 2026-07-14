@@ -35,6 +35,65 @@ def test_manager_reuses_same_conversation(
     manager.close("sess_1")
 
 
+def test_legacy_manager_redacts_url_before_message_and_audit_projection(
+    tmp_path: Path,
+    repository: SessionRepository,
+    learning_goal: LearningGoal,
+) -> None:
+    import json
+
+    from openhands.sdk.event import MessageEvent
+    from openhands.sdk.llm import TextContent
+
+    from focusproof.openhands_runtime.manager import ConversationManager
+    from focusproof.runtime.event_log import InMemoryEventLog
+
+    source_url = "https://example.com/hooks/secret-token?token=query-secret#fragment"
+    evidence = Evidence(
+        evidenceId="ev_url_secret",
+        evidenceType="url",
+        contentHash="sha256:url-secret",
+        sourceUrl=source_url,
+        metadata={"callback": "https://example.com/metadata-secret"},
+    )
+    audit_log = InMemoryEventLog()
+    manager = ConversationManager(
+        repository=repository,
+        audit_log=audit_log,
+        project_root=tmp_path,
+        llm_factory=lambda session_id: TestLLM.from_messages([]),
+    )
+    handle = manager.create("sess_legacy_url", learning_goal)
+    repository.add_evidence("sess_legacy_url", evidence)
+    manager.send_evidence("sess_legacy_url", evidence)
+    try:
+        message = next(
+            event
+            for event in handle.conversation.state.events
+            if isinstance(event, MessageEvent)
+            and '"kind": "evidence"' in "".join(
+                item.text
+                for item in event.llm_message.content
+                if isinstance(item, TextContent)
+            )
+        )
+        serialized_message = message.model_dump_json()
+        serialized_audit = json.dumps(
+            [event.payload for event in audit_log.list("sess_legacy_url")],
+            sort_keys=True,
+        )
+    finally:
+        manager.close("sess_legacy_url")
+
+    for secret in ("secret-token", "query-secret", "fragment", "metadata-secret"):
+        assert secret not in serialized_message
+        assert secret not in serialized_audit
+    assert source_url == repository.get_evidence(
+        "sess_legacy_url",
+        "ev_url_secret",
+    ).sourceUrl
+
+
 def test_learner_input_stops_before_scoring(
     tmp_path: Path,
     repository: SessionRepository,

@@ -4,7 +4,6 @@ import json
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, ClassVar, Protocol, Self
-from urllib.parse import urlsplit, urlunsplit
 
 from openhands.sdk.tool import ToolAnnotations, ToolDefinition, ToolExecutor
 
@@ -14,6 +13,7 @@ from focusproof.openhands_runtime.tools import (
 )
 from focusproof.openhands_runtime.tools.url_fetcher import FetchedUrl, UrlFetchError
 from focusproof.openhands_runtime.tools.url_safety import UrlPolicyError
+from focusproof.openhands_runtime.url_redaction import redact_url, redact_url_text
 from focusproof.openhands_runtime.tools.verification import (
     EvidenceReferenceAction,
     VerificationObservation,
@@ -26,16 +26,6 @@ _VERIFIER_VERSION = "1"
 
 class UrlFetcher(Protocol):
     def fetch(self, source_url: str) -> FetchedUrl: ...
-
-
-def _sanitize_external_url(url: str) -> str:
-    """Keep a useful source reference without credentials, query, or fragment."""
-    parsed = urlsplit(url)
-    hostname = parsed.hostname or ""
-    host = f"[{hostname}]" if ":" in hostname else hostname
-    if parsed.port is not None:
-        host = f"{host}:{parsed.port}"
-    return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
 
 
 class UrlEvidenceVerificationExecutor(
@@ -135,19 +125,17 @@ class UrlEvidenceVerificationExecutor(
                 started_at=started_at,
             )
 
-        safe_final_url = _sanitize_external_url(fetched.final_url)
-        source_refs.append(safe_final_url)
+        safe_final_url = redact_url(fetched.final_url)
+        source_refs.append(f"url-sha256:{safe_final_url['url_sha256']}")
+        external_urls = [source_url, fetched.final_url, *fetched.redirect_chain]
         facts = {
-            "normalized_url": safe_final_url,
-            "hostname": urlsplit(fetched.final_url).hostname or "",
+            "url": safe_final_url,
             "status_code": fetched.status_code,
             "content_type": fetched.content_type,
             "content_length": fetched.content_length,
-            "redirect_chain": [
-                _sanitize_external_url(url) for url in fetched.redirect_chain
-            ],
-            "title": fetched.title,
-            "text_excerpt": fetched.text_excerpt,
+            "redirect_chain": [redact_url(url) for url in fetched.redirect_chain],
+            "title": redact_url_text(fetched.title, external_urls),
+            "text_excerpt": redact_url_text(fetched.text_excerpt, external_urls),
         }
         payload = {
             "evidence_id": evidence.evidenceId,

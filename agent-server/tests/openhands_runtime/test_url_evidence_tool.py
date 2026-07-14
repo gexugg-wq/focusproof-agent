@@ -73,19 +73,33 @@ def test_url_executor_reads_source_url_from_authoritative_repository() -> None:
     assert fetcher.requested == ["https://example.com/guide"]
     assert result.status == "success"
     assert result.facts == {
-        "normalized_url": "https://example.com/guide",
-        "hostname": "example.com",
+        "url": {
+            "scheme": "https",
+            "hostname": "example.com",
+            "origin": "https://example.com",
+            "path_redacted": True,
+            "url_sha256": result.facts["url"]["url_sha256"],
+        },
         "status_code": 200,
         "content_type": "text/html",
         "content_length": 120,
-        "redirect_chain": ["https://www.example.com/guide"],
+        "redirect_chain": [
+            {
+                "scheme": "https",
+                "hostname": "www.example.com",
+                "origin": "https://www.example.com",
+                "path_redacted": True,
+                "url_sha256": result.facts["redirect_chain"][0]["url_sha256"],
+            }
+        ],
         "title": "Guide",
-        "text_excerpt": "A bounded guide excerpt.",
+        "text_excerpt": "A bounded [redacted] excerpt.",
     }
+    assert len(result.facts["url"]["url_sha256"]) == 64
     assert result.source_refs == [
         "ev_url",
         "sha256:ev_url",
-        "https://example.com/guide",
+        f"url-sha256:{result.facts['url']['url_sha256']}",
     ]
 
 
@@ -181,14 +195,73 @@ def test_url_observation_redacts_query_secrets_from_facts_and_sources() -> None:
         "sess_1",
         FakeFetcher(result=fetched_url),
     )(EvidenceReferenceAction(evidence_id="ev_url"))
-    assert result.facts["normalized_url"] == "https://example.com/guide"
-    assert result.facts["redirect_chain"] == ["https://example.com/next"]
+    assert result.facts["url"]["origin"] == "https://example.com"
+    assert result.facts["url"]["path_redacted"] is True
+    assert result.facts["redirect_chain"][0]["origin"] == "https://example.com"
     assert result.source_refs == [
         "ev_url",
         "sha256:ev_url",
-        "https://example.com/guide",
+        f"url-sha256:{result.facts['url']['url_sha256']}",
     ]
     assert "secret" not in result.model_dump_json()
+
+
+def test_url_observation_redacts_path_userinfo_port_redirect_and_excerpt_secrets() -> None:
+    from focusproof.openhands_runtime.tools.url_evidence import (
+        UrlEvidenceVerificationExecutor,
+    )
+
+    source_url = "https://example.com/hooks/secret-token?token=source-secret#source-fragment"
+    fetched_url = FetchedUrl(
+        final_url=(
+            "https://user:password@example.com:8443/download/signed/abc123"
+            "?token=final-secret#final-fragment"
+        ),
+        status_code=200,
+        content_type="text/plain",
+        content_length=80,
+        redirect_chain=(
+            "https://redirect-user:redirect-password@redirect.example:9443/"
+            "private/redirect-secret?key=query-secret#redirect-fragment",
+        ),
+        title="Download abc123 for user",
+        text_excerpt="Use secret-token and final-secret at redirect-secret.",
+    )
+    repository = RecordingRepository(evidence(source_url=source_url))
+    fetcher = FakeFetcher(result=fetched_url)
+
+    result = UrlEvidenceVerificationExecutor(repository, "sess_1", fetcher)(
+        EvidenceReferenceAction(evidence_id="ev_url")
+    )
+
+    assert fetcher.requested == [source_url]
+    assert result.facts["url"] == {
+        "scheme": "https",
+        "hostname": "example.com",
+        "port": 8443,
+        "origin": "https://example.com:8443",
+        "path_redacted": True,
+        "url_sha256": result.facts["url"]["url_sha256"],
+    }
+    assert result.facts["redirect_chain"][0]["port"] == 9443
+    serialized = result.model_dump_json()
+    for secret in (
+        "secret-token",
+        "source-secret",
+        "source-fragment",
+        "user",
+        "password",
+        "abc123",
+        "final-secret",
+        "final-fragment",
+        "redirect-user",
+        "redirect-password",
+        "private",
+        "redirect-secret",
+        "query-secret",
+        "redirect-fragment",
+    ):
+        assert secret not in serialized
 
 
 def test_url_executor_rejects_missing_or_wrong_type_evidence_safely() -> None:

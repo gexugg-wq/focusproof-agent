@@ -23,6 +23,10 @@ from focusproof.openhands_runtime.tools.learner_input import (
     LearnerInputAction,
     question_id_for,
 )
+from focusproof.openhands_runtime.url_redaction import (
+    safe_evidence_payload,
+    sanitize_source_refs,
+)
 from focusproof.runtime.events import Actor, Event, EventType
 
 
@@ -106,7 +110,7 @@ class OpenHandsEventProjector:
             product_payload is not None
             or isinstance(envelope.get("evidence"), dict)
         ):
-            payload = dict(product_payload or envelope["evidence"])
+            payload = safe_evidence_payload(product_payload or envelope["evidence"])
             event_type = "evidence.submitted"
             evidence_id = payload.get("evidenceId")
             related = [evidence_id] if isinstance(evidence_id, str) else []
@@ -163,6 +167,7 @@ class OpenHandsEventProjector:
                 mode="json",
                 exclude={"content", "is_error"},
             )
+            payload["source_refs"] = sanitize_source_refs(observation.source_refs)
             event_type: EventType = "verification.completed"
             actor: Actor = "tool"
             related = [observation.evidence_id]
@@ -177,7 +182,7 @@ class OpenHandsEventProjector:
                     "verifier": observation.verifier,
                 },
                 "weak_signals": observation.weak_signals,
-                "source_refs": observation.source_refs,
+                "source_refs": sanitize_source_refs(observation.source_refs),
                 "verifier_version": "legacy",
             }
             event_type = "verification.completed"

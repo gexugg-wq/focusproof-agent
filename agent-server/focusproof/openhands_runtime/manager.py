@@ -18,6 +18,7 @@ from focusproof.openhands_runtime.synchronizer import ConversationSynchronizer
 from focusproof.openhands_runtime.tools import SessionEvidenceRepository
 from focusproof.openhands_runtime.tools.learner_input import LearnerInputObservation
 from focusproof.openhands_runtime.tools.review_draft import ReviewDraftObservation
+from focusproof.openhands_runtime.url_redaction import safe_evidence_payload
 from focusproof.persistence.repositories import StoredSession
 from focusproof.persistence.unit_of_work import UnitOfWorkFactoryLike
 from focusproof.runtime.evidence import Evidence, LearningGoal
@@ -296,7 +297,9 @@ class ConversationManager:
                 {
                     "kind": "evidence",
                     "session_id": session_id,
-                    "evidence": evidence.model_dump(mode="json"),
+                    "evidence": safe_evidence_payload(
+                        evidence.model_dump(mode="json")
+                    ),
                 },
                 sort_keys=True,
             ),

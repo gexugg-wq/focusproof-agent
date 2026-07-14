@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 from uuid import NAMESPACE_URL, uuid5
 
 from openhands.sdk.event import MessageEvent
+from openhands.sdk.llm import TextContent
 
 from focusproof.openhands_runtime.factory import ConversationFactory
 from focusproof.openhands_runtime.handle import ConversationHandle
@@ -106,6 +108,19 @@ def _messages(handle: ConversationHandle) -> list[MessageEvent]:
     ]
 
 
+def _message_payload(event: MessageEvent) -> dict[str, object]:
+    text = "".join(
+        item.text
+        for item in event.llm_message.content
+        if isinstance(item, TextContent)
+    )
+    parsed = json.loads(text)
+    assert isinstance(parsed, dict)
+    payload = parsed["payload"]
+    assert isinstance(payload, dict)
+    return payload
+
+
 def test_sync_sends_stable_keys_with_verified_sender_once(
     tmp_path: Path,
     learning_goal: LearningGoal,
@@ -130,6 +145,18 @@ def test_sync_sends_stable_keys_with_verified_sender_once(
         f"answer:{session_id}:q_1:1",
     }
     assert {event.sender for event in messages} == {"verified-user-1"}
+    evidence_message = next(
+        event
+        for event in messages
+        if message_key_from_event(event) == "evidence:ev_1"
+    )
+    evidence_payload = _message_payload(evidence_message)
+    assert evidence_payload == {
+        "evidenceId": "ev_1",
+        "evidenceType": "text",
+        "contentHash": "sha256:test",
+    }
+    assert "Specific replay notes" not in evidence_message.model_dump_json()
     with uow_factory() as uow:
         session = uow.sessions.get(session_id)
         evidence = uow.evidence.get(session_id, "ev_1")
@@ -181,3 +208,74 @@ def test_message_key_parser_rejects_malformed_json() -> None:
         llm_message=Message(role="user", content=[TextContent(text="not json")]),
     )
     assert message_key_from_event(event) is None
+
+
+def test_sync_redacts_url_and_arbitrary_metadata_before_message_event(
+    tmp_path: Path,
+    learning_goal: LearningGoal,
+) -> None:
+    session_id = "sess_url_sync"
+    source_url = (
+        "https://credential-user:credential-password@example.com:8443/hooks/secret-token"
+        "?token=query-secret#private-fragment"
+    )
+    uow_factory, factory = _services(tmp_path)
+    _seed(uow_factory, session_id)
+    with uow_factory() as uow:
+        uow.evidence.add(
+            StoredEvidence(
+                evidence_id="ev_url_secret",
+                session_id=session_id,
+                evidence_type="url",
+                content_hash="sha256:url-secret",
+                text_content=None,
+                source_url=source_url,
+                metadata={"callback": "https://example.com/metadata-secret"},
+                conversation_synced_at=None,
+                created_at=datetime.now(UTC),
+            )
+        )
+        uow.commit()
+    handle = factory.create(session_id, learning_goal)
+    try:
+        ConversationSynchronizer(uow_factory).sync(
+            handle,
+            verified_user_id="verified-user-1",
+        )
+        message = next(
+            event
+            for event in _messages(handle)
+            if message_key_from_event(event) == "evidence:ev_url_secret"
+        )
+        payload = _message_payload(message)
+        serialized = message.model_dump_json()
+    finally:
+        handle.conversation.close()
+
+    assert set(payload) == {
+        "evidenceId",
+        "evidenceType",
+        "contentHash",
+        "source",
+    }
+    assert payload["source"] == {
+        "scheme": "https",
+        "hostname": "example.com",
+        "port": 8443,
+        "origin": "https://example.com:8443",
+        "path_redacted": True,
+        "url_sha256": payload["source"]["url_sha256"],
+    }
+    for secret in (
+        "credential-user",
+        "credential-password",
+        "secret-token",
+        "query-secret",
+        "private-fragment",
+        "metadata-secret",
+    ):
+        assert secret not in serialized
+    with uow_factory() as uow:
+        stored = uow.evidence.get(session_id, "ev_url_secret")
+    assert stored is not None
+    assert stored.source_url == source_url

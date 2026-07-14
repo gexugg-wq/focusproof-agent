@@ -88,6 +88,55 @@ def test_message_projection_preserves_native_identity() -> None:
     assert projected.payload["relatedEvidenceIds"] == ["ev_1"]
 
 
+def test_legacy_message_projection_redacts_url_and_metadata_secrets() -> None:
+    from focusproof.openhands_runtime.projector import OpenHandsEventProjector
+
+    log = InMemoryEventLog()
+    projector = OpenHandsEventProjector("sess_1", uuid4(), log)
+    envelope = {
+        "kind": "evidence",
+        "session_id": "sess_1",
+        "evidence": {
+            "evidenceId": "ev_url_secret",
+            "evidenceType": "url",
+            "contentHash": "sha256:url-secret",
+            "sourceUrl": (
+                "https://credential-user:credential-password@example.com:8443/private/secret-token"
+                "?token=query-secret#fragment-secret"
+            ),
+            "metadata": {"callback": "https://example.com/metadata-secret"},
+        },
+    }
+    native = MessageEvent(
+        source="user",
+        llm_message=Message(
+            role="user",
+            content=[TextContent(text=json.dumps(envelope))],
+        ),
+    )
+
+    projected = projector.on_event(native)
+
+    assert projected is not None
+    serialized = json.dumps(projected.payload, sort_keys=True)
+    assert set(projected.payload) >= {
+        "evidenceId",
+        "evidenceType",
+        "contentHash",
+        "source",
+    }
+    for secret in (
+        "credential-user",
+        "credential-password",
+        "private",
+        "secret-token",
+        "query-secret",
+        "fragment-secret",
+        "metadata-secret",
+    ):
+        assert secret not in serialized
+
+
 def test_action_and_observation_projection_preserves_order_and_tool_call_id() -> None:
     from focusproof.openhands_runtime.projector import OpenHandsEventProjector
 
