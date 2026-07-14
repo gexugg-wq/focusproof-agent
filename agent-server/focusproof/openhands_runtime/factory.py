@@ -22,12 +22,14 @@ from focusproof.openhands_runtime.prompts import FOCUSPROOF_SYSTEM_PROMPT
 from focusproof.openhands_runtime.tool_assembler import SessionToolAssembler
 from focusproof.openhands_runtime.tool_registry import (
     configure_repository_provider,
+    configure_url_execution_pool_provider,
     configure_url_fetcher_provider,
     ensure_focusproof_tools_registered,
 )
 from focusproof.openhands_runtime.tools import SessionEvidenceRepository
 from focusproof.openhands_runtime.tools.url_evidence import UrlFetcher
 from focusproof.openhands_runtime.tools.url_fetcher import BoundedUrlFetcher
+from focusproof.openhands_runtime.tools.url_execution import BoundedUrlExecutionPool
 from focusproof.openhands_runtime.tools.url_safety import UrlSafetyPolicy
 from focusproof.runtime.evidence import LearningGoal
 
@@ -57,6 +59,7 @@ class ConversationFactory:
         capability_registry: VerificationCapabilityRegistry | None = None,
         tool_assembler: SessionToolAssembler | None = None,
         url_fetcher: UrlFetcher | None = None,
+        url_execution_pool: BoundedUrlExecutionPool | None = None,
     ) -> None:
         self._repository = repository
         configure_repository_provider(repository)
@@ -83,6 +86,14 @@ class ConversationFactory:
             configure_url_fetcher_provider(url_fetcher, close=client.close)
         else:
             configure_url_fetcher_provider(url_fetcher)
+        if url_execution_pool is None:
+            url_execution_pool = BoundedUrlExecutionPool()
+            configure_url_execution_pool_provider(
+                url_execution_pool,
+                close=url_execution_pool.close,
+            )
+        else:
+            configure_url_execution_pool_provider(url_execution_pool)
         self._tool_assembler = tool_assembler or SessionToolAssembler(registry)
         self._project_root = project_root or Path(__file__).resolve().parents[3]
         self._data_dir = (data_dir or self._project_root / "var").resolve()

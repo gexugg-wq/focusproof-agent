@@ -7,6 +7,7 @@ from ipaddress import ip_address
 from pathlib import Path
 from threading import Event
 from time import monotonic, sleep
+from typing import Any, cast
 from uuid import uuid4
 
 import httpx
@@ -345,10 +346,10 @@ def test_cancelled_arun_emits_native_interrupt_and_orphan_completion(
         learning_goal,
         evidence_types={"url"},
     )
-    handle.conversation.send_message("Begin review")
+    cast(Any, handle.conversation).send_message("Begin review")
 
     async def scenario() -> None:
-        task = asyncio.create_task(handle.conversation.arun())
+        task: asyncio.Task[None] = asyncio.create_task(handle.conversation.arun())
         assert await asyncio.to_thread(started.wait, 1.0)
         handle.conversation.interrupt()
         await asyncio.wait_for(task, timeout=1.0)

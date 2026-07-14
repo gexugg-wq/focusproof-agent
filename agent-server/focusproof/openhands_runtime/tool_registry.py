@@ -19,11 +19,14 @@ from focusproof.openhands_runtime.tools.url_evidence import (
     FocusProofUrlEvidenceVerificationTool,
     UrlFetcher,
 )
+from focusproof.openhands_runtime.tools.url_execution import BoundedUrlExecutionPool
 
 _LOCK = RLock()
 _REPOSITORY_PROVIDER: SessionEvidenceRepository | None = None
 _URL_FETCHER_PROVIDER: UrlFetcher | None = None
 _URL_FETCHER_CLOSER: Callable[[], None] | None = None
+_URL_EXECUTION_POOL_PROVIDER: BoundedUrlExecutionPool | None = None
+_URL_EXECUTION_POOL_CLOSER: Callable[[], None] | None = None
 _REGISTERED = False
 
 _register_tool = register_tool
@@ -73,15 +76,46 @@ def get_url_fetcher_provider() -> UrlFetcher:
     return provider
 
 
+def configure_url_execution_pool_provider(
+    provider: BoundedUrlExecutionPool,
+    *,
+    close: Callable[[], None] | None = None,
+) -> None:
+    global _URL_EXECUTION_POOL_PROVIDER, _URL_EXECUTION_POOL_CLOSER
+    with _LOCK:
+        previous_closer = _URL_EXECUTION_POOL_CLOSER
+        _URL_EXECUTION_POOL_PROVIDER = provider
+        _URL_EXECUTION_POOL_CLOSER = close
+    if previous_closer is not None:
+        previous_closer()
+
+
+def get_url_execution_pool_provider() -> BoundedUrlExecutionPool:
+    global _URL_EXECUTION_POOL_PROVIDER, _URL_EXECUTION_POOL_CLOSER
+    with _LOCK:
+        provider = _URL_EXECUTION_POOL_PROVIDER
+        if provider is None:
+            provider = BoundedUrlExecutionPool()
+            _URL_EXECUTION_POOL_PROVIDER = provider
+            _URL_EXECUTION_POOL_CLOSER = provider.close
+    return provider
+
+
 def release_repository_provider() -> None:
     global _REPOSITORY_PROVIDER, _URL_FETCHER_PROVIDER, _URL_FETCHER_CLOSER
+    global _URL_EXECUTION_POOL_PROVIDER, _URL_EXECUTION_POOL_CLOSER
     with _LOCK:
         closer = _URL_FETCHER_CLOSER
+        pool_closer = _URL_EXECUTION_POOL_CLOSER
         _REPOSITORY_PROVIDER = None
         _URL_FETCHER_PROVIDER = None
         _URL_FETCHER_CLOSER = None
+        _URL_EXECUTION_POOL_PROVIDER = None
+        _URL_EXECUTION_POOL_CLOSER = None
     if closer is not None:
         closer()
+    if pool_closer is not None:
+        pool_closer()
 
 
 def ensure_focusproof_tools_registered() -> None:
