@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 from contextlib import closing
+from collections.abc import Callable
 from dataclasses import dataclass
 from html import unescape
+from time import monotonic
 from urllib.parse import urljoin
 
 import httpx
@@ -46,6 +48,8 @@ class BoundedUrlFetcher:
         *,
         policy: UrlSafetyPolicy,
         client: httpx.Client,
+        total_timeout_seconds: float,
+        clock: Callable[[], float] = monotonic,
         max_redirects: int = 3,
         max_bytes: int = 1_048_576,
     ) -> None:
@@ -55,15 +59,27 @@ class BoundedUrlFetcher:
             raise ValueError("max_redirects must not be negative")
         if max_bytes <= 0:
             raise ValueError("max_bytes must be positive")
+        if total_timeout_seconds <= 0:
+            raise ValueError("total_timeout_seconds must be positive")
         self._policy = policy
         self._client = client
+        self._total_timeout_seconds = total_timeout_seconds
+        self._clock = clock
         self._max_redirects = max_redirects
         self._max_bytes = max_bytes
 
+    @property
+    def total_timeout_seconds(self) -> float:
+        return self._total_timeout_seconds
+
     def fetch(self, source_url: str) -> FetchedUrl:
+        deadline = self._clock() + self._total_timeout_seconds
+        self._remaining(deadline)
         safe = self._policy.validate(source_url)
+        self._remaining(deadline)
         redirects: list[str] = []
         while True:
+            request_timeout = self._remaining(deadline)
             request_url, host_header = _pinned_request_target(safe)
             try:
                 request = self._client.build_request(
@@ -73,6 +89,12 @@ class BoundedUrlFetcher:
                     extensions={"sni_hostname": safe.hostname},
                 )
                 request.headers.pop("cookie", None)
+                request.extensions["timeout"] = {
+                    "connect": request_timeout,
+                    "read": request_timeout,
+                    "write": request_timeout,
+                    "pool": request_timeout,
+                }
                 with closing(
                     self._client.send(
                         request,
@@ -80,6 +102,7 @@ class BoundedUrlFetcher:
                         follow_redirects=False,
                     )
                 ) as response:
+                    self._remaining(deadline)
                     if response.status_code in _REDIRECT_STATUSES:
                         location = response.headers.get("location")
                         if not location:
@@ -93,10 +116,17 @@ class BoundedUrlFetcher:
                                 "The URL exceeded the redirect limit.",
                             )
                         target = urljoin(safe.normalized, location)
+                        self._remaining(deadline)
                         safe = self._policy.validate(target)
+                        self._remaining(deadline)
                         redirects.append(safe.normalized)
                         continue
-                    return self._read_response(response, safe.normalized, redirects)
+                    return self._read_response(
+                        response,
+                        safe.normalized,
+                        redirects,
+                        deadline,
+                    )
             except httpx.TimeoutException as exc:
                 raise UrlFetchError(
                     "network_timeout", "The URL request timed out."
@@ -111,7 +141,9 @@ class BoundedUrlFetcher:
         response: httpx.Response,
         final_url: str,
         redirects: list[str],
+        deadline: float,
     ) -> FetchedUrl:
+        self._remaining(deadline)
         content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
         if not any(
             content_type.startswith(allowed) for allowed in _SUPPORTED_CONTENT_TYPES
@@ -137,15 +169,20 @@ class BoundedUrlFetcher:
 
         body = bytearray()
         for chunk in response.iter_bytes():
+            self._remaining(deadline)
             if len(body) + len(chunk) > self._max_bytes:
                 raise UrlFetchError(
                     "response_too_large",
                     "The URL response exceeded the size limit.",
                 )
             body.extend(chunk)
+        self._remaining(deadline)
         text = bytes(body).decode("utf-8", errors="replace")
+        self._remaining(deadline)
         title = _extract_title(text) if content_type in {"text/html", "application/xhtml+xml"} else None
+        self._remaining(deadline)
         excerpt = _extract_text(text, is_html=content_type in {"text/html", "application/xhtml+xml"})
+        self._remaining(deadline)
         return FetchedUrl(
             final_url=final_url,
             status_code=response.status_code,
@@ -155,6 +192,15 @@ class BoundedUrlFetcher:
             title=title,
             text_excerpt=excerpt,
         )
+
+    def _remaining(self, deadline: float) -> float:
+        remaining = deadline - self._clock()
+        if remaining <= 0:
+            raise UrlFetchError(
+                "network_timeout",
+                "The URL request timed out.",
+            )
+        return remaining
 
 
 def _extract_title(text: str) -> str | None:

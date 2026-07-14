@@ -60,6 +60,10 @@ class ConversationFactory:
     ) -> None:
         self._repository = repository
         configure_repository_provider(repository)
+        registry = capability_registry or VerificationCapabilityRegistry(
+            build_builtin_capabilities()
+        )
+        url_capability = registry.get("url")
         if url_fetcher is None:
             client = httpx.Client(
                 follow_redirects=False,
@@ -70,13 +74,15 @@ class ConversationFactory:
             url_fetcher = BoundedUrlFetcher(
                 policy=UrlSafetyPolicy(allow_http=False),
                 client=client,
+                total_timeout_seconds=(
+                    url_capability.timeout_seconds
+                    if url_capability is not None
+                    else 15.0
+                ),
             )
             configure_url_fetcher_provider(url_fetcher, close=client.close)
         else:
             configure_url_fetcher_provider(url_fetcher)
-        registry = capability_registry or VerificationCapabilityRegistry(
-            build_builtin_capabilities()
-        )
         self._tool_assembler = tool_assembler or SessionToolAssembler(registry)
         self._project_root = project_root or Path(__file__).resolve().parents[3]
         self._data_dir = (data_dir or self._project_root / "var").resolve()

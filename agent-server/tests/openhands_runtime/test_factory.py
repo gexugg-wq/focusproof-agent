@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -288,3 +289,37 @@ def test_factory_propagates_verified_user_id_to_sdk(
         assert captured == {"user_id": "verified-user-1"}
     finally:
         handle.conversation.close()
+
+
+def test_factory_passes_url_capability_timeout_to_default_fetcher(
+    tmp_path: Path,
+) -> None:
+    from focusproof.openhands_runtime.capabilities import (
+        VerificationCapabilityRegistry,
+        build_builtin_capabilities,
+    )
+    from focusproof.openhands_runtime.factory import ConversationFactory
+    from focusproof.openhands_runtime.tool_registry import (
+        get_url_fetcher_provider,
+        release_repository_provider,
+    )
+    from focusproof.openhands_runtime.tools.url_fetcher import BoundedUrlFetcher
+
+    capabilities = tuple(
+        replace(item, timeout_seconds=2.5)
+        if item.registry_name == "url"
+        else item
+        for item in build_builtin_capabilities()
+    )
+    try:
+        ConversationFactory(
+            project_root=tmp_path,
+            repository=EmptyRepository(),
+            llm_factory=_test_llm,
+            capability_registry=VerificationCapabilityRegistry(capabilities),
+        )
+        fetcher = get_url_fetcher_provider()
+        assert isinstance(fetcher, BoundedUrlFetcher)
+        assert fetcher.total_timeout_seconds == 2.5
+    finally:
+        release_repository_provider()

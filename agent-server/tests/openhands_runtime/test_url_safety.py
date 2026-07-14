@@ -24,6 +24,17 @@ def public_resolver(hostname: str) -> tuple[Address, ...]:
     return (ip_address("93.184.216.34"),)
 
 
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -88,12 +99,88 @@ def test_fetcher_revalidates_redirect_target_before_request() -> None:
         fetcher = BoundedUrlFetcher(
             policy=UrlSafetyPolicy(allow_http=False, resolver=public_resolver),
             client=client,
+            total_timeout_seconds=15.0,
         )
         with pytest.raises(UrlPolicyError):
             fetcher.fetch("https://example.com/start")
     finally:
         client.close()
     assert requested == ["https://93.184.216.34/start"]
+
+
+def test_fetcher_deadline_includes_initial_policy_and_dns_validation() -> None:
+    from focusproof.openhands_runtime.tools.url_fetcher import (
+        BoundedUrlFetcher,
+        UrlFetchError,
+    )
+
+    clock = FakeClock()
+
+    def slow_resolver(hostname: str) -> tuple[Address, ...]:
+        del hostname
+        clock.advance(1.1)
+        return (ip_address("93.184.216.34"),)
+
+    requests: list[httpx.Request] = []
+    client = client_for(
+        httpx.MockTransport(
+            lambda request: requests.append(request) or httpx.Response(500)
+        )
+    )
+    try:
+        fetcher = BoundedUrlFetcher(
+            policy=UrlSafetyPolicy(allow_http=False, resolver=slow_resolver),
+            client=client,
+            total_timeout_seconds=1.0,
+            clock=clock,
+        )
+        with pytest.raises(UrlFetchError) as captured:
+            fetcher.fetch("https://example.com/guide")
+    finally:
+        client.close()
+
+    assert captured.value.code == "network_timeout"
+    assert requests == []
+
+
+def test_fetcher_deadline_covers_redirect_validation() -> None:
+    from focusproof.openhands_runtime.tools.url_fetcher import (
+        BoundedUrlFetcher,
+        UrlFetchError,
+    )
+
+    clock = FakeClock()
+
+    def slow_resolver(hostname: str) -> tuple[Address, ...]:
+        del hostname
+        clock.advance(0.3)
+        return (ip_address("93.184.216.34"),)
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        clock.advance(0.5)
+        return httpx.Response(
+            302,
+            headers={"location": "https://redirect.example/next"},
+        )
+
+    client = client_for(httpx.MockTransport(handler))
+    try:
+        fetcher = BoundedUrlFetcher(
+            policy=UrlSafetyPolicy(allow_http=False, resolver=slow_resolver),
+            client=client,
+            total_timeout_seconds=1.0,
+            clock=clock,
+        )
+        with pytest.raises(UrlFetchError) as captured:
+            fetcher.fetch("https://example.com/start")
+    finally:
+        client.close()
+
+    assert captured.value.code == "network_timeout"
+    assert len(requests) == 1
 
 
 def test_fetcher_pins_connection_to_policy_validated_address() -> None:
@@ -114,6 +201,7 @@ def test_fetcher_pins_connection_to_policy_validated_address() -> None:
         BoundedUrlFetcher(
             policy=UrlSafetyPolicy(allow_http=False, resolver=public_resolver),
             client=client,
+            total_timeout_seconds=15.0,
         ).fetch("https://example.com/guide")
     finally:
         client.close()
@@ -142,6 +230,7 @@ def test_fetcher_disables_connection_and_cookie_reuse_for_pinned_requests() -> N
         fetcher = BoundedUrlFetcher(
             policy=UrlSafetyPolicy(allow_http=False, resolver=public_resolver),
             client=client,
+            total_timeout_seconds=15.0,
         )
         fetcher.fetch("https://one.example/guide")
         fetcher.fetch("https://two.example/guide")
@@ -176,6 +265,7 @@ def test_fetcher_rejects_more_than_three_redirects() -> None:
             BoundedUrlFetcher(
                 policy=UrlSafetyPolicy(allow_http=False, resolver=public_resolver),
                 client=client,
+                total_timeout_seconds=15.0,
             ).fetch("https://example.com/0")
     finally:
         client.close()
@@ -200,6 +290,7 @@ def test_fetcher_maps_connection_and_read_timeouts(
             BoundedUrlFetcher(
                 policy=UrlSafetyPolicy(allow_http=False, resolver=public_resolver),
                 client=client,
+                total_timeout_seconds=15.0,
             ).fetch("https://example.com/timeout")
     finally:
         client.close()
@@ -225,6 +316,7 @@ def test_fetcher_rejects_content_length_over_limit() -> None:
             BoundedUrlFetcher(
                 policy=UrlSafetyPolicy(allow_http=False, resolver=public_resolver),
                 client=client,
+                total_timeout_seconds=15.0,
             ).fetch("https://example.com/large")
     finally:
         client.close()
@@ -235,6 +327,56 @@ class ChunkStream(httpx.SyncByteStream):
     def __iter__(self) -> Iterator[bytes]:
         yield b"a" * 700_000
         yield b"b" * 400_000
+
+
+class SlowChunkStream(httpx.SyncByteStream):
+    def __init__(self, clock: FakeClock) -> None:
+        self.clock = clock
+        self.closed = False
+        self.yielded = 0
+
+    def __iter__(self) -> Iterator[bytes]:
+        for _ in range(10):
+            self.clock.advance(0.4)
+            self.yielded += 1
+            yield b"small"
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_fetcher_stops_and_closes_slow_stream_at_total_deadline() -> None:
+    from focusproof.openhands_runtime.tools.url_fetcher import (
+        BoundedUrlFetcher,
+        UrlFetchError,
+    )
+
+    clock = FakeClock()
+    stream = SlowChunkStream(clock)
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            headers={"content-type": "text/plain"},
+            stream=stream,
+            request=request,
+        )
+    )
+    client = client_for(transport)
+    try:
+        fetcher = BoundedUrlFetcher(
+            policy=UrlSafetyPolicy(allow_http=False, resolver=public_resolver),
+            client=client,
+            total_timeout_seconds=1.0,
+            clock=clock,
+        )
+        with pytest.raises(UrlFetchError) as captured:
+            fetcher.fetch("https://example.com/slow")
+    finally:
+        client.close()
+
+    assert captured.value.code == "network_timeout"
+    assert stream.closed is True
+    assert stream.yielded == 3
 
 
 def test_fetcher_stops_when_streamed_body_crosses_limit() -> None:
@@ -257,6 +399,7 @@ def test_fetcher_stops_when_streamed_body_crosses_limit() -> None:
             BoundedUrlFetcher(
                 policy=UrlSafetyPolicy(allow_http=False, resolver=public_resolver),
                 client=client,
+                total_timeout_seconds=15.0,
             ).fetch("https://example.com/stream")
     finally:
         client.close()
@@ -283,6 +426,7 @@ def test_fetcher_rejects_unsupported_binary_content() -> None:
             BoundedUrlFetcher(
                 policy=UrlSafetyPolicy(allow_http=False, resolver=public_resolver),
                 client=client,
+                total_timeout_seconds=15.0,
             ).fetch("https://example.com/file")
     finally:
         client.close()
@@ -306,6 +450,7 @@ def test_fetcher_extracts_bounded_html_title_and_text() -> None:
         result = BoundedUrlFetcher(
             policy=UrlSafetyPolicy(allow_http=False, resolver=public_resolver),
             client=client,
+            total_timeout_seconds=15.0,
         ).fetch("https://example.com/guide#fragment")
     finally:
         client.close()
@@ -315,3 +460,45 @@ def test_fetcher_extracts_bounded_html_title_and_text() -> None:
     assert result.text_excerpt == "Replay Guide Append then replay."
     assert result.content_length == len(html)
     assert result.redirect_chain == ()
+
+
+def test_fetcher_deadline_covers_metadata_extraction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import focusproof.openhands_runtime.tools.url_fetcher as fetcher_module
+    from focusproof.openhands_runtime.tools.url_fetcher import (
+        BoundedUrlFetcher,
+        UrlFetchError,
+    )
+
+    clock = FakeClock()
+
+    def slow_extract(text: str, *, is_html: bool) -> str:
+        del text, is_html
+        clock.advance(1.1)
+        return "bounded excerpt"
+
+    monkeypatch.setattr(fetcher_module, "_extract_text", slow_extract)
+    client = client_for(
+        httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                headers={"content-type": "text/plain"},
+                content=b"safe",
+                request=request,
+            )
+        )
+    )
+    try:
+        fetcher = BoundedUrlFetcher(
+            policy=UrlSafetyPolicy(allow_http=False, resolver=public_resolver),
+            client=client,
+            total_timeout_seconds=1.0,
+            clock=clock,
+        )
+        with pytest.raises(UrlFetchError) as captured:
+            fetcher.fetch("https://example.com/metadata")
+    finally:
+        client.close()
+
+    assert captured.value.code == "network_timeout"

@@ -55,6 +55,14 @@ def test_idempotent_registration_returns_existing_value() -> None:
     assert registry.register(item) is item
 
 
+def test_registry_exposes_capability_timeout_by_normalized_name() -> None:
+    item = replace(capability("url"), timeout_seconds=2.5)
+    registry = VerificationCapabilityRegistry([item])
+
+    assert registry.get(" URL ") is item
+    assert registry.get("missing") is None
+
+
 def test_capability_metadata_is_normalized_at_the_model_boundary() -> None:
     item = capability(
         " Text ",

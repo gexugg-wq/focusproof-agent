@@ -96,6 +96,10 @@ class VerificationCapabilityRegistry:
         )
         return tuple(sorted(selected, key=lambda item: (item.priority, item.registry_name)))
 
+    def get(self, registry_name: str) -> VerificationCapability | None:
+        with self._lock:
+            return self._items.get(registry_name.strip().lower())
+
     def clear(self) -> None:
         with self._lock:
             self._items.clear()
