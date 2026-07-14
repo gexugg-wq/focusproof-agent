@@ -196,11 +196,10 @@ class ConversationManager:
         )
         self._handles[session_id] = handle
         try:
+            native_events_at_restore = list(handle.conversation.state.events)
+            self._projectors[session_id].reconcile(native_events_at_restore)
             assert self._synchronizer is not None
             self._synchronizer.sync(handle, verified_user_id=verified_user_id)
-            self._projectors[session_id].reconcile(
-                list(handle.conversation.state.events)
-            )
         except Exception:
             self._close_unlocked(session_id)
             raise
