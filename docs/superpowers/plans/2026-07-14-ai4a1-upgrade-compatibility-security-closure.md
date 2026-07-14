@@ -30,7 +30,7 @@
 - Consumes: OpenHands `Agent`, `Conversation`, `LocalConversation`, `ConversationState.append_event()`, native `ActionEvent`, `ObservationEvent`, and the three pre-AI4A tool classes.
 - Produces: a real persisted legacy conversation fixture and an acceptance test that initially fails through `RuntimeCreationError` caused by `tools were removed mid-conversation`.
 
-- [ ] **Step 1: Build a real legacy conversation fixture**
+- [x] **Step 1: Build a real legacy conversation fixture**
 
 Create a helper that registers FocusProof tools, constructs an SDK `Agent` with exactly these `Tool` specs, and persists it through `Conversation`:
 
@@ -59,7 +59,7 @@ conversation = Conversation(
 
 Use `send_message()` for a native `MessageEvent`, then `conversation.state.append_event()` for a legacy `ActionEvent` carrying `EvidenceVerificationAction` and its matching `ObservationEvent` carrying `EvidenceVerificationObservation`. Save the serialized event JSON and IDs before closing.
 
-- [ ] **Step 2: Write the cross-version restore acceptance test**
+- [x] **Step 2: Write the cross-version restore acceptance test**
 
 The test must call the real current `ConversationFactory.create()` with the same session and conversation ID and assert:
 
@@ -74,7 +74,7 @@ assert "focusproof_url_evidence_verification" in restored.conversation.agent.too
 
 Append or run a new AI4A tool call after restore and confirm the new native event follows, rather than replaces, the legacy events. Reopen a second time and reconcile twice through `OpenHandsEventProjector`, asserting the audit count is unchanged on the second reconcile.
 
-- [ ] **Step 3: Run the new test and record the expected RED**
+- [x] **Step 3: Run the new test and record the expected RED**
 
 Run:
 
@@ -106,7 +106,7 @@ Do not mock `Agent.verify()`, `ConversationState.create()`, or the SDK tool comp
 - Produces: `SessionToolAssembler.assemble(..., compatibility_restore: bool = False)`, matching `version()`, and `ConversationHandle.compatibility_restore: bool`.
 - Consumes: the SDK's public `LocalConversation.get_persistence_dir()` path derivation and its persisted `base_state.json`; no private registry or execution status mutation.
 
-- [ ] **Step 1: Add RED tests for all restoration classifications**
+- [x] **Step 1: Add RED tests for all restoration classifications**
 
 Cover four cases under an explicit temporary `data_dir`:
 
@@ -123,7 +123,7 @@ assert set(ai4a_restore.conversation.agent.tools_map) == COMPATIBILITY_TOOL_NAME
 
 Also assert a path outside `FOCUSPROOF_DATA_DIR` cannot be classified or used as restoration state.
 
-- [ ] **Step 2: Implement exact persisted-state detection and compatibility assembly**
+- [x] **Step 2: Implement exact persisted-state detection and compatibility assembly**
 
 In `ConversationFactory`, derive the conversation-specific path using the SDK public method and classify restoration only when the exact base snapshot is a file:
 
@@ -138,7 +138,7 @@ compatibility_restore = (conversation_store / "base_state.json").is_file()
 
 Pass `compatibility_restore` to assembler and version calculation. When true, prepend or append `Tool(name="FocusProofEvidenceVerificationTool", params={"session_id": session_id})` without duplicating any current tool. Fresh assembly remains learner-input, review-draft, text verifier, and URL verifier only.
 
-- [ ] **Step 3: Add RED tests for legacy action/observation compatibility**
+- [x] **Step 3: Add RED tests for legacy action/observation compatibility**
 
 Create native events with `EvidenceVerificationAction` and `EvidenceVerificationObservation`, then assert projector and extractor behavior:
 
@@ -157,11 +157,11 @@ assert converted[0].facts["weak_signals"] == legacy.weak_signals
 
 The legacy `verified` boolean must not become final learning status or a score.
 
-- [ ] **Step 4: Implement read-only legacy conversion**
+- [x] **Step 4: Implement read-only legacy conversion**
 
 Extend `OpenHandsEventProjector` type checks to accept both legacy and AI4A types. Build a new audit payload from the legacy model without assigning back to the native event. Extend `_focusproof_observations()` similarly, mapping legacy results to read-only `Observation(status="inconclusive", ...)` with preserved `sourceRefs` and `weakSignals`.
 
-- [ ] **Step 5: Verify GREEN independently**
+- [x] **Step 5: Verify GREEN independently**
 
 Run:
 
@@ -175,7 +175,7 @@ Run:
 
 Expected: all selected tests PASS, no `tools were removed mid-conversation`, legacy native JSON unchanged, second reconciliation adds zero audit rows.
 
-- [ ] **Step 6: Commit Tasks 1 And 2**
+- [x] **Step 6: Commit Tasks 1 And 2**
 
 ```bash
 git add \
@@ -206,7 +206,7 @@ git commit -m "fix(runtime): restore legacy OpenHands conversations"
 - Produces: `BoundedUrlFetcher(..., total_timeout_seconds: float, clock: Callable[[], float] = monotonic)` and `VerificationCapabilityRegistry.get(name: str) -> VerificationCapability | None`.
 - Consumes: URL capability `timeout_seconds`; the factory passes that exact value to the production fetcher.
 
-- [ ] **Step 1: Add fake-clock RED tests for every phase**
+- [x] **Step 1: Add fake-clock RED tests for every phase**
 
 Use a manual clock, not `sleep()`:
 
@@ -221,7 +221,7 @@ class FakeClock:
 
 Add tests where resolver validation advances past the deadline, redirect handling advances past it, and a `SyncByteStream` yields small chunks while advancing the clock. Assert each raises `UrlFetchError` with `code == "network_timeout"`, and the stream/response close marker is set immediately after the timeout.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -233,7 +233,7 @@ Run:
 
 Expected: FAIL because `total_timeout_seconds`, fake clock injection, and registry timeout lookup are absent; a slow small-chunk stream currently completes or exceeds only the byte limit.
 
-- [ ] **Step 3: Implement the absolute monotonic deadline**
+- [x] **Step 3: Implement the absolute monotonic deadline**
 
 At the beginning of `fetch()` calculate one deadline:
 
@@ -253,7 +253,7 @@ def _remaining(self, deadline: float) -> float:
 
 Apply the remaining budget to all HTTPX timeout phases on the built request. Keep `closing(response)` around the entire redirect/body path so deadline exceptions close the response synchronously and stop iteration.
 
-- [ ] **Step 4: Wire capability metadata into the production fetcher**
+- [x] **Step 4: Wire capability metadata into the production fetcher**
 
 Add a thread-safe registry lookup, obtain the built-in URL capability in `ConversationFactory.__init__`, and construct:
 
@@ -267,7 +267,7 @@ BoundedUrlFetcher(
 
 Add a test with a custom URL capability timeout and a recording fetcher constructor or exposed read-only timeout property, proving the metadata value is consumed rather than duplicated.
 
-- [ ] **Step 5: Verify GREEN and commit**
+- [x] **Step 5: Verify GREEN and commit**
 
 Run:
 
@@ -310,7 +310,7 @@ git commit -m "fix(runtime): enforce URL verification deadline"
 - Produces: `redact_url(url: str) -> dict[str, object]`, `redact_url_text(text: str | None, urls: Collection[str]) -> str | None`, and `sanitize_source_refs(refs: Collection[str]) -> list[str]`.
 - Preserves: database `source_url`; only LLM/native Observation/audit boundaries are redacted.
 
-- [ ] **Step 1: Add parameterized RED tests for URL secret shapes**
+- [x] **Step 1: Add parameterized RED tests for URL secret shapes**
 
 Cover path secrets, signed path segments, query, fragment, credentials, non-default port, and redirect chains. Use only synthetic `example.com` values:
 
@@ -325,7 +325,7 @@ SECRET_URLS = (
 
 Assert `secret-token`, `abc123`, `token=secret`, `private`, `user`, and `password` are absent from native Observation content, facts, source refs, redirect chain, `model_dump_json()`, synchronized `MessageEvent` JSON, and projected audit payload JSON. Assert the database repository still receives the original URL.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -339,7 +339,7 @@ Run:
 
 Expected: FAIL because path segments remain in `normalized_url`, `redirect_chain`, and `source_refs`, while `ConversationSynchronizer` and legacy manager messages still include full `sourceUrl` and arbitrary metadata.
 
-- [ ] **Step 3: Implement one URL redaction representation**
+- [x] **Step 3: Implement one URL redaction representation**
 
 The representation must expose no path/query/fragment/userinfo:
 
@@ -356,11 +356,11 @@ The representation must expose no path/query/fragment/userinfo:
 
 Never return the canonical URL itself. Replace URL path/query/userinfo tokens that appear in title or excerpt with `[redacted]`. Convert URL-like source refs to `url-sha256:<digest>` and retain non-URL evidence IDs/content hashes.
 
-- [ ] **Step 4: Apply the redaction boundary everywhere**
+- [x] **Step 4: Apply the redaction boundary everywhere**
 
 `UrlEvidenceVerificationExecutor` must keep passing the original database URL only to `fetcher.fetch()`, but build all Observation fields from redacted metadata. `ConversationSynchronizer` and the legacy manager message path must emit only `evidenceId`, `evidenceType`, `contentHash`, and redacted URL metadata; omit `textContent`, raw `sourceUrl`, and arbitrary metadata. `OpenHandsEventProjector` must sanitize old persisted evidence messages and old observation source refs during read-only projection.
 
-- [ ] **Step 5: Verify GREEN and commit**
+- [x] **Step 5: Verify GREEN and commit**
 
 Run the RED command again. Expected: PASS with all secret substrings absent while repository/database assertions still show the original synthetic URL.
 
@@ -395,7 +395,7 @@ git commit -m "fix(runtime): redact URL evidence secrets"
 - Produces: recursive pre-validation of `facts` and raw `weak_signals` input against a fixed reserved verdict-key set.
 - Preserves: existing text/URL executor output and deterministic scoring outside tool Observations.
 
-- [ ] **Step 1: Add prompt and recursive-validation RED tests**
+- [x] **Step 1: Add prompt and recursive-validation RED tests**
 
 Assert the prompt states all four trust rules. Parameterize exact reserved keys and nested shapes:
 
@@ -416,7 +416,7 @@ with pytest.raises(ValidationError, match="reserved verdict field"):
 
 Also pass a nested dict through raw `weak_signals` input to prove the pre-validator traverses it before Pydantic's `list[str]` validation. Keep positive construction tests for built-in text and URL observations.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -430,11 +430,11 @@ Run:
 
 Expected: FAIL because nested reserved verdict keys are currently accepted and the system prompt lacks explicit untrusted-data instructions.
 
-- [ ] **Step 3: Implement recursive reserved-key rejection and prompt rules**
+- [x] **Step 3: Implement recursive reserved-key rejection and prompt rules**
 
 Add a `mode="before"` validator for both fields and a recursive walker that checks mapping keys and sequence elements without rewriting values. Update the prompt to say evidence text/excerpts are untrusted, embedded commands/tool calls/system prompts/scoring instructions must never be executed, evidence is only content to verify, and no Observation directly determines final score.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Run the RED command again. Expected: PASS; built-in tool tests remain valid.
 
@@ -458,11 +458,11 @@ git commit -m "fix(runtime): harden verification trust boundary"
 **Interfaces:**
 - Produces: AI4A.1 report evidence, exact tool lists, residual-risk statement, and a clean local branch stopped before AI4B.
 
-- [ ] **Step 1: Update the report from verified implementation evidence**
+- [x] **Step 1: Update the report from verified implementation evidence**
 
 Document why registry registration alone cannot satisfy OpenHands `Agent.verify()`, fresh versus restored toolsets, read-only legacy event conversion, the monotonic total deadline, URL diagnostic fields retained after redaction, and work deferred to AI4B. Include exact test counts only after fresh commands complete.
 
-- [ ] **Step 2: Run the required acceptance commands**
+- [x] **Step 2: Run the required acceptance commands**
 
 ```bash
 .venv/bin/python -m pytest \
@@ -486,11 +486,11 @@ git status --short --branch
 
 Expected: every command exits zero; exactly one real-LLM test remains deselected; only pre-existing deprecation warnings are allowed.
 
-- [ ] **Step 3: Audit every explicit constraint and deliverable**
+- [x] **Step 3: Audit every explicit constraint and deliverable**
 
 Verify `git diff --name-status 7a93546..HEAD` contains no protected paths. Inspect the final factory Agent for `include_default_tools=[]`. Assert actual fresh tool names are learner-input/review-draft/text/URL and actual restored names additionally include the legacy verifier. Search `VerificationObservation` for absence of score/final-verdict fields and inspect the recursive validator tests.
 
-- [ ] **Step 4: Commit documentation and verification tests**
+- [x] **Step 4: Commit documentation and verification tests**
 
 ```bash
 git add \

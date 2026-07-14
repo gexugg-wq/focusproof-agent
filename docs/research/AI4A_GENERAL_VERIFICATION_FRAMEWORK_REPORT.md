@@ -1,8 +1,9 @@
 # AI4A General Verification Framework Report
 
-Date: 2026-07-13
+Date: 2026-07-14
 Branch: `ai4a-general-verification-framework`
-Baseline: `23a1a96460389147e6d477378f1d855a9a6a7187` (`main`)
+AI4A baseline: `23a1a96460389147e6d477378f1d855a9a6a7187` (`main`)
+AI4A.1 starting HEAD: `7a93546ca3963a5e934f9bbb6a2ff03cea9028ee`
 OpenHands SDK: local path dependency, installed version `1.31.0`
 
 ## Outcome
@@ -15,6 +16,12 @@ executable tool protocol. The official API continues to use the existing
 OpenHands Conversation path and deterministic FocusProof scoring remains outside
 all tools.
 
+AI4A.1 closes AI0's upgrade-compatibility and security findings. It restores
+real pre-AI4A SDK state with an additive tool superset, applies one
+capability-driven monotonic deadline to complete URL verification, removes URL
+secrets at every native/product projection boundary, and hardens both the Agent
+prompt and Observation schema against untrusted verdict instructions.
+
 ## Changed Files By Responsibility
 
 Capability policy and assembly:
@@ -23,7 +30,9 @@ Capability policy and assembly:
 - `agent-server/focusproof/openhands_runtime/tool_assembler.py`
 - `agent-server/focusproof/openhands_runtime/tool_registry.py`
 - `agent-server/focusproof/openhands_runtime/factory.py`
+- `agent-server/focusproof/openhands_runtime/handle.py`
 - `agent-server/focusproof/openhands_runtime/manager.py`
+- `agent-server/focusproof/openhands_runtime/synchronizer.py`
 
 Verification contracts and executors:
 
@@ -33,6 +42,7 @@ Verification contracts and executors:
 - `agent-server/focusproof/openhands_runtime/tools/url_safety.py`
 - `agent-server/focusproof/openhands_runtime/tools/url_fetcher.py`
 - `agent-server/focusproof/openhands_runtime/tools/url_evidence.py`
+- `agent-server/focusproof/openhands_runtime/url_redaction.py`
 
 Native event consumption and scoring boundary:
 
@@ -63,9 +73,13 @@ The installed SDK 1.31.0 requires Conversation IDs to be UUIDs, which remains
 handled by the existing stable UUID5 mapping. It also rejects restoration when
 the runtime Agent removes any tool present in the persisted Agent. FocusProof
 therefore preserves the allowlisted verifier superset when restoring persistent
-conversations; adding tools is permitted, but narrowing is used only for fresh
-factory-created conversations. A restart regression covers this difference. No
-SDK source was patched.
+conversations. SDK registry registration alone is insufficient because
+`Agent.verify()` compares persisted explicit tool names with the new Agent
+specification before tool construction. The factory detects the exact SDK
+`base_state.json` through `LocalConversation.get_persistence_dir()` and supplies
+the legacy tool name to the restoring Agent. A real legacy native-state fixture
+proves event IDs and JSON remain unchanged across two restores. No SDK source
+was patched.
 
 ## Capability Registry And SDK Registry Boundary
 
@@ -83,15 +97,18 @@ Built-in capabilities are:
 The OpenHands SDK registry remains responsible for constructing executable tool
 definitions. The FocusProof registry only selects policy metadata. The legacy
 monolithic verification class remains registered solely for historical SDK
-event compatibility; it is absent from all new session tool assemblies.
+event compatibility. It is absent from fresh session tool assemblies and added
+only when restoring an existing SDK state that requires its explicit name.
 
 ## Per-Session Tool Assembly
 
-Every session receives learner-input and review-draft control tools first.
-Sessions without known evidence types receive both allowlisted text and URL
-verifiers. Fresh conversations may narrow to known matching evidence types.
-Persistent restoration retains the allowlisted verifier superset because the
-installed SDK prohibits removing a tool that appeared in the persisted Agent.
+Every session receives learner-input and review-draft control tools first. The
+actual fresh default names are `focusproof_learner_input`,
+`focusproof_review_draft`, `focusproof_text_evidence_verification`, and
+`focusproof_url_evidence_verification`. Fresh conversations may narrow to known
+matching evidence types. Restored sessions receive the current tools plus
+`focusproof_evidence_verification`, the legacy verifier required by the
+persisted Agent compatibility check.
 Every serialized `Tool.params` value contains only the trusted `session_id`;
 repositories, resolvers, clients, credentials, bodies, and paths are never
 serialized for the LLM.
@@ -122,6 +139,12 @@ Its status is one of `success`, `failed`, `inconclusive`, or `unsupported`.
 There are no score, final status, `verified_learning`, character, honesty,
 effort, or worth verdict fields.
 
+Before Pydantic converts field types, a recursive validator traverses mappings
+and sequences in both `facts` and raw `weak_signals`. It rejects `score`,
+`final_score`, `learning_status`, `verified_learning`, `honest`, `dishonest`,
+and `fake_learning` at any nesting depth. Built-in verifier outputs remain
+valid, while an Observation cannot smuggle a tool-authored final verdict.
+
 ## Text Verification
 
 The text executor resolves authoritative evidence by `session_id + evidence_id`
@@ -146,14 +169,23 @@ The production client disables HTTP/2 and keep-alive pooling; verifier requests
 also request connection close and remove Cookie headers so hostnames sharing an
 IP cannot reuse a TLS connection or cookie state.
 
-`BoundedUrlFetcher` requires an `httpx.Client` with automatic redirects disabled,
-allows at most three explicitly revalidated redirects, maps connection/read
-timeouts safely, rejects declared or streamed bodies over 1 MiB, and rejects
-unsupported binary content. It retains only bounded title/plain-text metadata,
-not raw page bodies. Successful URL facts include normalized/final URL,
-hostname, status, content type/length, redirect chain, title, and excerpt.
-Observation and audit URLs omit credentials, query strings, and fragments so
-tokens cannot enter persisted source references or facts.
+`BoundedUrlFetcher` requires an `httpx.Client` with automatic redirects disabled
+and an explicit total timeout copied from URL capability metadata. One
+monotonic deadline starts before policy/DNS work and covers redirects, every
+HTTPX timeout phase, streamed chunks, decoding, title extraction, and excerpt
+construction. Remaining budget is propagated to each request; expiry closes
+the active response synchronously and stops iteration. It also limits redirects
+to three, rejects declared or streamed bodies over 1 MiB, and rejects
+unsupported binary content.
+
+The only URL representation permitted in an Observation, LLM message, source
+reference, or audit projection contains scheme, hostname, optional non-default
+port, origin, `path_redacted`, and SHA-256 of the full canonical URL. It never
+contains path, query, fragment, or userinfo. URL-like source references become
+`url-sha256:<digest>`, and URL tokens echoed by title/excerpt extraction become
+`[redacted]`. Old persisted messages and legacy Observation projection use the
+same read-only sanitizer. The database retains the original URL and the URL
+executor passes it only to the bounded fetcher.
 
 Policy violations map to failed observations, DNS and transient network
 failures to inconclusive observations, unsupported content to unsupported
@@ -166,13 +198,17 @@ The prompt is capability-neutral: it tells the agent to use only tools exposed
 in the current Conversation, pass evidence references rather than bodies, treat
 failed/unsupported/inconclusive outcomes as limitations, ask one focused
 question when necessary, and submit a score-free draft only when facts suffice.
+It explicitly classifies evidence text/excerpts as untrusted content, rejects
+embedded commands/tool calls/system prompts/scoring instructions, and states
+that no Observation directly determines the final score.
 
 Native `ActionEvent` remains before its matching `ObservationEvent`. The
-projector recognizes the shared Action/Observation types, preserves native event
-ID, index, tool call ID, tool name, and source references, and reconciliation
-remains idempotent. Result extraction consumes only verification observations
-after the latest answer boundary. Restart tests preserve Conversation ID,
-native history, synchronized messages, audit uniqueness, and Review uniqueness.
+projector recognizes current and legacy native types, preserves identity and
+ordering metadata, converts legacy results without mutating native JSON, maps
+legacy `verified` to no verdict, and remains idempotent. Result extraction maps
+legacy verification to `inconclusive` and consumes only observations after the
+latest answer boundary. Restart tests preserve Conversation ID, native history,
+synchronized messages, audit uniqueness, and Review uniqueness.
 
 ## Domain-General Scoring
 
@@ -189,7 +225,7 @@ set `VerifiedLearning`.
 
 ## Verification Evidence
 
-Baseline before implementation:
+Original AI4A baseline before AI4A implementation:
 
 ```text
 .venv/bin/python -m pytest agent-server/tests -q -m "not real_llm"
@@ -211,7 +247,7 @@ Final review hardening (URL safety/redaction/isolation, scoring, CJK, toolset
 diagnostics): 65 passed
 ```
 
-Full verification:
+Original AI4A verification before the AI4A.1 closure:
 
 ```text
 .venv/bin/python -m pytest agent-server/tests -q -m "not real_llm"
@@ -227,6 +263,37 @@ Success: no issues found in 111 source files
 116 passed, 1 deselected, 8 warnings
 ```
 
+AI4A.1 strict TDD recorded these expected failures before production changes:
+
+```text
+Legacy restore RED: RuntimeCreationError caused by SDK "tools were removed mid-conversation"
+URL deadline RED: no total budget/registry lookup and stream continued past deadline
+URL redaction RED: 7 failures across Observation, message, manager, and audit paths
+Trust-boundary RED: 9 failures for nested verdict keys and missing prompt rules
+```
+
+Fresh AI4A.1 acceptance evidence:
+
+```text
+.venv/bin/python -m pytest agent-server/tests/openhands_runtime/test_upgrade_compatibility.py -q
+2 passed
+
+.venv/bin/python -m pytest agent-server/tests/openhands_runtime/test_url_safety.py agent-server/tests/openhands_runtime/test_url_evidence_tool.py -q
+37 passed
+
+.venv/bin/python -m pytest agent-server/tests/persistence agent-server/tests/api/test_restart_persistence.py agent-server/tests/openhands_runtime -q -m "not real_llm"
+147 passed, 1 deselected, 8 warnings
+
+.venv/bin/python -m pytest agent-server/tests -q -m "not real_llm"
+199 passed, 1 deselected, 8 warnings
+
+.venv/bin/ruff check agent-server
+All checks passed!
+
+.venv/bin/mypy agent-server
+Success: no issues found in 113 source files
+```
+
 The warnings are the existing Starlette/httpx TestClient deprecation and Python
 3.12 SQLite datetime-adapter deprecations. No real-LLM test was run because AI0
 did not explicitly authorize it.
@@ -237,7 +304,8 @@ did not explicitly authorize it.
 - URL extraction supports bounded textual metadata only; binary documents,
   OCR, ASR, video, PDF, and browser automation are deferred.
 - URL verification records bounded textual metadata and policy outcomes, but
-  does not retain low-level transport telemetry beyond those diagnostics.
+  exposes only origin-level diagnostics plus a canonical-URL digest; raw URL
+  recovery from runtime/audit output is intentionally impossible.
 - Toolset version mismatch is surfaced diagnostically; it does not rewrite
   historical native events or persisted Agent state.
 - Code execution, Web3 RPC, multimodal ingestion, contracts, deployment, and all
@@ -245,7 +313,9 @@ did not explicitly authorize it.
 
 ## Scope And Protocol Status
 
-No public architecture, protocol, task-board, design, or plan document changed.
+No public architecture, protocol, project-management, task-board, or design
+document changed. The implementation plan under `docs/superpowers/plans/` and
+this research report are the only documentation updates.
 No file under `frontend/`, `contracts/`, `.env`, `var/`, or the OpenHands SDK
 source changed. No secret was read, printed, edited, or committed. No remote
 branch was created or updated, and no push or merge was performed.
