@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any, ContextManager, Protocol, cast
@@ -141,7 +142,7 @@ class ConversationManager:
                 evidence = list(self._evidence[session_id].values())
                 answers = list(self._answers[session_id].values())
             try:
-                cast(Any, handle.conversation).run()
+                asyncio.run(handle.conversation.arun())
             except Exception as exc:
                 return self._failure_result(handle, type(exc).__name__)
 

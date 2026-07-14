@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
 from pathlib import Path
@@ -83,17 +84,20 @@ def test_two_concurrent_reviews_enter_conversation_run_once(
     entered = Event()
     release = Event()
     run_count = 0
-    original_run = cast(Callable[[LocalConversation], None], cast(Any, LocalConversation.run))
+    original_arun = cast(
+        Callable[[LocalConversation], Any],
+        cast(Any, LocalConversation.arun),
+    )
 
-    def blocking_run(conversation: LocalConversation) -> None:
+    async def blocking_arun(conversation: LocalConversation) -> None:
         nonlocal run_count
         if conversation is handle.conversation:
             run_count += 1
             entered.set()
-            release.wait(timeout=2)
-        original_run(conversation)
+            await asyncio.to_thread(release.wait, 2)
+        await original_arun(conversation)
 
-    monkeypatch.setattr(LocalConversation, "run", blocking_run)
+    monkeypatch.setattr(LocalConversation, "arun", blocking_arun)
     with ThreadPoolExecutor(max_workers=2) as executor:
         first = executor.submit(manager.run_review, "sess_concurrent")
         assert entered.wait(timeout=1)

@@ -5,6 +5,7 @@ from contextlib import closing
 from collections.abc import Callable
 from dataclasses import dataclass
 from html import unescape
+from threading import Event
 from time import monotonic
 from urllib.parse import urljoin
 
@@ -72,14 +73,19 @@ class BoundedUrlFetcher:
     def total_timeout_seconds(self) -> float:
         return self._total_timeout_seconds
 
-    def fetch(self, source_url: str) -> FetchedUrl:
+    def fetch(
+        self,
+        source_url: str,
+        *,
+        interrupt_event: Event | None = None,
+    ) -> FetchedUrl:
         deadline = self._clock() + self._total_timeout_seconds
-        self._remaining(deadline)
+        self._remaining(deadline, interrupt_event)
         safe = self._policy.validate(source_url)
-        self._remaining(deadline)
+        self._remaining(deadline, interrupt_event)
         redirects: list[str] = []
         while True:
-            request_timeout = self._remaining(deadline)
+            request_timeout = self._remaining(deadline, interrupt_event)
             request_url, host_header = _pinned_request_target(safe)
             try:
                 request = self._client.build_request(
@@ -102,7 +108,7 @@ class BoundedUrlFetcher:
                         follow_redirects=False,
                     )
                 ) as response:
-                    self._remaining(deadline)
+                    self._remaining(deadline, interrupt_event)
                     if response.status_code in _REDIRECT_STATUSES:
                         location = response.headers.get("location")
                         if not location:
@@ -116,9 +122,9 @@ class BoundedUrlFetcher:
                                 "The URL exceeded the redirect limit.",
                             )
                         target = urljoin(safe.normalized, location)
-                        self._remaining(deadline)
+                        self._remaining(deadline, interrupt_event)
                         safe = self._policy.validate(target)
-                        self._remaining(deadline)
+                        self._remaining(deadline, interrupt_event)
                         redirects.append(safe.normalized)
                         continue
                     return self._read_response(
@@ -126,6 +132,7 @@ class BoundedUrlFetcher:
                         safe.normalized,
                         redirects,
                         deadline,
+                        interrupt_event,
                     )
             except httpx.TimeoutException as exc:
                 raise UrlFetchError(
@@ -142,8 +149,9 @@ class BoundedUrlFetcher:
         final_url: str,
         redirects: list[str],
         deadline: float,
+        interrupt_event: Event | None,
     ) -> FetchedUrl:
-        self._remaining(deadline)
+        self._remaining(deadline, interrupt_event)
         content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
         if not any(
             content_type.startswith(allowed) for allowed in _SUPPORTED_CONTENT_TYPES
@@ -169,20 +177,20 @@ class BoundedUrlFetcher:
 
         body = bytearray()
         for chunk in response.iter_bytes():
-            self._remaining(deadline)
+            self._remaining(deadline, interrupt_event)
             if len(body) + len(chunk) > self._max_bytes:
                 raise UrlFetchError(
                     "response_too_large",
                     "The URL response exceeded the size limit.",
                 )
             body.extend(chunk)
-        self._remaining(deadline)
+        self._remaining(deadline, interrupt_event)
         text = bytes(body).decode("utf-8", errors="replace")
-        self._remaining(deadline)
+        self._remaining(deadline, interrupt_event)
         title = _extract_title(text) if content_type in {"text/html", "application/xhtml+xml"} else None
-        self._remaining(deadline)
+        self._remaining(deadline, interrupt_event)
         excerpt = _extract_text(text, is_html=content_type in {"text/html", "application/xhtml+xml"})
-        self._remaining(deadline)
+        self._remaining(deadline, interrupt_event)
         return FetchedUrl(
             final_url=final_url,
             status_code=response.status_code,
@@ -193,7 +201,12 @@ class BoundedUrlFetcher:
             text_excerpt=excerpt,
         )
 
-    def _remaining(self, deadline: float) -> float:
+    def _remaining(self, deadline: float, interrupt_event: Event | None) -> float:
+        if interrupt_event is not None and interrupt_event.is_set():
+            raise UrlFetchError(
+                "network_timeout",
+                "The URL request was interrupted.",
+            )
         remaining = deadline - self._clock()
         if remaining <= 0:
             raise UrlFetchError(

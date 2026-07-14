@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from datetime import datetime
+from queue import Empty, Queue
+from threading import Event, Lock, Thread
+from time import monotonic
 from typing import Any, ClassVar, Protocol, Self
 
 from openhands.sdk.tool import ToolAnnotations, ToolDefinition, ToolExecutor
@@ -11,7 +14,11 @@ from focusproof.openhands_runtime.tools import (
     SessionEvidenceRepository,
     read_only_annotations,
 )
-from focusproof.openhands_runtime.tools.url_fetcher import FetchedUrl, UrlFetchError
+from focusproof.openhands_runtime.tools.url_fetcher import (
+    BoundedUrlFetcher,
+    FetchedUrl,
+    UrlFetchError,
+)
 from focusproof.openhands_runtime.tools.url_safety import UrlPolicyError
 from focusproof.openhands_runtime.url_redaction import redact_url, redact_url_text
 from focusproof.openhands_runtime.tools.verification import (
@@ -40,13 +47,15 @@ class UrlEvidenceVerificationExecutor(
         self._repository = repository
         self._session_id = session_id
         self._fetcher = fetcher
+        self._state_lock = Lock()
+        self._active_calls: set[Event] = set()
+        self._closed = False
 
     def __call__(
         self,
         action: EvidenceReferenceAction,
         conversation: Any | None = None,
     ) -> VerificationObservation:
-        del conversation
         started_at = utc_now()
         repository = self._repository
         if repository is None:
@@ -94,8 +103,21 @@ class UrlEvidenceVerificationExecutor(
             )
 
             fetcher = get_url_fetcher_provider()
+        interrupt_event = Event()
+        with self._state_lock:
+            if self._closed:
+                interrupt_event.set()
+            self._active_calls.add(interrupt_event)
+        cancel_token = (
+            conversation.cancel_token if conversation is not None else None
+        )
         try:
-            fetched = fetcher.fetch(source_url)
+            fetched = self._fetch_with_deadline(
+                fetcher,
+                source_url,
+                interrupt_event,
+                cancel_token,
+            )
         except UrlPolicyError as exc:
             is_network_failure = exc.code == "dns_unavailable"
             return self._error_observation(
@@ -124,6 +146,9 @@ class UrlEvidenceVerificationExecutor(
                 source_refs=source_refs,
                 started_at=started_at,
             )
+        finally:
+            with self._state_lock:
+                self._active_calls.discard(interrupt_event)
 
         safe_final_url = redact_url(fetched.final_url)
         source_refs.append(f"url-sha256:{safe_final_url['url_sha256']}")
@@ -157,6 +182,82 @@ class UrlEvidenceVerificationExecutor(
             started_at=started_at,
             completed_at=utc_now(),
         )
+
+    def interrupt(self) -> None:
+        """Interrupt only calls owned by this session executor."""
+        with self._state_lock:
+            active_calls = tuple(self._active_calls)
+        for interrupt_event in active_calls:
+            interrupt_event.set()
+
+    def close(self) -> None:
+        """Idempotently prevent and interrupt calls without closing shared I/O."""
+        with self._state_lock:
+            self._closed = True
+            active_calls = tuple(self._active_calls)
+        for interrupt_event in active_calls:
+            interrupt_event.set()
+
+    @staticmethod
+    def _fetch_with_deadline(
+        fetcher: UrlFetcher,
+        source_url: str,
+        interrupt_event: Event,
+        cancel_token: Any | None,
+    ) -> FetchedUrl:
+        """Bound one tool call when SDK 1.31.0 has no tool deadline primitive.
+
+        Blocking DNS/transport work runs in an isolated daemon thread. Expiry
+        returns immediately; cooperative fetchers also receive the operation-local
+        interrupt signal and shared clients remain open for other sessions.
+        """
+        timeout = float(getattr(fetcher, "total_timeout_seconds", 15.0))
+        outcome: Queue[FetchedUrl | BaseException] = Queue(maxsize=1)
+
+        def fetch() -> None:
+            try:
+                if isinstance(fetcher, BoundedUrlFetcher):
+                    result = fetcher.fetch(
+                        source_url,
+                        interrupt_event=interrupt_event,
+                    )
+                else:
+                    result = fetcher.fetch(source_url)
+                outcome.put_nowait(result)
+            except BaseException as exc:
+                outcome.put_nowait(exc)
+
+        worker = Thread(
+            target=fetch,
+            name="focusproof-url-verification",
+            daemon=True,
+        )
+        worker.start()
+        deadline = monotonic() + timeout
+        while True:
+            if interrupt_event.is_set() or (
+                cancel_token is not None and cancel_token.is_cancelled
+            ):
+                interrupt_event.set()
+                raise UrlFetchError(
+                    "network_timeout",
+                    "The URL request was interrupted.",
+                )
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                interrupt_event.set()
+                raise UrlFetchError(
+                    "network_timeout",
+                    "The URL request timed out.",
+                )
+            try:
+                result = outcome.get(timeout=min(remaining, 0.01))
+            except Empty:
+                continue
+            if isinstance(result, BaseException):
+                raise result
+            return result
+
     @staticmethod
     def _error_observation(
         evidence_id: str,
