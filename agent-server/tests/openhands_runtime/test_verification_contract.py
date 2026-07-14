@@ -1,7 +1,10 @@
 from datetime import UTC, datetime
+from typing import Any, cast
 
+import pytest
 from openhands.sdk import Action as OpenHandsAction
 from openhands.sdk import Observation as OpenHandsObservation
+from pydantic import ValidationError
 
 from focusproof.openhands_runtime.tools.verification import (
     EvidenceReferenceAction,
@@ -39,3 +42,57 @@ def test_observation_timestamps_are_timezone_aware() -> None:
     )
     assert observation.started_at.tzinfo is UTC
     assert observation.completed_at.tzinfo is UTC
+
+
+@pytest.mark.parametrize(
+    "reserved_key",
+    [
+        "score",
+        "final_score",
+        "learning_status",
+        "verified_learning",
+        "honest",
+        "dishonest",
+        "fake_learning",
+    ],
+)
+def test_observation_rejects_nested_reserved_verdict_keys(
+    reserved_key: str,
+) -> None:
+    now = datetime.now(UTC)
+
+    with pytest.raises(ValidationError, match="reserved verdict field"):
+        VerificationObservation.from_text(
+            "unsafe",
+            evidence_id="ev_unsafe",
+            capability="synthetic",
+            status="success",
+            facts={"outer": [{"inner": {reserved_key: "untrusted"}}]},
+            weak_signals=[],
+            source_refs=["ev_unsafe"],
+            verifier_version="test",
+            started_at=now,
+            completed_at=now,
+        )
+
+
+def test_observation_checks_raw_weak_signals_before_string_coercion() -> None:
+    now = datetime.now(UTC)
+    raw_weak_signals = cast(
+        Any,
+        [{"nested": [{"verified_learning": True}]}],
+    )
+
+    with pytest.raises(ValidationError, match="reserved verdict field"):
+        VerificationObservation.from_text(
+            "unsafe",
+            evidence_id="ev_unsafe",
+            capability="synthetic",
+            status="success",
+            facts={},
+            weak_signals=raw_weak_signals,
+            source_refs=["ev_unsafe"],
+            verifier_version="test",
+            started_at=now,
+            completed_at=now,
+        )

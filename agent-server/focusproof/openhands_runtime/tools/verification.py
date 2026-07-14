@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -7,6 +8,30 @@ from openhands.sdk.tool import Action, Observation
 from pydantic import field_validator
 
 VerificationStatus = Literal["success", "failed", "inconclusive", "unsupported"]
+
+_RESERVED_VERDICT_FIELDS = frozenset(
+    {
+        "score",
+        "final_score",
+        "learning_status",
+        "verified_learning",
+        "honest",
+        "dishonest",
+        "fake_learning",
+    }
+)
+
+
+def _reject_reserved_verdict_fields(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            if isinstance(key, str) and key in _RESERVED_VERDICT_FIELDS:
+                raise ValueError(f"reserved verdict field is not allowed: {key}")
+            _reject_reserved_verdict_fields(nested)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for nested in value:
+            _reject_reserved_verdict_fields(nested)
+    return value
 
 
 class EvidenceReferenceAction(Action):
@@ -32,6 +57,11 @@ class VerificationObservation(Observation):
     completed_at: datetime
     error_code: str | None = None
     safe_error_message: str | None = None
+
+    @field_validator("facts", "weak_signals", mode="before")
+    @classmethod
+    def reject_reserved_verdict_fields(cls, value: Any) -> Any:
+        return _reject_reserved_verdict_fields(value)
 
     @field_validator("evidence_id", "capability", "verifier_version")
     @classmethod
