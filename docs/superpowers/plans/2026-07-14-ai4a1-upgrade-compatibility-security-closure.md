@@ -499,6 +499,6 @@ git add \
 git commit -m "docs: report AI4A.1 compatibility closure"
 ```
 
-- [ ] **Step 5: Final read-only review and stop**
+- [x] **Step 5: Final read-only review and stop**
 
 Review `7a93546..HEAD` for compatibility, security, protocol duplication, secret leakage, and scope violations. Address any actionable finding with a new RED/GREEN cycle and local commit, rerun the full acceptance matrix, confirm `git status --short --branch` is clean, and do not push or merge.
