@@ -1,6 +1,6 @@
 # FocusProof Agent Architecture
 
-Version: Architecture Baseline v0.4
+Version: Architecture Baseline v0.6
 Primary runtime: Python Agent Server
 Frontend: Next.js and TypeScript
 First domain plugin: Web3 learning on Monad Testnet
@@ -20,9 +20,11 @@ FocusProof Agent verifies whether a learning session produced credible, reviewab
 
 The first demo focuses on Web3 learning because Web3 evidence can be externally checked through transaction hashes, contract addresses and block explorers. The architecture, however, must support any knowledge domain.
 
+Accepted implementation baseline: AI4A.3.1. Next design gate: AI4B.0.
+
 ## 2. What Changes From v0.1
 
-The previous plan used a TypeScript-first runtime. The v0.2 plan changes the runtime to Python because we want to directly learn from, and potentially reuse, OpenHands SDK-style agent abstractions.
+The previous plan used a TypeScript-first runtime. The v0.2 plan changes the runtime to Python so the project can directly use OpenHands SDK agent-runtime abstractions.
 
 Changed:
 
@@ -113,6 +115,8 @@ FocusProof owns the learning-specific protocol:
 - Review statuses.
 - Build Log generation.
 - On-chain proof payload.
+
+Direct reuse is a project-level constraint, not an implementation preference. If the pinned OpenHands SDK exposes a public capability for Agent, Conversation, EventLog/View, Message/Action/Observation events, tools, cancellation, recovery or callbacks, the implementation must use that capability. FocusProof adapters may add product semantics and projections, but must not recreate an equivalent runtime mechanism. Any exception requires the SDK gap record defined in `docs/architecture/OPENHANDS_REUSE_STRATEGY.md`.
 
 See `docs/architecture/OPENHANDS_REUSE_STRATEGY.md`.
 
@@ -295,7 +299,7 @@ Frontend:
 
 Agent Server:
 
-- Python 3.11+
+- Python 3.12
 - FastAPI
 - Pydantic
 - pytest
@@ -308,7 +312,7 @@ Agent Runtime:
 
 - OpenHands SDK direct import.
 - FocusProof adapters around OpenHands Conversation, Event, Tool and Agent objects.
-- Local fallback shims only when a specific SDK object cannot be safely adapted.
+- FocusProof-owned runtime additions only for a documented SDK gap, with tests and a removal plan.
 
 Tools:
 
@@ -320,7 +324,7 @@ Contracts:
 
 - Solidity
 - Foundry preferred in WSL/Linux
-- Monad Testnet deployment later.
+- Optional proof recording is designed in AI4B.0, verified locally before any Monad Testnet deployment.
 
 ## 12. Security Boundaries
 

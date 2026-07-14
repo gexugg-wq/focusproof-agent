@@ -1,8 +1,13 @@
 # OpenHands Reuse Strategy
 
-Version: v0.4
+Version: v0.6
 Primary runtime language: Python
 Product scope: general learning verification, with Web3 as the first domain plugin
+
+Accepted runtime baseline: AI4A.3.1 on OpenHands SDK 1.31.0. AI4B must consume
+the accepted Conversation/tool/event boundary and must not redesign the Agent
+runtime. The application-owned bounded URL execution pool remains a documented
+SDK gap for process-wide blocking-I/O limits; it is not a second tool runtime.
 
 ## 1. Why This Changes the Plan
 
@@ -50,6 +55,42 @@ Reusable mechanics:
 
 These parts help FocusProof avoid a polluted agent loop. The learning judge should not directly perform tool work; it should request tool work, receive observations, and continue from the updated ConversationState/View.
 
+### 2.1 Non-Negotiable Direct-Reuse Rule
+
+When OpenHands SDK already exposes a suitable public type, method, lifecycle hook or protocol, FocusProof must use it directly. The project must not build an "OpenHands-inspired" mirror merely because a local implementation appears smaller or easier to control.
+
+This rule applies at minimum to:
+
+- `Agent` and `Agent.step()`;
+- `Conversation`, `LocalConversation`, `ConversationState` and the native EventLog/View;
+- `MessageEvent`, `ActionEvent`, `ObservationEvent` and other native runtime events;
+- Action, Observation, `ToolDefinition`, `ToolExecutor` and tool registration;
+- run, pause, interrupt, cancellation, close and recovery lifecycle behavior;
+- native event callbacks, event restoration and agent-server boundaries;
+- SDK security and redaction utilities when they satisfy the product requirement.
+
+Every implementation decision must follow this order:
+
+1. Pin and inspect the installed OpenHands SDK version.
+2. Search its public API, source and tests for the required behavior.
+3. Import and use the public SDK capability directly.
+4. Add only a thin FocusProof adapter for product semantics, policy, persistence projection or API translation.
+5. Implement FocusProof-owned runtime behavior only after recording an SDK gap.
+
+An SDK gap record must state the installed version, inspected public APIs, why they cannot satisfy the requirement, the smallest local implementation required, tests proving the boundary, and a removal or migration plan. "More convenient", "simpler for now" and "OpenHands-style" are not valid gap justifications.
+
+Prohibited when an SDK equivalent exists:
+
+- a second Agent loop, Conversation, ConversationState, EventLog or View implementation;
+- local mirror classes for native Action, Observation, Event or Tool protocols;
+- a second tool registry, executor lifecycle or cancellation protocol;
+- copying OpenHands source into this repository or patching SDK internals;
+- mutating private SDK state to simulate a missing public operation.
+
+FocusProof may own learning-specific behavior that OpenHands does not provide: evidence schemas, learning-domain capability policy, scoring, learner ownership and authorization, database projections, Build Log and proof payloads, and stricter security rules such as URL path redaction. These extensions must compose with the native runtime rather than replace it.
+
+When the pinned SDK is upgraded, all gap records and adapters must be re-audited. Any local behavior now covered by a public SDK API must be deleted and migrated to the SDK implementation.
+
 ## 3. What We Should Not Reuse Directly
 
 Do not fork the full OpenHands product as the FocusProof base. The product goals are different:
@@ -84,7 +125,7 @@ Implementation order:
 3. Build a FocusProof adapter layer around OpenHands Conversation, ConversationState, EventLog, Agent, Tool and event objects.
 4. Promote OpenHands Conversation from debug spike into the official `/sessions/{id}/review` orchestration path.
 5. Keep FocusProof-owned learning models at the product boundary: Evidence, ReviewResult, scoring dimensions and proof payload.
-6. Do not reimplement a full local mirror runtime unless a specific OpenHands SDK class is impossible to instantiate or adapt.
+6. Do not reimplement a local mirror runtime. If a required public capability is absent, follow the SDK gap process in section 2.1 and add only the smallest product-owned extension.
 
 AI2 must produce an integration report:
 

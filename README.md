@@ -2,15 +2,15 @@
 
 FocusProof Agent is a general learning verification system. It evaluates whether a learning session produced credible, reviewable evidence, using the learner's goal, submitted evidence, tool observations, explanations, follow-up answers, learning output, reflection and next-step plan.
 
-The current phase is AI1 scaffold and OpenHands SDK feasibility research. This repository intentionally contains only the sustainable monorepo skeleton, Python Agent Server package foundation, frontend and contracts placeholders, and a minimal health check.
+AI1 through AI4A are complete. The repository now contains the OpenHands-native Python review runtime, persistent product projections, a general text/URL verification framework, and the frontend MVP. The next development phase is AI4B.0, a design gate for optional on-chain proof recording, contract boundaries, integration security and Monad Testnet deployment sequencing.
 
 ## Why Python Agent Server
 
-The runtime direction is Python because FocusProof wants to learn from OpenHands SDK-style Agent, Conversation, Tool, Action and Observation abstractions. Python also keeps future tool executors and FastAPI service boundaries close to the agent runtime.
+The runtime direction is Python because FocusProof directly uses OpenHands SDK Agent, Conversation, Tool, Action and Observation abstractions. Python also keeps tool executors and FastAPI service boundaries close to the agent runtime.
 
-## Why OpenHands-Inspired
+## Why OpenHands-Native
 
-OpenHands provides useful architecture ideas for event-centered agent systems: a conversation container, one-step agent decisions, tool execution boundaries and structured observations. FocusProof borrows those runtime ideas while keeping learning evidence, scoring and review semantics as FocusProof-owned protocol.
+FocusProof directly uses suitable public OpenHands SDK runtime capabilities, including Conversation, Agent, native events and the tool protocol. It does not maintain OpenHands-inspired mirror implementations when the SDK already provides the behavior. FocusProof owns learning evidence, scoring, authorization, product persistence projections and review semantics, connected to the native runtime through thin adapters.
 
 ## Why Web3 Is Only The First Plugin
 
@@ -23,11 +23,13 @@ focusproof-agent/
   agent-server/
     focusproof/
       api/
+      openhands_adapter/
+      openhands_runtime/
+      persistence/
       runtime/
       agents/
       domain/plugins/web3/
       tools/
-      database/
       contracts/
     tests/
   contracts/
@@ -55,14 +57,15 @@ python -m ruff check agent-server
 python -m mypy agent-server
 ```
 
-AI1 used Python `venv` plus `pip` for local verification. Database migrations are
-run explicitly before starting the development server. Application startup only
+Development uses Python `venv` plus `pip` in WSL. Database migrations are run
+explicitly before starting the development server. Application startup only
 checks the Alembic revision and never applies migrations automatically.
 
 ## AI Work Split
 
 - AI0 owns controller and architecture documents.
 - AI1 owns scaffold and OpenHands feasibility research.
-- AI2 should implement the Python Agent Server runtime, EventLog, database, agents and tools.
-- AI3 should implement the frontend and wallet user flows.
-- AI4 should implement contracts, integration tests, security and deployment.
+- AI2 owns the completed Python Agent Server and OpenHands Conversation runtime.
+- AI3 owns the completed frontend MVP and optional wallet user flow.
+- AI4A owns the completed general text/URL verification framework.
+- AI4B is next: contract, proof-recording integration, security and deployment, split into sequential design and implementation gates.

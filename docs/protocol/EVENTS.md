@@ -1,8 +1,12 @@
 # FocusProof Event and Agent Protocol
 
-Version: v0.2
+Version: v0.4
 Primary implementation language: Python
 Frontend mirror language: TypeScript
+
+Accepted protocol baseline: AI4A.3.1. The protocol is frozen for AI4B.0 design;
+any proof-recording event or API change requires explicit AI0 approval before
+implementation.
 
 本协议仍然是 FocusProof 的公共消息协议。v0.2 的核心变化是：运行时主实现从 TypeScript 转为 Python Agent Server，因此 Event、Action、Observation 应优先用 Python Pydantic model 实现，再按需要导出或手写 TypeScript 镜像类型给前端使用。
 
@@ -12,6 +16,8 @@ Frontend mirror language: TypeScript
 - Frontend 只消费 API 返回的数据，不拥有最终评分协议。
 - OpenHands SDK 可以影响 Agent、Conversation 和 Tool 的实现方式，但不能改变本协议中的学习证据和评分语义。
 - Web3 是领域插件，不是协议核心。
+- 本文件中的 TypeScript 风格接口用于描述 FocusProof 产品/API 投影，不是要求实现第二套 Agent、Conversation、EventLog、Action、Observation 或 Tool Runtime。
+- 运行时存在 OpenHands SDK 公共类型或生命周期 API 时必须直接复用；产品投影通过适配器从原生事件派生，不得替代原生运行事实。
 
 ## 1. 设计目标
 
@@ -221,6 +227,8 @@ Agent 只能返回 Action，不能执行 Action。
 
 ## 10. Observation 和 Tool
 
+以下结构描述 FocusProof 对外投影。Python 运行时必须使用 OpenHands SDK 原生 Action、Observation、`ToolDefinition` 与 `ToolExecutor`；不得按本示例另建可执行工具协议。
+
     interface Observation {
       toolName: string
       status: "success" | "failed" | "inconclusive"
@@ -242,6 +250,8 @@ Agent 只能返回 Action，不能执行 Action。
 Observation 的 facts 是工具观察到的事实，不代表用户一定理解了这些事实。Observation 必须被 Runtime 写入 EventLog。
 
 ## 11. Agent 和 Conversation
+
+以下接口只说明 FocusProof API 需要表达的状态，不是本地 Runtime 实现规范。实际运行必须由 OpenHands SDK `Agent`、`LocalConversation`、`ConversationState`、原生 EventLog/View 与公开生命周期方法承担。FocusProof 数据库只保存产品事实和幂等审计投影。
 
     interface Agent {
       step(view: AgentView): Promise<Action>
@@ -291,7 +301,7 @@ Observation 的 facts 是工具观察到的事实，不代表用户一定理解�
 
 默认限制：
 
-- 最大 Agent step：12。
+- 单次 OpenHands Conversation run 最大 Agent iteration：6。
 - 最大追问次数：3。
 - 最大工具调用次数：8。
 - 单次工具超时：15 秒。
