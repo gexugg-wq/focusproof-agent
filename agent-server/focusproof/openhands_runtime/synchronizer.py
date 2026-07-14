@@ -7,8 +7,8 @@ from typing import Any, Literal, cast
 from openhands.sdk.event import MessageEvent
 from openhands.sdk.llm import TextContent
 
+from focusproof.openhands_runtime.evidence_messages import runtime_evidence_payload
 from focusproof.openhands_runtime.handle import ConversationHandle
-from focusproof.openhands_runtime.url_redaction import safe_evidence_payload
 from focusproof.persistence.repositories import (
     StoredAnswer,
     StoredEvidence,
@@ -170,11 +170,12 @@ def _pending_messages(
         _PendingMessage(
             key=f"evidence:{record.evidence_id}",
             kind="evidence",
-            payload=safe_evidence_payload(
+            payload=runtime_evidence_payload(
                 {
                     "evidenceId": record.evidence_id,
                     "evidenceType": record.evidence_type,
                     "contentHash": record.content_hash,
+                    "textContent": record.text_content,
                     "sourceUrl": record.source_url,
                 }
             ),

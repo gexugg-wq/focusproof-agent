@@ -10,6 +10,7 @@ from openhands.sdk.conversation.types import ConversationCallbackType
 from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
 from openhands.sdk.event.base import Event as OpenHandsEvent
 
+from focusproof.openhands_runtime.evidence_messages import runtime_evidence_payload
 from focusproof.openhands_runtime.factory import ConversationFactory, LLMFactory
 from focusproof.openhands_runtime.handle import ConversationHandle, RuntimeReviewResult
 from focusproof.openhands_runtime.locks import SessionRunLock
@@ -19,7 +20,6 @@ from focusproof.openhands_runtime.synchronizer import ConversationSynchronizer
 from focusproof.openhands_runtime.tools import SessionEvidenceRepository
 from focusproof.openhands_runtime.tools.learner_input import LearnerInputObservation
 from focusproof.openhands_runtime.tools.review_draft import ReviewDraftObservation
-from focusproof.openhands_runtime.url_redaction import safe_evidence_payload
 from focusproof.persistence.repositories import StoredSession
 from focusproof.persistence.unit_of_work import UnitOfWorkFactoryLike
 from focusproof.runtime.evidence import Evidence, LearningGoal
@@ -297,7 +297,7 @@ class ConversationManager:
                 {
                     "kind": "evidence",
                     "session_id": session_id,
-                    "evidence": safe_evidence_payload(
+                    "evidence": runtime_evidence_payload(
                         evidence.model_dump(mode="json")
                     ),
                 },

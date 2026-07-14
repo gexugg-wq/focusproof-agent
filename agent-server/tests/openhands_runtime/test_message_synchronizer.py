@@ -155,8 +155,12 @@ def test_sync_sends_stable_keys_with_verified_sender_once(
         "evidenceId": "ev_1",
         "evidenceType": "text",
         "contentHash": "sha256:test",
+        "contentTrust": "untrusted",
+        "textContent": "Specific replay notes",
+        "textTruncated": False,
+        "originalCharacterCount": 21,
     }
-    assert "Specific replay notes" not in evidence_message.model_dump_json()
+    assert "Specific replay notes" in evidence_message.model_dump_json()
     with uow_factory() as uow:
         session = uow.sessions.get(session_id)
         evidence = uow.evidence.get(session_id, "ev_1")
