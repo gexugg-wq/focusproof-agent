@@ -258,13 +258,15 @@ def test_sync_redacts_url_and_arbitrary_metadata_before_message_event(
         "contentHash",
         "source",
     }
-    assert payload["source"] == {
+    source = payload["source"]
+    assert isinstance(source, dict)
+    assert source == {
         "scheme": "https",
         "hostname": "example.com",
         "port": 8443,
         "origin": "https://example.com:8443",
         "path_redacted": True,
-        "url_sha256": payload["source"]["url_sha256"],
+        "url_sha256": source["url_sha256"],
     }
     for secret in (
         "credential-user",

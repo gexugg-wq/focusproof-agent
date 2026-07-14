@@ -122,10 +122,13 @@ def test_fetcher_deadline_includes_initial_policy_and_dns_validation() -> None:
         return (ip_address("93.184.216.34"),)
 
     requests: list[httpx.Request] = []
+
+    def record_unexpected_request(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(500)
+
     client = client_for(
-        httpx.MockTransport(
-            lambda request: requests.append(request) or httpx.Response(500)
-        )
+        httpx.MockTransport(record_unexpected_request)
     )
     try:
         fetcher = BoundedUrlFetcher(
