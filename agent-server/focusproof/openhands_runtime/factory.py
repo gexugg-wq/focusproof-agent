@@ -104,6 +104,19 @@ class ConversationFactory:
         persistence_path = runtime_root / "persistence"
         workspace_path.mkdir(parents=True, exist_ok=True)
         persistence_path.mkdir(parents=True, exist_ok=True)
+        conversation_store = Path(
+            LocalConversation.get_persistence_dir(
+                persistence_path,
+                conversation_id,
+            )
+        ).resolve()
+        if not conversation_store.is_relative_to(self._data_dir):
+            raise ValueError(
+                "conversation persistence path is outside FOCUSPROOF_DATA_DIR"
+            )
+        compatibility_restore = (
+            conversation_store / "base_state.json"
+        ).is_file()
 
         llm = (
             self._llm_factory(session_id)
@@ -111,13 +124,18 @@ class ConversationFactory:
             else self._create_production_llm(session_id)
         )
         runtime_mode = self._runtime_mode_for(llm)
-        toolset_version = self._tool_assembler.version(goal.domain, evidence_types)
+        toolset_version = self._tool_assembler.version(
+            goal.domain,
+            evidence_types,
+            compatibility_restore=compatibility_restore,
+        )
         agent = Agent(
             llm=llm,
             tools=self._session_tools(
                 session_id,
                 goal.domain,
                 evidence_types,
+                compatibility_restore=compatibility_restore,
             ),
             include_default_tools=[],
             system_prompt=FOCUSPROOF_SYSTEM_PROMPT,
@@ -165,6 +183,7 @@ class ConversationFactory:
                 persisted_toolset_version is not None
                 and persisted_toolset_version != toolset_version
             ),
+            compatibility_restore=compatibility_restore,
         )
 
     def _runtime_mode_for(self, llm: LLM) -> RuntimeMode:
@@ -190,6 +209,13 @@ class ConversationFactory:
         session_id: str,
         domain: str,
         evidence_types: Collection[str] | None,
+        *,
+        compatibility_restore: bool,
     ) -> list[Tool]:
         ensure_focusproof_tools_registered()
-        return self._tool_assembler.assemble(session_id, domain, evidence_types)
+        return self._tool_assembler.assemble(
+            session_id,
+            domain,
+            evidence_types,
+            compatibility_restore=compatibility_restore,
+        )

@@ -11,6 +11,10 @@ from focusproof.openhands_runtime.tools.verification import (
     EvidenceReferenceAction,
     VerificationObservation,
 )
+from focusproof.openhands_runtime.tools.evidence_verification import (
+    EvidenceVerificationAction,
+    EvidenceVerificationObservation,
+)
 from focusproof.runtime.event_log import InMemoryEventLog
 from focusproof.runtime.events import Actor, Event, EventType
 
@@ -117,6 +121,61 @@ def test_reconcile_does_not_duplicate_projected_native_event() -> None:
 
     assert projector.reconcile([action]) == 0
     assert log.count("sess_1") == first_count
+
+
+def test_legacy_verification_events_are_projected_read_only_and_idempotently() -> None:
+    from focusproof.openhands_runtime.projector import OpenHandsEventProjector
+
+    log = InMemoryEventLog()
+    projector = OpenHandsEventProjector("sess_1", uuid4(), log)
+    tool_call = MessageToolCall(
+        id="call_legacy_1",
+        name="focusproof_evidence_verification",
+        arguments='{"evidence_id":"ev_legacy"}',
+        origin="completion",
+    )
+    action = ActionEvent(
+        thought=[TextContent(text="Read the legacy result")],
+        action=EvidenceVerificationAction(evidence_id="ev_legacy"),
+        tool_name="focusproof_evidence_verification",
+        tool_call_id=tool_call.id,
+        tool_call=tool_call,
+        llm_response_id="response_legacy_1",
+    )
+    observation = ObservationEvent(
+        tool_name=action.tool_name,
+        tool_call_id=action.tool_call_id,
+        observation=EvidenceVerificationObservation.from_text(
+            "legacy result",
+            evidence_id="ev_legacy",
+            verified=True,
+            evidence_type="text",
+            findings=["Legacy verifier found repository content."],
+            weak_signals=["Legacy verified is not a learning verdict."],
+            source_refs=["ev_legacy", "sha256:legacy"],
+            verifier="focusproof-session-repository",
+        ),
+        action_id=action.id,
+    )
+    before = [action.model_dump_json(), observation.model_dump_json()]
+
+    assert projector.reconcile([action, observation]) == 2
+    assert projector.reconcile([action, observation]) == 0
+    assert [action.model_dump_json(), observation.model_dump_json()] == before
+    projected = log.list("sess_1")
+    assert [event.type for event in projected] == [
+        "verification.requested",
+        "verification.completed",
+    ]
+    assert projected[1].payload["status"] == "inconclusive"
+    assert projected[1].payload["weak_signals"] == [
+        "Legacy verified is not a learning verdict."
+    ]
+    assert projected[1].payload["source_refs"] == [
+        "ev_legacy",
+        "sha256:legacy",
+    ]
+    assert "verified" not in projected[1].payload
 
 
 def test_finish_action_is_recognized_as_native_terminal_event() -> None:

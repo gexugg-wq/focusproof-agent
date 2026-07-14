@@ -14,6 +14,7 @@ _CONTROL_TOOL_CLASSES = (
     "FocusProofLearnerInputTool",
     "FocusProofReviewDraftTool",
 )
+_LEGACY_VERIFIER_TOOL_CLASS = "FocusProofEvidenceVerificationTool"
 
 
 class SessionToolAssembler:
@@ -25,6 +26,8 @@ class SessionToolAssembler:
         session_id: str,
         domain: str,
         evidence_types: Collection[str] | None,
+        *,
+        compatibility_restore: bool = False,
     ) -> list[Tool]:
         if not session_id.strip():
             raise ValueError("session_id must not be empty")
@@ -34,19 +37,33 @@ class SessionToolAssembler:
             Tool(name=item.tool_class_name, params=dict(params))
             for item in self._registry.select(domain, evidence_types or None)
         )
+        if compatibility_restore:
+            tools.append(Tool(name=_LEGACY_VERIFIER_TOOL_CLASS, params=dict(params)))
         return tools
 
     def version(
         self,
         domain: str,
         evidence_types: Collection[str] | None,
+        *,
+        compatibility_restore: bool = False,
     ) -> str:
-        return toolset_version(self._registry.select(domain, evidence_types or None))
+        extra_identities = ("legacy:1",) if compatibility_restore else ()
+        return toolset_version(
+            self._registry.select(domain, evidence_types or None),
+            extra_identities=extra_identities,
+        )
 
 
-def toolset_version(capabilities: Iterable[VerificationCapability]) -> str:
-    identity = "\n".join(
+def toolset_version(
+    capabilities: Iterable[VerificationCapability],
+    *,
+    extra_identities: Iterable[str] = (),
+) -> str:
+    identities = [
         f"{item.registry_name}:{item.version}"
         for item in sorted(capabilities, key=lambda item: item.registry_name)
-    )
+    ]
+    identities.extend(sorted(extra_identities))
+    identity = "\n".join(identities)
     return sha256(identity.encode("utf-8")).hexdigest()[:12]

@@ -15,6 +15,10 @@ from focusproof.openhands_runtime.tools.verification import (
     EvidenceReferenceAction,
     VerificationObservation,
 )
+from focusproof.openhands_runtime.tools.evidence_verification import (
+    EvidenceVerificationAction,
+    EvidenceVerificationObservation,
+)
 from focusproof.openhands_runtime.tools.learner_input import (
     LearnerInputAction,
     question_id_for,
@@ -122,7 +126,7 @@ class OpenHandsEventProjector:
 
     def _project_action(self, native_event: ActionEvent, source_index: int) -> Event | None:
         action = native_event.action
-        if isinstance(action, EvidenceReferenceAction):
+        if isinstance(action, (EvidenceReferenceAction, EvidenceVerificationAction)):
             payload = action.model_dump(mode="json")
             event_type: EventType = "verification.requested"
             related = [action.evidence_id]
@@ -161,6 +165,23 @@ class OpenHandsEventProjector:
             )
             event_type: EventType = "verification.completed"
             actor: Actor = "tool"
+            related = [observation.evidence_id]
+        elif isinstance(observation, EvidenceVerificationObservation):
+            payload = {
+                "evidence_id": observation.evidence_id,
+                "capability": "legacy",
+                "status": "inconclusive",
+                "facts": {
+                    "evidence_type": observation.evidence_type,
+                    "findings": observation.findings,
+                    "verifier": observation.verifier,
+                },
+                "weak_signals": observation.weak_signals,
+                "source_refs": observation.source_refs,
+                "verifier_version": "legacy",
+            }
+            event_type = "verification.completed"
+            actor = "tool"
             related = [observation.evidence_id]
         else:
             return None

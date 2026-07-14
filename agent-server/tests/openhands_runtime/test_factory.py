@@ -109,6 +109,93 @@ def test_factory_narrows_verifiers_for_known_evidence_types(tmp_path: Path) -> N
         handle.conversation.close()
 
 
+def test_empty_conversation_persistence_directory_is_not_a_restore(
+    tmp_path: Path,
+) -> None:
+    from focusproof.openhands_runtime.factory import ConversationFactory
+
+    conversation_id = uuid5(NAMESPACE_URL, "focusproof:sess_empty_store")
+    empty_store = (
+        tmp_path
+        / "var/conversations/sess_empty_store/persistence"
+        / conversation_id.hex
+    )
+    empty_store.mkdir(parents=True)
+    factory = ConversationFactory(
+        project_root=tmp_path,
+        repository=EmptyRepository(),
+        llm_factory=_test_llm,
+    )
+
+    handle = factory.create(
+        "sess_empty_store",
+        _goal(),
+        conversation_id=conversation_id,
+    )
+    try:
+        assert handle.compatibility_restore is False
+        cast(Any, handle.conversation).send_message("initialize fresh tools")
+        assert "focusproof_evidence_verification" not in (
+            handle.conversation.agent.tools_map
+        )
+    finally:
+        handle.conversation.close()
+
+
+def test_ai4a_restore_uses_legacy_compatibility_superset(tmp_path: Path) -> None:
+    from focusproof.openhands_runtime.factory import ConversationFactory
+
+    factory = ConversationFactory(
+        project_root=tmp_path,
+        repository=EmptyRepository(),
+        llm_factory=_test_llm,
+    )
+    initial = factory.create("sess_ai4a_restore", _goal())
+    conversation_id = initial.conversation_id
+    assert initial.compatibility_restore is False
+    initial.conversation.close()
+
+    restored = factory.create(
+        "sess_ai4a_restore",
+        _goal(),
+        conversation_id=conversation_id,
+    )
+    try:
+        assert restored.compatibility_restore is True
+        cast(Any, restored.conversation).send_message("initialize restored tools")
+        assert set(restored.conversation.agent.tools_map) == {
+            "focusproof_evidence_verification",
+            "focusproof_learner_input",
+            "focusproof_review_draft",
+            "focusproof_text_evidence_verification",
+            "focusproof_url_evidence_verification",
+        }
+    finally:
+        restored.conversation.close()
+
+
+def test_factory_rejects_runtime_path_resolving_outside_data_dir(
+    tmp_path: Path,
+) -> None:
+    from focusproof.openhands_runtime.factory import ConversationFactory
+
+    data_dir = tmp_path / "data"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    conversations = data_dir / "conversations"
+    conversations.mkdir(parents=True)
+    (conversations / "sess_symlink").symlink_to(outside, target_is_directory=True)
+    factory = ConversationFactory(
+        project_root=tmp_path,
+        data_dir=data_dir,
+        repository=EmptyRepository(),
+        llm_factory=_test_llm,
+    )
+
+    with pytest.raises(ValueError, match="outside FOCUSPROOF_DATA_DIR"):
+        factory.create("sess_symlink", _goal())
+
+
 def test_factory_records_toolset_version_on_fresh_conversation(tmp_path: Path) -> None:
     from focusproof.openhands_runtime.factory import ConversationFactory
 

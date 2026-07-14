@@ -7,6 +7,9 @@ from openhands.sdk.llm import Message, TextContent
 
 from focusproof.openhands_runtime.prompts import FOCUSPROOF_SYSTEM_PROMPT
 from focusproof.openhands_runtime.tools.verification import VerificationObservation
+from focusproof.openhands_runtime.tools.evidence_verification import (
+    EvidenceVerificationObservation,
+)
 from focusproof.runtime.evidence import Evidence, LearningGoal
 
 from .conftest import SessionRepository, completed_review_llm
@@ -56,6 +59,42 @@ def test_result_extraction_uses_verifications_after_latest_answer_boundary() -> 
         after_index=1,
     )
     assert [item.sourceRefs for item in observations] == [["ev_new"]]
+
+
+def test_result_extraction_converts_legacy_observation_without_final_verdict() -> None:
+    from focusproof.openhands_runtime.result_extractor import _focusproof_observations
+
+    legacy = ObservationEvent(
+        tool_name="focusproof_evidence_verification",
+        tool_call_id="call_legacy_extract",
+        observation=EvidenceVerificationObservation.from_text(
+            "legacy result",
+            evidence_id="ev_legacy",
+            verified=True,
+            evidence_type="text",
+            findings=["Legacy verifier found repository content."],
+            weak_signals=["Legacy verified is not a learning verdict."],
+            source_refs=["ev_legacy", "sha256:legacy"],
+            verifier="focusproof-session-repository",
+        ),
+        action_id="action_legacy_extract",
+    )
+    before = legacy.model_dump_json()
+
+    converted = _focusproof_observations([legacy])
+
+    assert legacy.model_dump_json() == before
+    assert len(converted) == 1
+    assert converted[0].status == "inconclusive"
+    assert converted[0].sourceRefs == ["ev_legacy", "sha256:legacy"]
+    assert converted[0].facts == {
+        "capability": "legacy",
+        "evidence_type": "text",
+        "findings": ["Legacy verifier found repository content."],
+        "weak_signals": ["Legacy verified is not a learning verdict."],
+        "verifier_version": "legacy",
+    }
+    assert "verified" not in converted[0].facts
 
 
 def test_manager_run_uses_native_action_tool_and_observation_flow(

@@ -23,6 +23,9 @@ from focusproof.openhands_runtime.tools.learner_input import (
 )
 from focusproof.openhands_runtime.tools.review_draft import ReviewDraftObservation
 from focusproof.openhands_runtime.tools.verification import VerificationObservation
+from focusproof.openhands_runtime.tools.evidence_verification import (
+    EvidenceVerificationObservation,
+)
 from focusproof.persistence.repositories import StoredReview
 from focusproof.persistence.unit_of_work import UnitOfWorkFactoryLike
 from focusproof.runtime.evidence import Evidence, LearningGoal
@@ -324,6 +327,23 @@ def _focusproof_observations(
         if not isinstance(event, ObservationEvent):
             continue
         native_observation = event.observation
+        if isinstance(native_observation, EvidenceVerificationObservation):
+            observations.append(
+                Observation(
+                    toolName=event.tool_name,
+                    status="inconclusive",
+                    facts={
+                        "capability": "legacy",
+                        "evidence_type": native_observation.evidence_type,
+                        "findings": native_observation.findings,
+                        "weak_signals": native_observation.weak_signals,
+                        "verifier_version": "legacy",
+                    },
+                    sourceRefs=native_observation.source_refs,
+                    error=None,
+                )
+            )
+            continue
         if not isinstance(native_observation, VerificationObservation):
             continue
         status = (
