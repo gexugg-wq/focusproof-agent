@@ -4,6 +4,7 @@ Date: 2026-07-14
 Branch: `ai4a-general-verification-framework`
 AI4A baseline: `23a1a96460389147e6d477378f1d855a9a6a7187` (`main`)
 AI4A.1 starting HEAD: `7a93546ca3963a5e934f9bbb6a2ff03cea9028ee`
+AI4A.2 starting HEAD: `00e32722d3550a05e0c45852ef96dbc0e47af281`
 OpenHands SDK: local path dependency, installed version `1.31.0`
 
 ## Outcome
@@ -22,6 +23,10 @@ capability-driven monotonic deadline to complete URL verification, removes URL
 secrets at every native/product projection boundary, and hardens both the Agent
 prompt and Observation schema against untrusted verdict instructions.
 
+AI4A.2 closes the acceptance gaps in hard URL deadlines, restored-event
+projection order, and Agent-visible text semantics. It retains the same native
+OpenHands runtime and tool/event contracts.
+
 ## Changed Files By Responsibility
 
 Capability policy and assembly:
@@ -33,6 +38,7 @@ Capability policy and assembly:
 - `agent-server/focusproof/openhands_runtime/handle.py`
 - `agent-server/focusproof/openhands_runtime/manager.py`
 - `agent-server/focusproof/openhands_runtime/synchronizer.py`
+- `agent-server/focusproof/openhands_runtime/evidence_messages.py`
 
 Verification contracts and executors:
 
@@ -66,6 +72,9 @@ The implementation continues to use OpenHands `Agent`, `Conversation`,
 `LocalConversation`, `ConversationState`, the native EventLog exposed through
 `conversation.state.events`, `Tool`, `ToolDefinition`, `ToolExecutor`, `Action`,
 `Observation`, `MessageEvent`, `ActionEvent`, and `ObservationEvent` directly.
+Review execution now calls `LocalConversation.arun()`; interruption remains
+native through `LocalConversation.interrupt()`, its public `cancel_token`, and
+the SDK calls to `ToolExecutor.interrupt()` and `ToolExecutor.close()`.
 The Agent is still created with `include_default_tools=[]`. No terminal, file
 editor, browser automation, patch, or workspace mutation tool is assembled.
 
@@ -155,6 +164,15 @@ and supports only `evidenceType == "text"`. Stable facts are `has_text`,
 types return safe typed observations. The verifier is deterministic, local,
 read-only, and makes no LLM call or final learning judgment.
 
+Agent-facing evidence ingestion is intentionally separate from the audit-safe
+projection. `safe_evidence_payload()` remains unchanged and continues to omit
+bodies. `runtime_evidence_payload()` adds text only to a native user
+`MessageEvent`, labels it `contentTrust: untrusted`, applies the SDK's
+`redact_text_secrets()`, caps it at 4,000 characters, and records
+`textTruncated` plus `originalCharacterCount`. Persistent and legacy ingestion
+use the same builder. Authoritative database text is unchanged, URL messages
+still contain only origin/hash metadata, and no `extended_content` is used.
+
 ## URL Safety And Retrieval
 
 Production permits HTTPS only; HTTP is available only through explicit policy
@@ -170,13 +188,17 @@ also request connection close and remove Cookie headers so hostnames sharing an
 IP cannot reuse a TLS connection or cookie state.
 
 `BoundedUrlFetcher` requires an `httpx.Client` with automatic redirects disabled
-and an explicit total timeout copied from URL capability metadata. One
-monotonic deadline starts before policy/DNS work and covers redirects, every
-HTTPX timeout phase, streamed chunks, decoding, title extraction, and excerpt
-construction. Remaining budget is propagated to each request; expiry closes
-the active response synchronously and stops iteration. It also limits redirects
-to three, rejects declared or streamed bodies over 1 MiB, and rejects
-unsupported binary content.
+and an explicit total timeout copied from URL capability metadata. Its
+monotonic budget still propagates remaining time to HTTPX and cooperatively
+checks policy, redirects, streamed chunks, decoding, and extraction. AI4A.2
+adds the missing hard wall-clock boundary at the URL `ToolExecutor`: each call
+runs blocking DNS/transport work in an isolated daemon worker, waits only for
+the capability budget, and immediately returns `network_timeout` /
+`inconclusive` on expiry. An operation-local interrupt event stops cooperative
+work when possible and otherwise isolates the lingering blocking operation.
+`interrupt()` and `close()` are thread-safe and idempotent and never close the
+shared client, so a timeout in one session cannot affect another. Redirect,
+size, DNS pinning, and SSRF rules are unchanged.
 
 The only URL representation permitted in an Observation, LLM message, source
 reference, or audit projection contains scheme, hostname, optional non-default
@@ -210,6 +232,14 @@ legacy verification to `inconclusive` and consumes only observations after the
 latest answer boundary. Restart tests preserve Conversation ID, native history,
 synchronized messages, audit uniqueness, and Review uniqueness.
 
+On create/restore, the manager now snapshots `conversation.state.events` and
+reconciles that native history before synchronization can emit a new callback.
+The projector therefore advances to the restored native length first. New
+events retain their true native indices, old audit rows precede new rows, and
+the existing source-event and `message_key` idempotence mechanisms remain the
+only crash-window recovery path; callbacks are not replayed and no second
+EventLog exists.
+
 ## Domain-General Scoring
 
 Generic scoring no longer contains nonce, gas, transaction, wallet, chain, or
@@ -222,6 +252,63 @@ Unicode-aware specific answer or successful verifier fact, and trivial answers
 do not receive understanding credit. CJK specificity uses Unicode-aware lexical
 units. Successful verification observations remain supporting facts and cannot
 set `VerifiedLearning`.
+
+## Root Causes
+
+- URL timeout checks surrounded blocking DNS and streamed reads but could not
+  make a blocked synchronous phase return at the total deadline. The URL
+  executor discarded its `conversation` argument and supplied no lifecycle
+  hooks, while the manager used synchronous `LocalConversation.run()`.
+- Restore synchronized pending database facts before reconciling restored
+  native history. The new callback projector therefore began at zero and gave
+  newly emitted messages indices that overlapped older native events.
+- `safe_evidence_payload()` was incorrectly reused as the Agent-facing text
+  message. Its correct privacy behavior drops bodies, so the Agent received
+  identifiers and structural verifier facts but not the submitted semantics.
+
+## OpenHands APIs Reused
+
+- `LocalConversation.arun()`, `LocalConversation.interrupt()`, and the public
+  `LocalConversation.cancel_token` own run cancellation.
+- The existing SDK `ToolExecutor.interrupt()` and `ToolExecutor.close()` hooks
+  signal the session-local URL executor; no FocusProof cancellation token was
+  introduced.
+- `conversation.state.events`, native `MessageEvent.llm_message`,
+  `MessageEvent.to_llm_message()`, `ActionEvent`, `ObservationEvent`, and the
+  existing native EventLog remain the only runtime/event truth.
+- The SDK's `redact_text_secrets()` performs Agent-message secret redaction.
+- `Agent`, `LocalConversation`, `ToolDefinition`, and `ToolExecutor` remain
+  directly instantiated/implemented, with OpenHands default programming tools
+  disabled.
+
+## FocusProof-Owned SDK Gaps
+
+OpenHands SDK 1.31.0 provides conversation cancellation and thread-safe tool
+interrupt hooks, but it does not provide a single-tool hard wall-clock deadline
+for a synchronous `ToolExecutor`. Cancelling the async wrapper cannot terminate
+an already blocked worker thread. FocusProof therefore owns only a minimal URL
+call deadline adapter: one daemon worker per call, one wall-clock wait bounded by
+the capability timeout, and one operation-local interrupt event. It is not a
+Conversation, runtime, agent loop, EventLog, cancellation-token abstraction, or
+tool protocol. Blocking work that cannot be force-stopped is isolated until the
+OS/library call returns; the shared client remains open.
+
+## Security/Privacy Verification
+
+- Resolver delay and slow-drip tests prove a 50 ms budget returns within the
+  stated tolerance with `network_timeout` and `inconclusive`.
+- Repeated executor interrupt/close calls are safe, and a timed-out Session A
+  leaves Session B's shared client usable.
+- Timeout Observation and projected audit JSON contain no URL credentials,
+  private path, query value, or fragment. URL Agent messages retain only
+  origin/hash metadata and tool action arguments remain only `evidence_id`.
+- Text is persisted to native user messages only after the SDK secret redactor
+  and the 4,000-character cap. Prompt-like text remains visibly untrusted user
+  content. Raw authoritative text remains in the database; audit projection
+  still omits all evidence bodies.
+- Restore tests prove native-index ordering, source ID uniqueness, no duplicate
+  audit/Review/message rows, and marker-only repair when the native message
+  exists but the database sync marker is missing.
 
 ## Verification Evidence
 
@@ -294,13 +381,65 @@ All checks passed!
 Success: no issues found in 113 source files
 ```
 
+## Commands And Exact Results
+
+AI4A.2 wrote and ran three independent RED groups before production changes:
+
+```text
+test_interruptible_url_deadline.py: 4 failed, 3 passed
+test_restore_projection_order.py: 1 failed, 1 passed
+test_runtime_evidence_messages.py: 5 failed, 1 passed
+```
+
+The failures were the expected 200 ms wall-clock overrun and synchronous
+`run()`, duplicate/out-of-order restored source indices, and absent text fields
+in native messages. Final independent groups:
+
+```text
+.venv/bin/pytest -q agent-server/tests/openhands_runtime/test_interruptible_url_deadline.py
+7 passed in 0.64s
+
+.venv/bin/pytest -q agent-server/tests/openhands_runtime/test_restore_projection_order.py
+2 passed in 0.90s
+
+.venv/bin/pytest -q agent-server/tests/openhands_runtime/test_runtime_evidence_messages.py
+6 passed in 1.17s
+```
+
+Final suite and static verification:
+
+```text
+.venv/bin/pytest -q -m 'not real_llm'
+214 passed, 1 deselected, 8 warnings in 19.56s
+
+.venv/bin/ruff check agent-server
+All checks passed!
+
+.venv/bin/mypy agent-server/focusproof
+Success: no issues found in 68 source files
+
+git diff --check 00e32722d3550a05e0c45852ef96dbc0e47af281..HEAD
+exit 0
+```
+
+No model, migration, or schema file changed from the AI4A.2 baseline, so
+Alembic upgrade/down/re-upgrade is explicitly unaffected rather than rerun.
+The implementation path list contains only `agent-server/focusproof/` runtime
+code and `agent-server/tests/`; the final documentation commit adds only this
+report and the AI4A.2 plan. The six AI0 normative working-tree files retain
+their pre-work SHA-256 hashes and remain unstaged. No frontend, contracts,
+`.env`, `var`, key, or OpenHands SDK source path changed.
+
 The warnings are the existing Starlette/httpx TestClient deprecation and Python
 3.12 SQLite datetime-adapter deprecations. No real-LLM test was run because AI0
 did not explicitly authorize it.
 
-## Known Limitations And Deferred Work
+## Remaining Limitations
 
 - Text analysis is deterministic heuristic metadata, not semantic proof.
+- A DNS or transport library call that cannot cooperate with interruption may
+  continue in its isolated daemon worker after the caller receives the hard
+  timeout; it cannot affect the result or close the shared client.
 - URL extraction supports bounded textual metadata only; binary documents,
   OCR, ASR, video, PDF, and browser automation are deferred.
 - URL verification records bounded textual metadata and policy outcomes, but
