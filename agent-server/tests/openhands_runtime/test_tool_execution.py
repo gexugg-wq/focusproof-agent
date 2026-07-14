@@ -78,3 +78,41 @@ def test_focusproof_tools_are_declared_read_only() -> None:
         assert annotations.destructiveHint is False
         assert annotations.idempotentHint is True
         assert annotations.openWorldHint is False
+
+
+def test_compatibility_executor_redacts_url_before_native_observation() -> None:
+    from focusproof.openhands_runtime.tools.evidence_verification import (
+        EvidenceVerificationAction,
+        EvidenceVerificationExecutor,
+    )
+
+    source_url = (
+        "https://credential-user:credential-password@example.com:8443/"
+        "private/legacy-secret?token=query-secret#fragment-secret"
+    )
+    repository = RecordingEvidenceRepository(
+        Evidence(
+            evidenceId="ev_legacy_url",
+            evidenceType="url",
+            contentHash="sha256:legacy-url",
+            sourceUrl=source_url,
+        )
+    )
+
+    observation = EvidenceVerificationExecutor(repository, "sess_1")(
+        EvidenceVerificationAction(evidence_id="ev_legacy_url")
+    )
+
+    serialized = observation.model_dump_json()
+    assert observation.source_refs[0] == "ev_legacy_url"
+    assert observation.source_refs[1].startswith("url-sha256:")
+    for secret in (
+        "credential-user",
+        "credential-password",
+        "private",
+        "legacy-secret",
+        "query-secret",
+        "fragment-secret",
+    ):
+        assert secret not in serialized
+    assert repository.evidence.sourceUrl == source_url

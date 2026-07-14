@@ -215,7 +215,7 @@ def test_url_observation_redacts_path_userinfo_port_redirect_and_excerpt_secrets
     fetched_url = FetchedUrl(
         final_url=(
             "https://user:password@example.com:8443/download/signed/abc123"
-            "?token=final-secret#final-fragment"
+            "?token=final-secret&encoded=encoded%2Fsecret#final-fragment"
         ),
         status_code=200,
         content_type="text/plain",
@@ -225,7 +225,10 @@ def test_url_observation_redacts_path_userinfo_port_redirect_and_excerpt_secrets
             "private/redirect-secret?key=query-secret#redirect-fragment",
         ),
         title="Download abc123 for user",
-        text_excerpt="Use secret-token and final-secret at redirect-secret.",
+        text_excerpt=(
+            "Use secret-token and final-secret at redirect-secret. "
+            "Never expose encoded%2Fsecret."
+        ),
     )
     repository = RecordingRepository(evidence(source_url=source_url))
     fetcher = FakeFetcher(result=fetched_url)
@@ -253,6 +256,8 @@ def test_url_observation_redacts_path_userinfo_port_redirect_and_excerpt_secrets
         "password",
         "abc123",
         "final-secret",
+        "encoded%2Fsecret",
+        "%2Fsecret",
         "final-fragment",
         "redirect-user",
         "redirect-password",

@@ -137,6 +137,102 @@ def test_legacy_message_projection_redacts_url_and_metadata_secrets() -> None:
         assert secret not in serialized
 
 
+def test_current_message_projection_preserves_only_safe_url_diagnostics() -> None:
+    from focusproof.openhands_runtime.projector import OpenHandsEventProjector
+
+    log = InMemoryEventLog()
+    projector = OpenHandsEventProjector("sess_1", uuid4(), log)
+    digest = "a" * 64
+    envelope = {
+        "schema_version": 1,
+        "message_key": "evidence:ev_url",
+        "kind": "evidence",
+        "session_id": "sess_1",
+        "payload": {
+            "evidenceId": "ev_url",
+            "evidenceType": "url",
+            "contentHash": "sha256:url",
+            "source": {
+                "scheme": "https",
+                "hostname": "example.com",
+                "port": 8443,
+                "origin": "https://example.com:8443",
+                "path_redacted": True,
+                "url_sha256": digest,
+                "unexpected": "must-be-dropped",
+            },
+        },
+    }
+    native = MessageEvent(
+        source="user",
+        llm_message=Message(
+            role="user",
+            content=[TextContent(text=json.dumps(envelope))],
+        ),
+    )
+
+    projected = projector.on_event(native)
+
+    assert projected is not None
+    assert projected.payload["source"] == {
+        "scheme": "https",
+        "hostname": "example.com",
+        "port": 8443,
+        "origin": "https://example.com:8443",
+        "path_redacted": True,
+        "url_sha256": digest,
+    }
+
+
+def test_preclosure_url_observation_projection_redacts_legacy_facts_read_only() -> None:
+    from focusproof.openhands_runtime.projector import OpenHandsEventProjector
+
+    now = datetime.now(UTC)
+    observation = VerificationObservation.from_text(
+        "legacy URL facts",
+        evidence_id="ev_old_url",
+        capability="url",
+        status="success",
+        facts={
+            "normalized_url": "https://example.com/private/path-secret",
+            "hostname": "example.com",
+            "status_code": 200,
+            "content_type": "text/plain",
+            "content_length": 10,
+            "redirect_chain": [
+                "https://redirect.example/signed/redirect-secret"
+            ],
+            "title": "path-secret",
+            "text_excerpt": "redirect-secret",
+        },
+        weak_signals=[],
+        source_refs=[
+            "ev_old_url",
+            "https://example.com/private/path-secret",
+        ],
+        verifier_version="1",
+        started_at=now,
+        completed_at=now,
+    )
+    native = ObservationEvent(
+        tool_name="focusproof_url_evidence_verification",
+        tool_call_id="call_old_url",
+        observation=observation,
+        action_id="action_old_url",
+    )
+    before = native.model_dump_json()
+    projector = OpenHandsEventProjector("sess_1", uuid4(), InMemoryEventLog())
+
+    projected = projector.on_event(native)
+
+    assert projected is not None
+    assert native.model_dump_json() == before
+    assert projected.payload["facts"]["url"]["origin"] == "https://example.com"
+    serialized = json.dumps(projected.payload, sort_keys=True)
+    assert "path-secret" not in serialized
+    assert "redirect-secret" not in serialized
+
+
 def test_action_and_observation_projection_preserves_order_and_tool_call_id() -> None:
     from focusproof.openhands_runtime.projector import OpenHandsEventProjector
 

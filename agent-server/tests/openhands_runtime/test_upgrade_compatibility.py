@@ -48,6 +48,21 @@ class UpgradeRepository:
         return self.evidence
 
 
+class UpgradeUrlRepository:
+    def __init__(self, source_url: str) -> None:
+        self.evidence = Evidence(
+            evidenceId="ev_upgrade",
+            evidenceType="url",
+            contentHash="sha256:upgrade-url",
+            sourceUrl=source_url,
+        )
+
+    def get_evidence(self, session_id: str, evidence_id: str) -> Evidence:
+        assert session_id == "sess_upgrade_url"
+        assert evidence_id == self.evidence.evidenceId
+        return self.evidence
+
+
 def _goal() -> LearningGoal:
     return LearningGoal(
         domain="general",
@@ -75,6 +90,25 @@ def _restored_llm(session_id: str) -> TestLLM:
             Message(
                 role="assistant",
                 content=[TextContent(text="Verify with the AI4A text tool")],
+                tool_calls=[verification],
+            )
+        ]
+    )
+
+
+def _restored_legacy_url_llm(session_id: str) -> TestLLM:
+    del session_id
+    verification = MessageToolCall(
+        id="call_upgrade_legacy_url",
+        name="focusproof_evidence_verification",
+        arguments=json.dumps({"evidence_id": "ev_upgrade"}),
+        origin="completion",
+    )
+    return TestLLM.from_messages(
+        [
+            Message(
+                role="assistant",
+                content=[TextContent(text="Run the compatibility verifier")],
                 tool_calls=[verification],
             )
         ]
@@ -267,3 +301,73 @@ def test_base_conversation_restores_into_ai4a_without_rewriting_history(
         assert audit_log.count(session_id) == first_audit_count
     finally:
         reopened.conversation.close()
+
+
+def test_restored_compatibility_tool_never_emits_raw_url_secrets(
+    tmp_path: Path,
+) -> None:
+    from focusproof.openhands_runtime.factory import ConversationFactory
+
+    session_id = "sess_upgrade_url"
+    conversation_id = uuid4()
+    original_ids, _ = _persist_legacy_conversation(
+        project_root=tmp_path,
+        session_id=session_id,
+        conversation_id=conversation_id,
+    )
+    source_url = (
+        "https://credential-user:credential-password@example.com:8443/"
+        "private/upgrade-secret?token=query-secret#fragment-secret"
+    )
+    handle_box: dict[str, Any] = {}
+
+    def pause_after_legacy_url(
+        callback_session_id: str,
+        callback_conversation_id: UUID,
+    ) -> Any:
+        assert callback_session_id == session_id
+        assert callback_conversation_id == conversation_id
+
+        def callback(event: Any) -> None:
+            if (
+                isinstance(event, ObservationEvent)
+                and event.tool_name == "focusproof_evidence_verification"
+                and event.id not in original_ids
+            ):
+                handle_box["handle"].conversation.pause()
+
+        return callback
+
+    restored = ConversationFactory(
+        project_root=tmp_path,
+        repository=UpgradeUrlRepository(source_url),
+        llm_factory=_restored_legacy_url_llm,
+        callback_factory=pause_after_legacy_url,
+    ).create(
+        session_id,
+        _goal(),
+        conversation_id=conversation_id,
+    )
+    handle_box["handle"] = restored
+    try:
+        cast(Any, restored.conversation).run()
+        generated = next(
+            event
+            for event in restored.conversation.state.events
+            if isinstance(event, ObservationEvent)
+            and event.tool_name == "focusproof_evidence_verification"
+            and event.id not in original_ids
+        )
+        serialized = generated.model_dump_json()
+    finally:
+        restored.conversation.close()
+
+    for secret in (
+        "credential-user",
+        "credential-password",
+        "private",
+        "upgrade-secret",
+        "query-secret",
+        "fragment-secret",
+    ):
+        assert secret not in serialized

@@ -33,11 +33,14 @@ class SessionToolAssembler:
             raise ValueError("session_id must not be empty")
         params = {"session_id": session_id}
         tools = [Tool(name=name, params=dict(params)) for name in _CONTROL_TOOL_CLASSES]
+        selected_evidence_types = None if compatibility_restore else evidence_types or None
         tools.extend(
             Tool(name=item.tool_class_name, params=dict(params))
-            for item in self._registry.select(domain, evidence_types or None)
+            for item in self._registry.select(domain, selected_evidence_types)
         )
-        if compatibility_restore:
+        if compatibility_restore and _LEGACY_VERIFIER_TOOL_CLASS not in {
+            tool.name for tool in tools
+        }:
             tools.append(Tool(name=_LEGACY_VERIFIER_TOOL_CLASS, params=dict(params)))
         return tools
 
@@ -48,9 +51,16 @@ class SessionToolAssembler:
         *,
         compatibility_restore: bool = False,
     ) -> str:
-        extra_identities = ("legacy:1",) if compatibility_restore else ()
+        selected_evidence_types = None if compatibility_restore else evidence_types or None
+        selected = self._registry.select(domain, selected_evidence_types)
+        has_legacy = any(
+            item.tool_class_name == _LEGACY_VERIFIER_TOOL_CLASS for item in selected
+        )
+        extra_identities = (
+            ("legacy:1",) if compatibility_restore and not has_legacy else ()
+        )
         return toolset_version(
-            self._registry.select(domain, evidence_types or None),
+            selected,
             extra_identities=extra_identities,
         )
 

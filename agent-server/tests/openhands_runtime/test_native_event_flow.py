@@ -103,6 +103,45 @@ def test_result_extraction_converts_legacy_observation_without_final_verdict() -
     assert "verified" not in converted[0].facts
 
 
+def test_result_extraction_redacts_preclosure_url_observation_facts() -> None:
+    from focusproof.openhands_runtime.result_extractor import _focusproof_observations
+
+    now = datetime.now(UTC)
+    observation = VerificationObservation.from_text(
+        "legacy URL facts",
+        evidence_id="ev_old_url",
+        capability="url",
+        status="success",
+        facts={
+            "normalized_url": "https://example.com/private/path-secret",
+            "redirect_chain": [
+                "https://redirect.example/signed/redirect-secret"
+            ],
+            "title": "path-secret",
+            "text_excerpt": "redirect-secret",
+        },
+        weak_signals=[],
+        source_refs=["https://example.com/private/path-secret"],
+        verifier_version="1",
+        started_at=now,
+        completed_at=now,
+    )
+    native = ObservationEvent(
+        tool_name="focusproof_url_evidence_verification",
+        tool_call_id="call_old_url",
+        observation=observation,
+        action_id="action_old_url",
+    )
+    before = native.model_dump_json()
+
+    converted = _focusproof_observations([native])
+
+    assert native.model_dump_json() == before
+    serialized = json.dumps(converted[0].model_dump(mode="json"), sort_keys=True)
+    assert "path-secret" not in serialized
+    assert "redirect-secret" not in serialized
+
+
 def test_manager_run_uses_native_action_tool_and_observation_flow(
     tmp_path: Path,
     repository: SessionRepository,

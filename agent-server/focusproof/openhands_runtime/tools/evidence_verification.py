@@ -17,6 +17,7 @@ from focusproof.openhands_runtime.tools import (
     SessionEvidenceRepository,
     read_only_annotations,
 )
+from focusproof.openhands_runtime.url_redaction import sanitize_source_refs
 
 _GENERIC_PHRASES = ("learned many things", "studied a lot", "learned a lot")
 _TX_RE = re.compile(r"^0x[a-fA-F0-9]{8,}$")
@@ -87,6 +88,7 @@ class EvidenceVerificationExecutor(
         source_refs = [evidence.evidenceId]
         if evidence.sourceUrl:
             source_refs.append(evidence.sourceUrl)
+        source_refs = sanitize_source_refs(source_refs)
         payload = {
             "evidence_id": evidence.evidenceId,
             "verified": verified,

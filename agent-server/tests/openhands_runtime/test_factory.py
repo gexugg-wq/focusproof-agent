@@ -175,6 +175,39 @@ def test_ai4a_restore_uses_legacy_compatibility_superset(tmp_path: Path) -> None
         restored.conversation.close()
 
 
+def test_restore_does_not_narrow_tools_from_persisted_default_set(
+    tmp_path: Path,
+) -> None:
+    from focusproof.openhands_runtime.factory import ConversationFactory
+
+    factory = ConversationFactory(
+        project_root=tmp_path,
+        repository=EmptyRepository(),
+        llm_factory=_test_llm,
+    )
+    initial = factory.create("sess_restore_narrow", _goal())
+    conversation_id = initial.conversation_id
+    initial.conversation.close()
+
+    restored = factory.create(
+        "sess_restore_narrow",
+        _goal(),
+        conversation_id=conversation_id,
+        evidence_types={"text"},
+    )
+    try:
+        cast(Any, restored.conversation).send_message("initialize restored tools")
+        assert set(restored.conversation.agent.tools_map) == {
+            "focusproof_evidence_verification",
+            "focusproof_learner_input",
+            "focusproof_review_draft",
+            "focusproof_text_evidence_verification",
+            "focusproof_url_evidence_verification",
+        }
+    finally:
+        restored.conversation.close()
+
+
 def test_factory_rejects_runtime_path_resolving_outside_data_dir(
     tmp_path: Path,
 ) -> None:

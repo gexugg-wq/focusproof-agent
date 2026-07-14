@@ -58,7 +58,91 @@ def safe_evidence_payload(evidence: Mapping[str, Any]) -> dict[str, object]:
     source_url = evidence.get("sourceUrl", evidence.get("source_url"))
     if payload["evidenceType"] == "url" and isinstance(source_url, str) and source_url:
         payload["source"] = redact_url(source_url)
+    elif payload["evidenceType"] == "url" and isinstance(
+        evidence.get("source"), Mapping
+    ):
+        safe_source = safe_url_metadata(evidence["source"])
+        if safe_source is not None:
+            payload["source"] = safe_source
     return payload
+
+
+def safe_url_metadata(value: Mapping[str, Any]) -> dict[str, object] | None:
+    scheme = value.get("scheme")
+    hostname = value.get("hostname")
+    port = value.get("port")
+    digest = value.get("url_sha256")
+    if (
+        scheme not in {"http", "https"}
+        or not isinstance(hostname, str)
+        or not hostname
+        or not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest.lower())
+        or isinstance(port, bool)
+        or (port is not None and not isinstance(port, int))
+        or (isinstance(port, int) and not 1 <= port <= 65535)
+    ):
+        return None
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    authority = f"{host}:{port}" if port is not None else host
+    result: dict[str, object] = {
+        "scheme": scheme,
+        "hostname": hostname,
+        "origin": f"{scheme}://{authority}",
+        "path_redacted": bool(value.get("path_redacted")),
+        "url_sha256": digest.lower(),
+    }
+    if port is not None:
+        result["port"] = port
+    return result
+
+
+def sanitize_verification_facts(
+    capability: str,
+    facts: Mapping[str, Any],
+) -> dict[str, Any]:
+    if capability != "url":
+        return dict(facts)
+
+    safe: dict[str, Any] = {}
+    source_urls: list[str] = []
+    current_url = facts.get("url")
+    if isinstance(current_url, Mapping):
+        metadata = safe_url_metadata(current_url)
+        if metadata is not None:
+            safe["url"] = metadata
+    legacy_url = facts.get("normalized_url")
+    if "url" not in safe and isinstance(legacy_url, str):
+        safe["url"] = redact_url(legacy_url)
+        source_urls.append(legacy_url)
+
+    redirects: list[dict[str, object]] = []
+    raw_redirects = facts.get("redirect_chain")
+    if isinstance(raw_redirects, list):
+        for redirect in raw_redirects:
+            if isinstance(redirect, str):
+                redirects.append(redact_url(redirect))
+                source_urls.append(redirect)
+            elif isinstance(redirect, Mapping):
+                metadata = safe_url_metadata(redirect)
+                if metadata is not None:
+                    redirects.append(metadata)
+    safe["redirect_chain"] = redirects
+
+    for key, expected_type in (
+        ("status_code", int),
+        ("content_type", str),
+        ("content_length", int),
+    ):
+        value = facts.get(key)
+        if isinstance(value, expected_type):
+            safe[key] = value
+    for key in ("title", "text_excerpt"):
+        value = facts.get(key)
+        if value is None or isinstance(value, str):
+            safe[key] = redact_url_text(value, source_urls)
+    return safe
 
 
 def redact_url_text(text: str | None, urls: Iterable[str]) -> str | None:
@@ -77,8 +161,14 @@ def redact_url_text(text: str | None, urls: Iterable[str]) -> str | None:
             for token in (segment, unquote(segment))
             if token
         )
+        for part in parsed.query.split("&"):
+            raw_key, separator, raw_value = part.partition("=")
+            tokens.update(_decoded_variants(raw_key))
+            if separator:
+                tokens.update(_decoded_variants(raw_value))
         for key, value in parse_qsl(parsed.query, keep_blank_values=True):
-            tokens.update(token for token in (key, value, unquote(key), unquote(value)) if token)
+            tokens.update(_decoded_variants(key))
+            tokens.update(_decoded_variants(value))
     for token in sorted(tokens, key=len, reverse=True):
         redacted = redacted.replace(token, "[redacted]")
     return redacted
@@ -94,8 +184,24 @@ def sanitize_source_refs(source_refs: Iterable[str]) -> list[str]:
 
 
 def _looks_like_url(value: str) -> bool:
-    parsed = urlsplit(value)
-    return parsed.scheme.lower() in {"http", "https"} and bool(parsed.hostname)
+    try:
+        parsed = urlsplit(value)
+        return parsed.scheme.lower() in {"http", "https"} and bool(parsed.hostname)
+    except ValueError:
+        return False
+
+
+def _decoded_variants(value: str) -> set[str]:
+    variants: set[str] = set()
+    current = value
+    for _ in range(3):
+        if current:
+            variants.add(current)
+        decoded = unquote(current)
+        if decoded == current:
+            break
+        current = decoded
+    return variants
 
 
 def _safe_port(parsed: SplitResult) -> int | None:

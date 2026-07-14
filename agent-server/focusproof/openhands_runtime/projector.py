@@ -26,6 +26,7 @@ from focusproof.openhands_runtime.tools.learner_input import (
 from focusproof.openhands_runtime.url_redaction import (
     safe_evidence_payload,
     sanitize_source_refs,
+    sanitize_verification_facts,
 )
 from focusproof.runtime.events import Actor, Event, EventType
 
@@ -168,6 +169,10 @@ class OpenHandsEventProjector:
                 exclude={"content", "is_error"},
             )
             payload["source_refs"] = sanitize_source_refs(observation.source_refs)
+            payload["facts"] = sanitize_verification_facts(
+                observation.capability,
+                observation.facts,
+            )
             event_type: EventType = "verification.completed"
             actor: Actor = "tool"
             related = [observation.evidence_id]
