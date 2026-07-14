@@ -8,6 +8,7 @@ from openhands.sdk.utils.redact import redact_text_secrets
 from focusproof.openhands_runtime.url_redaction import safe_evidence_payload
 
 MAX_TEXT_EVIDENCE_CHARACTERS = 4_000
+TEXT_EVIDENCE_CONTEXT_VERSION = 1
 
 
 def runtime_evidence_payload(evidence: Mapping[str, Any]) -> dict[str, object]:
@@ -27,6 +28,7 @@ def runtime_evidence_payload(evidence: Mapping[str, Any]) -> dict[str, object]:
     payload.update(
         {
             "contentTrust": "untrusted",
+            "contextSchemaVersion": TEXT_EVIDENCE_CONTEXT_VERSION,
             "textContent": redacted_text[:MAX_TEXT_EVIDENCE_CHARACTERS],
             "textTruncated": (
                 len(text) > MAX_TEXT_EVIDENCE_CHARACTERS

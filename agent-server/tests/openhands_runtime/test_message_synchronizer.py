@@ -156,6 +156,7 @@ def test_sync_sends_stable_keys_with_verified_sender_once(
         "evidenceType": "text",
         "contentHash": "sha256:test",
         "contentTrust": "untrusted",
+        "contextSchemaVersion": 1,
         "textContent": "Specific replay notes",
         "textTruncated": False,
         "originalCharacterCount": 21,
@@ -196,7 +197,8 @@ def test_native_message_without_db_marker_is_marked_without_resend(
     finally:
         handle.conversation.close()
 
-    assert result.sent_count == 2
+    assert result.sent_count == 3
+    assert "evidence-context:ev_1:v1" in keys
     assert keys.count("evidence:ev_1") == 1
     with uow_factory() as uow:
         evidence = uow.evidence.get(session_id, "ev_1")

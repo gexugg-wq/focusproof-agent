@@ -406,7 +406,7 @@ in native messages. Final independent groups:
 6 passed in 1.17s
 ```
 
-Final suite and static verification:
+AI4A.2 final suite and static verification:
 
 ```text
 .venv/bin/pytest -q -m 'not real_llm'
@@ -434,12 +434,166 @@ The warnings are the existing Starlette/httpx TestClient deprecation and Python
 3.12 SQLite datetime-adapter deprecations. No real-LLM test was run because AI0
 did not explicitly authorize it.
 
+## AI4A.3 Migration And Resource Bound Repair
+
+AI4A.3 closes the two remaining acceptance gaps without introducing a second
+Agent loop, EventLog, Conversation implementation, or tool protocol:
+
+- URL tools still execute through the OpenHands SDK `ToolDefinition`,
+  `ToolExecutor`, native Action/Observation events, Conversation cancellation,
+  and executor `interrupt()`/`close()` lifecycle. SDK 1.31.0 does not provide a
+  global hard wall-clock boundary for a blocking synchronous executor, so the
+  application owns one bounded isolation pool with four workers and four queued
+  calls. Capacity exhaustion is rejected immediately as an inconclusive tool
+  Observation; it cannot create an unbounded thread or queue.
+- Executor close and submit now have an explicit ordering boundary: an open
+  check, bounded-pool submit, and active-Future registration form one short
+  state-lock critical section. If close linearizes first, no provider is read
+  and no Future is submitted. If submit linearizes first, close signals the
+  registered operation and cancels it while still queued when possible. Close
+  never holds the state lock while waiting for network work. Already-running
+  non-cooperative library calls cannot be killed by Python threads, but their
+  number is permanently bounded by the worker count.
+- Historical OpenHands events remain immutable. When restore finds an old
+  bodyless `evidence:{id}` text message, synchronization appends exactly one
+  versioned `evidence-context:{id}:v1` native user message containing bounded,
+  redacted, explicitly untrusted text. Repeated synchronization is idempotent.
+  The context event is intentionally ignored by the FocusProof audit projector,
+  so it does not create a second product fact.
+- Full-project Mypy is restored as an acceptance gate instead of checking only
+  a production subtree.
+
+Fresh AI4A.3 verification:
+
+```text
+.venv/bin/python -m pytest agent-server/tests/openhands_runtime/test_ai4a3_resource_bounds.py agent-server/tests/openhands_runtime/test_ai4a3_evidence_context_migration.py -q
+5 passed
+
+.venv/bin/python -m pytest agent-server/tests -q -m "not real_llm"
+219 passed, 1 deselected, 8 warnings
+
+.venv/bin/ruff check agent-server
+All checks passed!
+
+.venv/bin/mypy agent-server
+Success: no issues found in 120 source files
+
+git diff --check
+exit 0
+```
+
+No database model, migration, public API, frontend, contract, `.env`, `var`, or
+OpenHands SDK source changed in AI4A.3. The six AI0 normative files remain
+outside this phase's patch and retain their existing uncommitted state.
+
+## AI4A.3.1 Lifecycle Atomicity Repair
+
+### RED Evidence And Root Causes
+
+The regression tests were run individually before their production fixes:
+
+```text
+test_executor_close_linearizes_with_submit_and_cancels_queued_fetch
+FAIL: close returned while GatePool.submit() was still paused
+
+test_closed_execution_pool_maps_to_verifier_closed_not_busy
+FAIL: expected verifier_closed, received verifier_busy
+
+test_closed_executor_after_provider_release_returns_safe_observation
+FAIL: get_repository_provider() raised RuntimeError after provider release
+
+test_completed_future_timeout_error_maps_immediately_and_safely
+FAIL: immediate task TimeoutError returned after 0.318s, exceeding the 0.1s bound
+```
+
+The lifecycle race came from submitting to the pool before acquiring the
+executor state lock and registering the Future. Provider resolution likewise
+preceded the first closed-state check. Finally, Python 3.12 exposes
+`concurrent.futures.TimeoutError` as the built-in `TimeoutError`, so the wait
+timeout handler also caught a completed task's own exception and continued
+polling until the total deadline. The real close/restore migration test passed
+on its first run; that acceptance gap was missing lifecycle coverage rather
+than a synchronizer defect.
+
+### Lifecycle State Transitions
+
+- **Open -> submitted/registered:** under `_state_lock`, recheck open, call the
+  non-blocking bounded-pool submit, and register the returned Future.
+- **Open -> closed:** under `_state_lock`, mark closed and snapshot active calls;
+  outside the lock, set each operation event and cancel its Future.
+- **Closed -> call:** return an inconclusive `verifier_closed` Observation using
+  only `action.evidence_id`; do not resolve any global provider.
+- **Submitted -> close:** a queued Future is cancelled before fetch begins; a
+  running cooperative fetch observes interruption; a running non-cooperative
+  thread remains bounded by the application-wide worker limit.
+- Pool capacity exhaustion maps only to `verifier_busy`; executor or pool
+  shutdown maps only to `verifier_closed`. Repeated close remains idempotent.
+
+### OpenHands Reuse And FocusProof Supplement
+
+OpenHands SDK 1.31.0 remains the direct owner of `Agent`, `LocalConversation`,
+native EventLog state, `ToolDefinition`, `ToolExecutor`, Action/Observation
+events, and executor `interrupt()` / `close()` calls. Evidence migration uses
+native `MessageEvent` plus `LocalConversation.send_message()` and persistence;
+it never mutates Conversation state or creates another event stream.
+
+The only FocusProof supplement is the existing bounded URL execution pool and
+its executor-local atomic bookkeeping. It is necessary because SDK 1.31.0 has
+no application-wide hard bound for synchronous blocking I/O threads or queued
+calls. It does not dispatch tools or run an Agent loop. Python cannot forcibly
+terminate a non-cooperative running thread; the pool only makes that exposure
+finite. Waiting remains interruptible in at most 10ms increments. A
+`FutureTimeoutError` continues polling only when `future.done()` is false; when
+the Future is done, the task's own TimeoutError is immediately replaced with a
+safe `network_timeout` Observation.
+
+### Persistence Migration Evidence
+
+The migration test now seeds SQLite, creates a `LocalConversation`, writes the
+old bodyless `evidence:ev_old` MessageEvent, synchronizes the versioned context,
+saves the old JSON, closes the Conversation and releases providers, then
+recreates the Conversation with the same ID and data/persistence roots. The
+restored handle reports `compatibility_restore=True`. A second synchronization
+leaves the old JSON byte-for-byte unchanged, retains exactly one
+`evidence-context:ev_old:v1` event with `contextSchemaVersion=1` and
+`contentTrust=untrusted`, and produces no second `evidence.submitted` audit
+fact.
+
+### AI4A.3.1 Exact Verification
+
+```text
+.venv/bin/python -m pytest agent-server/tests/openhands_runtime/test_ai4a3_resource_bounds.py agent-server/tests/openhands_runtime/test_ai4a3_evidence_context_migration.py -q
+9 passed in 0.62s
+
+.venv/bin/python -m pytest agent-server/tests/openhands_runtime/test_interruptible_url_deadline.py agent-server/tests/openhands_runtime/test_message_synchronizer.py agent-server/tests/openhands_runtime/test_runtime_evidence_messages.py -q
+17 passed in 1.92s
+
+.venv/bin/python -m pytest agent-server/tests -q -m "not real_llm"
+223 passed, 1 deselected, 8 warnings in 14.81s
+
+.venv/bin/ruff check agent-server
+All checks passed!
+
+.venv/bin/mypy agent-server
+Success: no issues found in 120 source files
+
+git diff --check
+exit 0
+```
+
+AI4A.3/AI4A.3.1 changes are restricted to runtime code, runtime tests, this
+research report, and the implementation plan. No database model or Alembic
+file changed. The six AI0 normative files remain unstaged with their preserved
+pre-work SHA-256 values: `baa155...`, `73dd59...`, `b814df...`, `7855c5...`,
+`6c49cd...`, and `2c87e0...` respectively.
+
 ## Remaining Limitations
 
 - Text analysis is deterministic heuristic metadata, not semantic proof.
 - A DNS or transport library call that cannot cooperate with interruption may
-  continue in its isolated daemon worker after the caller receives the hard
-  timeout; it cannot affect the result or close the shared client.
+  continue in a bounded pool worker after the caller receives the hard timeout.
+  Python cannot forcibly kill that thread, but the application-wide worker and
+  queue limits prevent unbounded resource growth.
 - URL extraction supports bounded textual metadata only; binary documents,
   OCR, ASR, video, PDF, and browser automation are deferred.
 - URL verification records bounded textual metadata and policy outcomes, but

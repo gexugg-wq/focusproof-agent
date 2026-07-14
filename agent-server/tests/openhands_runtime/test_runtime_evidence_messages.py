@@ -199,10 +199,12 @@ def test_prompt_like_text_stays_user_content_and_sdk_secrets_are_redacted(
         handle.conversation.close()
 
     assert message.source == "user"
-    assert fake_instruction in payload["textContent"]
+    text_content = payload["textContent"]
+    assert isinstance(text_content, str)
+    assert fake_instruction in text_content
     assert payload["contentTrust"] == "untrusted"
     assert api_key not in serialized
-    assert "<redacted>" in payload["textContent"]
+    assert "<redacted>" in text_content
     with uow_factory() as uow:
         stored = uow.evidence.get(session_id, "ev_text")
     assert stored is not None and stored.text_content == text
