@@ -399,21 +399,71 @@ def test_goal_copy_plus_specific_answer_is_scored_from_independent_answer() -> N
     assert not _goal_copy_warning_messages(result)
 
 
-def test_goal_copy_plus_successful_observation_uses_normal_scoring() -> None:
+def test_goal_copy_plus_answer_copying_goal_remains_weak() -> None:
     goal = "Explain how an append-only event log rebuilds application state."
-    observation = Observation(
-        toolName="focusproof_independent_output_verification",
-        status="success",
-        facts={"output_verified": True, "artifact_kind": "worked_example"},
-        sourceRefs=["ev_copy_with_observation", "artifact:worked-example"],
+    result = score_learning_session(
+        general_goal("Understand event replay", goal),
+        [text_evidence("ev_copy_with_copied_answer", goal)],
+        ["EXPLAIN how an append only event log rebuilds application state!"],
+    )
+
+    assert result.score < 60
+    assert result.status == "WeakEvidence"
+    assert _goal_copy_warning_messages(result)
+
+
+def test_goal_copy_plus_long_unrelated_answer_remains_weak() -> None:
+    goal = "Explain how an append-only event log rebuilds application state."
+    unrelated_answer = (
+        "French impressionist painters often used broken brushwork and outdoor light to show "
+        "how colors change across a landscape during different parts of the day."
     )
     result = score_learning_session(
         general_goal("Understand event replay", goal),
-        [text_evidence("ev_copy_with_observation", goal)],
+        [text_evidence("ev_copy_with_unrelated_answer", goal)],
+        [unrelated_answer],
+    )
+
+    assert result.score < 60
+    assert result.status == "WeakEvidence"
+    assert _goal_copy_warning_messages(result)
+
+
+def test_goal_copy_plus_ordinary_text_verification_remains_weak() -> None:
+    goal = "Explain how an append-only event log rebuilds application state."
+    observation = Observation(
+        toolName="focusproof_text_evidence_verification",
+        status="success",
+        facts={"has_text": True, "word_count": 10, "content_hash": "sha256:copy"},
+        sourceRefs=["ev_copy_with_text_check", "sha256:copy"],
+    )
+    result = score_learning_session(
+        general_goal("Understand event replay", goal),
+        [text_evidence("ev_copy_with_text_check", goal)],
         [],
         [observation],
     )
 
-    assert result.score >= 60
-    assert result.status == "LikelyLearning"
-    assert not _goal_copy_warning_messages(result)
+    assert result.score < 60
+    assert result.status == "WeakEvidence"
+    assert _goal_copy_warning_messages(result)
+
+
+def test_goal_copy_plus_unrelated_success_observation_remains_weak() -> None:
+    goal = "Explain how an append-only event log rebuilds application state."
+    observation = Observation(
+        toolName="focusproof_url_evidence_verification",
+        status="success",
+        facts={"status_code": 200, "title": "Unrelated reachable page"},
+        sourceRefs=["ev_not_submitted", "https://example.com/unrelated"],
+    )
+    result = score_learning_session(
+        general_goal("Understand event replay", goal),
+        [text_evidence("ev_copy_with_unrelated_observation", goal)],
+        [],
+        [observation],
+    )
+
+    assert result.score < 60
+    assert result.status == "WeakEvidence"
+    assert _goal_copy_warning_messages(result)

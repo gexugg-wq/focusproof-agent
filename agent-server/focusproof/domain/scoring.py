@@ -126,6 +126,30 @@ def _restates_goal_without_new_information(goal: LearningGoal, text: str) -> boo
     )
 
 
+def _has_novel_information(candidate: str, source: str) -> bool:
+    candidate_units = _copy_comparison_units(candidate)
+    source_units = _copy_comparison_units(source)
+    if not candidate_units:
+        return False
+    shared_count = sum(
+        (Counter(candidate_units) & Counter(source_units)).values()
+    )
+    novelty = (len(candidate_units) - shared_count) / len(candidate_units)
+    return novelty > _NEAR_COPY_MAX_EVIDENCE_NOVELTY
+
+
+def _has_independent_goal_aligned_answer(goal: LearningGoal, answer: str) -> bool:
+    if not _has_specific_answer(answer):
+        return False
+    if _restates_goal_without_new_information(goal, answer):
+        return False
+    if not _has_novel_information(answer, f"{goal.title} {goal.goal}"):
+        return False
+    goal_terms = _meaningful_terms(f"{goal.title} {goal.goal}")
+    answer_terms = _meaningful_terms(answer)
+    return bool(goal_terms & answer_terms)
+
+
 def _dimensions(score: int, understanding: int) -> dict[str, int]:
     return {
         "goalClarity": min(15, max(5, score // 8)),
@@ -160,6 +184,7 @@ def score_learning_session(
     answer_text = " ".join(answers)
     first_id = evidence[0].evidenceId
     has_specific_answer = _has_specific_answer(answer_text)
+    has_independent_answer = _has_independent_goal_aligned_answer(goal, answer_text)
     has_successful_verification = any(
         observation.status == "success" for observation in observations
     )
@@ -177,8 +202,7 @@ def score_learning_session(
     if (
         copied_text_items
         and not has_independent_specific_text
-        and not has_specific_answer
-        and not has_successful_verification
+        and not has_independent_answer
     ):
         findings.append(
             Finding(
