@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Annotated, Any, cast
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -12,7 +14,8 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import Engine
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from focusproof.api.auth import VerifiedIdentity, get_verified_identity
 from focusproof.api.models import (
@@ -57,12 +60,78 @@ from focusproof.runtime.evidence import Evidence, LearningGoal, hash_evidence_co
 from focusproof.runtime.view import AgentView, SessionView, ToolDescription
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+MAX_REQUEST_BODY_BYTES = 262_144
 
 
 class ServiceUnavailableError(RuntimeError):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+class RequestBodyLimitMiddleware:
+    def __init__(self, app: ASGIApp, *, max_body_bytes: int) -> None:
+        self._app = app
+        self._max_body_bytes = max_body_bytes
+
+    async def __call__(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        if scope["type"] != "http" or scope.get("method") not in {
+            "POST",
+            "PUT",
+            "PATCH",
+        }:
+            await self._app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers", []))
+        content_length = headers.get(b"content-length")
+        if content_length is not None:
+            try:
+                declared_length = int(content_length)
+            except ValueError:
+                declared_length = 0
+            if declared_length > self._max_body_bytes:
+                await self._reject(scope, receive, send)
+                return
+
+        messages: list[Message] = []
+        received_bytes = 0
+        while True:
+            message = await receive()
+            messages.append(message)
+            if message["type"] != "http.request":
+                break
+            received_bytes += len(message.get("body", b""))
+            if received_bytes > self._max_body_bytes:
+                await self._reject(scope, receive, send)
+                return
+            if not message.get("more_body", False):
+                break
+
+        message_index = 0
+
+        async def replay_receive() -> Message:
+            nonlocal message_index
+            if message_index < len(messages):
+                message = messages[message_index]
+                message_index += 1
+                return message
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        await self._app(scope, replay_receive, send)
+
+    @staticmethod
+    async def _reject(scope: Scope, receive: Receive, send: Send) -> None:
+        response = JSONResponse(
+            status_code=413,
+            content={"code": "request_too_large", "retryable": False},
+        )
+        await response(scope, receive, send)
 
 
 def create_app(
@@ -135,6 +204,10 @@ def create_app(
                 engine.dispose()
 
     application = FastAPI(title="FocusProof Agent Server", lifespan=lifespan)
+    application.add_middleware(
+        RequestBodyLimitMiddleware,
+        max_body_bytes=MAX_REQUEST_BODY_BYTES,
+    )
     _install_exception_handlers(application)
     _install_routes(application, configured_runtime_mode)
     return application
@@ -268,7 +341,7 @@ def _install_routes(
         manager: Annotated[ConversationManager, Depends(get_conversation_manager)],
     ) -> dict[str, str | bool]:
         _owned_session(uow_factory, session_id, identity.verified_user_id)
-        evidence_id = f"ev_{uuid4().hex}"
+        evidence_id = _evidence_id_for_request(session_id, request)
         record = StoredEvidence(
             evidence_id=evidence_id,
             session_id=session_id,
@@ -280,9 +353,15 @@ def _install_routes(
             conversation_synced_at=None,
             created_at=datetime.now(UTC),
         )
-        with uow_factory() as uow:
-            uow.evidence.add(record)
-            uow.commit()
+        try:
+            with uow_factory() as uow:
+                if uow.evidence.get(session_id, evidence_id) is None:
+                    uow.evidence.add(record)
+                    uow.commit()
+        except IntegrityError:
+            with uow_factory() as uow:
+                if uow.evidence.get(session_id, evidence_id) is None:
+                    raise
         sync_pending = False
         try:
             manager.send_evidence(session_id, identity.verified_user_id)
@@ -525,6 +604,26 @@ def _runtime_evidence(stored: StoredEvidence) -> Evidence:
         sourceUrl=stored.source_url,
         metadata=stored.metadata,
     )
+
+
+def _evidence_id_for_request(
+    session_id: str,
+    request: SubmitEvidenceRequest,
+) -> str:
+    identity = json.dumps(
+        {
+            "session_id": session_id,
+            "evidence_type": request.evidenceType,
+            "text_content": request.textContent,
+            "source_url": request.sourceUrl,
+            "metadata": request.metadata,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return f"ev_{sha256(identity.encode('utf-8')).hexdigest()[:48]}"
 
 
 def _available_tools() -> list[ToolDescription]:

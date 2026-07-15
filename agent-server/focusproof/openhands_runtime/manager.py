@@ -10,6 +10,7 @@ from openhands.sdk.conversation.types import ConversationCallbackType
 from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
 from openhands.sdk.event.base import Event as OpenHandsEvent
 
+from focusproof.domain.review import ReviewResult
 from focusproof.openhands_runtime.evidence_messages import runtime_evidence_payload
 from focusproof.openhands_runtime.factory import ConversationFactory, LLMFactory
 from focusproof.openhands_runtime.handle import ConversationHandle, RuntimeReviewResult
@@ -135,6 +136,28 @@ class ConversationManager:
                 if verified_user_id is None:
                     raise ValueError("verified_user_id is required")
                 handle = self._get_or_restore_unlocked(session_id, verified_user_id)
+                session = self._load_session(session_id)
+                if session.status == "reviewed" and session.review_result is not None:
+                    native_events = list(handle.conversation.state.events)
+                    return RuntimeReviewResult(
+                        sessionId=session_id,
+                        conversationMode=handle.runtime_mode,
+                        usedOpenHandsConversation=True,
+                        conversationId=str(handle.conversation_id),
+                        nativeEventCount=len(native_events),
+                        messageEventsCount=sum(
+                            isinstance(event, MessageEvent) for event in native_events
+                        ),
+                        actionEventsCount=sum(
+                            isinstance(event, ActionEvent) for event in native_events
+                        ),
+                        observationEventsCount=sum(
+                            isinstance(event, ObservationEvent) for event in native_events
+                        ),
+                        projectedEventsCount=len(self._audit_log.list(session_id)),
+                        reviewStatus="completed",
+                        reviewResult=ReviewResult.model_validate(session.review_result),
+                    )
                 goal, evidence, answers = self._load_scoring_facts(session_id)
             else:
                 handle = self.get(session_id)

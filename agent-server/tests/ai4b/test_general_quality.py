@@ -11,12 +11,13 @@ from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
 from openhands.sdk.llm import Message, MessageToolCall, TextContent
 from openhands.sdk.testing import TestLLM
 
+from focusproof.api.app import _evidence_id_for_request
+from focusproof.api.models import SubmitEvidenceRequest
 from focusproof.domain.scoring import score_learning_session
 from focusproof.runtime.evidence import Evidence, LearningGoal
 from focusproof.runtime.observations import Observation
 
-TEXT_EVIDENCE_ID = "ev_22222222222222222222222222222222"
-URL_EVIDENCE_ID = "ev_33333333333333333333333333333333"
+FIXED_SESSION_ID = "sess_11111111111111111111111111111111"
 
 
 @dataclass(frozen=True)
@@ -89,58 +90,61 @@ class _FixedUuid:
         self.hex = value
 
 
-def _scripted_follow_up_llm(_: str) -> TestLLM:
-    verify = MessageToolCall(
-        id="call_ai4b_verify",
-        name="focusproof_text_evidence_verification",
-        arguments=json.dumps({"evidence_id": TEXT_EVIDENCE_ID}),
-        origin="completion",
-    )
-    question = MessageToolCall(
-        id="call_ai4b_question",
-        name="focusproof_learner_input",
-        arguments=json.dumps(
-            {
-                "question": "Explain the central idea in your own words and give one reason.",
-                "reason": "A focused explanation is needed before the final review.",
-                "requested_evidence_type": "text",
-            }
-        ),
-        origin="completion",
-    )
-    draft = MessageToolCall(
-        id="call_ai4b_draft",
-        name="focusproof_review_draft",
-        arguments=json.dumps(
-            {
-                "credibility_findings": ["Repository-backed evidence was inspected."],
-                "understanding_findings": ["The learner supplied a concrete explanation."],
-                "contradictions": [],
-                "recommended_next_step": "Practice one related example.",
-                "confidence": 0.72,
-            }
-        ),
-        origin="completion",
-    )
-    return TestLLM.from_messages(
-        [
-            Message(
-                role="assistant",
-                content=[TextContent(text="Inspect the text evidence")],
-                tool_calls=[verify],
+def _scripted_follow_up_llm(evidence_id: str) -> Callable[[str], TestLLM]:
+    def factory(_: str) -> TestLLM:
+        verify = MessageToolCall(
+            id="call_ai4b_verify",
+            name="focusproof_text_evidence_verification",
+            arguments=json.dumps({"evidence_id": evidence_id}),
+            origin="completion",
+        )
+        question = MessageToolCall(
+            id="call_ai4b_question",
+            name="focusproof_learner_input",
+            arguments=json.dumps(
+                {
+                    "question": "Explain the central idea in your own words and give one reason.",
+                    "reason": "A focused explanation is needed before the final review.",
+                    "requested_evidence_type": "text",
+                }
             ),
-            Message(
-                role="assistant",
-                content=[TextContent(text="Ask one focused question")],
-                tool_calls=[question],
+            origin="completion",
+        )
+        draft = MessageToolCall(
+            id="call_ai4b_draft",
+            name="focusproof_review_draft",
+            arguments=json.dumps(
+                {
+                    "credibility_findings": ["Repository-backed evidence was inspected."],
+                    "understanding_findings": ["The learner supplied a concrete explanation."],
+                    "contradictions": [],
+                    "recommended_next_step": "Practice one related example.",
+                    "confidence": 0.72,
+                }
             ),
-            Message(
-                role="assistant",
-                content=[TextContent(text="Submit the final review draft")],
-                tool_calls=[draft],
-            ),
-        ]
-    )
+            origin="completion",
+        )
+        return TestLLM.from_messages(
+            [
+                Message(
+                    role="assistant",
+                    content=[TextContent(text="Inspect the text evidence")],
+                    tool_calls=[verify],
+                ),
+                Message(
+                    role="assistant",
+                    content=[TextContent(text="Ask one focused question")],
+                    tool_calls=[question],
+                ),
+                Message(
+                    role="assistant",
+                    content=[TextContent(text="Submit the final review draft")],
+                    tool_calls=[draft],
+                ),
+            ]
+        )
+
+    return factory
 
 
 def _create_session(client: TestClient, case: GeneralDomainCase) -> str:
@@ -167,30 +171,39 @@ def test_general_domain_uses_real_fastapi_and_native_openhands_flow(
     uuid_values = iter(
         [
             _FixedUuid("1" * 32),
-            _FixedUuid("2" * 32),
-            _FixedUuid("3" * 32),
         ]
     )
     monkeypatch.setattr("focusproof.api.app.uuid4", lambda: next(uuid_values))
 
-    with ai4b_app_factory(_scripted_follow_up_llm) as running:
+    text_payload = {"evidenceType": "text", "textContent": case.text}
+    url_payload = {
+        "evidenceType": "url",
+        "sourceUrl": f"https://example.com/{case.domain}",
+        "textContent": "This source supports the explanation recorded in my notes.",
+    }
+    expected_text_id = _evidence_id_for_request(
+        FIXED_SESSION_ID,
+        SubmitEvidenceRequest.model_validate(text_payload),
+    )
+    expected_url_id = _evidence_id_for_request(
+        FIXED_SESSION_ID,
+        SubmitEvidenceRequest.model_validate(url_payload),
+    )
+
+    with ai4b_app_factory(_scripted_follow_up_llm(expected_text_id)) as running:
         session_id = _create_session(running.client, case)
         text_response = running.client.post(
             f"/sessions/{session_id}/evidence",
-            json={"evidenceType": "text", "textContent": case.text},
+            json=text_payload,
         )
         url_response = running.client.post(
             f"/sessions/{session_id}/evidence",
-            json={
-                "evidenceType": "url",
-                "sourceUrl": f"https://example.com/{case.domain}",
-                "textContent": "This source supports the explanation recorded in my notes.",
-            },
+            json=url_payload,
         )
         assert text_response.status_code == 200
-        assert text_response.json()["evidenceId"] == TEXT_EVIDENCE_ID
+        assert text_response.json()["evidenceId"] == expected_text_id
         assert url_response.status_code == 200
-        assert url_response.json()["evidenceId"] == URL_EVIDENCE_ID
+        assert url_response.json()["evidenceId"] == expected_url_id
 
         first_review = running.client.post(f"/sessions/{session_id}/review")
         assert first_review.status_code == 200
