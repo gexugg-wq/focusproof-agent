@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv6Address, ip_address
@@ -8,6 +9,11 @@ from urllib.parse import urlsplit, urlunsplit
 
 Address = IPv4Address | IPv6Address
 Resolver = Callable[[str], tuple[Address, ...]]
+
+_LEGACY_IPV4_RE = re.compile(
+    r"^(?:0[xX][0-9A-Fa-f]+|[0-9]+)"
+    r"(?:\.(?:0[xX][0-9A-Fa-f]+|[0-9]+)){0,3}$"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,9 +64,8 @@ class UrlSafetyPolicy:
         if hostname == "localhost" or hostname.endswith(".localhost"):
             raise UrlPolicyError("url_host_blocked", "The URL hostname is blocked.")
 
-        try:
-            literal = ip_address(hostname)
-        except ValueError:
+        literal = _parse_ip_literal(hostname)
+        if literal is None:
             try:
                 addresses = self._resolver(hostname)
             except UrlPolicyError:
@@ -98,3 +103,15 @@ def _is_blocked(address: Address) -> bool:
             address.is_reserved,
         )
     )
+
+
+def _parse_ip_literal(hostname: str) -> Address | None:
+    try:
+        return ip_address(hostname)
+    except ValueError:
+        if not _LEGACY_IPV4_RE.fullmatch(hostname):
+            return None
+    try:
+        return IPv4Address(socket.inet_aton(hostname))
+    except OSError as exc:
+        raise UrlPolicyError("url_invalid", "The URL is invalid.") from exc

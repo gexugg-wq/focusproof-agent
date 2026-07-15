@@ -174,6 +174,41 @@ def test_url_executor_maps_binary_content_to_unsupported() -> None:
     assert result.error_code == "content_type_unsupported"
 
 
+def test_url_failure_observations_exclude_sensitive_url_and_exception_details() -> None:
+    from focusproof.openhands_runtime.tools.url_evidence import (
+        UrlEvidenceVerificationExecutor,
+    )
+
+    sensitive_url = (
+        "https://user:password@example.com/private/path"
+        "?token=query-secret#private-fragment"
+    )
+    errors = [
+        UrlPolicyError("url_credentials_blocked", "URLs with credentials are not allowed."),
+        UrlFetchError("network_unavailable", "The URL could not be retrieved."),
+    ]
+
+    for error in errors:
+        result = UrlEvidenceVerificationExecutor(
+            RecordingRepository(evidence(source_url=sensitive_url)),
+            "sess_1",
+            FakeFetcher(error=error),
+        )(EvidenceReferenceAction(evidence_id="ev_url"))
+
+        serialized = result.model_dump_json()
+        for forbidden in (
+            sensitive_url,
+            "user",
+            "password",
+            "private/path",
+            "query-secret",
+            "private-fragment",
+            "Traceback",
+            "httpx",
+        ):
+            assert forbidden not in serialized
+
+
 def test_url_observation_redacts_query_secrets_from_facts_and_sources() -> None:
     from focusproof.openhands_runtime.tools.url_evidence import (
         UrlEvidenceVerificationExecutor,

@@ -4,7 +4,7 @@ import React from "react";
 import { Activity, BookOpen } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { focusProofApi, isApiError } from "@/lib/api/client";
+import { focusProofApi, getSafeErrorMessage, isApiError } from "@/lib/api/client";
 import type { SubmitEvidenceRequest } from "@/lib/api/contracts";
 import { BuildLog } from "@/features/build-log/BuildLog";
 import { EvidencePanel } from "@/features/evidence/EvidencePanel";
@@ -60,7 +60,14 @@ export function SessionWorkspace({ sessionId }: { sessionId: string }) {
         <EvidencePanel sessionId={sessionId} domain={session.state.goal.domain} walletAddress={walletAddress} onSubmitEvidence={(payload) => evidence.mutateAsync(payload)} />
         <ReviewPanel session={session} onRequestReview={() => review.mutateAsync()} onSubmitAnswer={(input) => answer.mutateAsync(input)} />
       </div>
-      <div className="h-fit"><BuildLog events={eventsQuery.data?.events ?? []} /></div>
+      <div className="grid h-fit gap-2">
+        {eventsQuery.error ? (
+          <p className="text-sm text-red-700" role="alert">
+            {getSafeErrorMessage(eventsQuery.error)}
+          </p>
+        ) : null}
+        <BuildLog events={eventsQuery.data?.events ?? []} />
+      </div>
     </main>
   );
 }

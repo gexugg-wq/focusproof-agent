@@ -41,10 +41,19 @@ class FakeClock:
         "file:///etc/passwd",
         "ftp://example.com/file",
         "http://localhost/admin",
+        "https://localhost./admin",
+        "https://sub.localhost./admin",
         "http://127.0.0.1/",
+        "https://127.1/",
+        "https://2130706433/",
+        "https://0x7f000001/",
+        "https://0177.0.0.1/",
         "http://[::1]/",
+        "https://[::ffff:127.0.0.1]/",
         "http://10.0.0.1/",
         "http://169.254.169.254/latest/meta-data/",
+        "https://169.254.170.2/v2/credentials",
+        "https://[fd00:ec2::254]/latest/meta-data/",
         "http://[fe80::1]/",
         "https://user:secret@example.com/",
     ],
@@ -105,6 +114,39 @@ def test_fetcher_revalidates_redirect_target_before_request() -> None:
             fetcher.fetch("https://example.com/start")
     finally:
         client.close()
+    assert requested == ["https://93.184.216.34/start"]
+
+
+def test_fetcher_blocks_redirect_hostname_that_resolves_private_before_request() -> None:
+    from focusproof.openhands_runtime.tools.url_fetcher import BoundedUrlFetcher
+
+    requested: list[str] = []
+
+    def resolver(hostname: str) -> tuple[Address, ...]:
+        if hostname == "example.com":
+            return (ip_address("93.184.216.34"),)
+        assert hostname == "private.example"
+        return (ip_address("10.0.0.8"),)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        return httpx.Response(
+            302,
+            headers={"location": "https://private.example/internal"},
+        )
+
+    client = client_for(httpx.MockTransport(handler))
+    try:
+        fetcher = BoundedUrlFetcher(
+            policy=UrlSafetyPolicy(allow_http=False, resolver=resolver),
+            client=client,
+            total_timeout_seconds=15.0,
+        )
+        with pytest.raises(UrlPolicyError, match="blocked"):
+            fetcher.fetch("https://example.com/start")
+    finally:
+        client.close()
+
     assert requested == ["https://93.184.216.34/start"]
 
 
@@ -212,6 +254,46 @@ def test_fetcher_pins_connection_to_policy_validated_address() -> None:
     assert requests[0].url.host == "93.184.216.34"
     assert requests[0].headers["host"] == "example.com"
     assert requests[0].extensions["sni_hostname"] == "example.com"
+
+
+def test_fetcher_dns_rebinding_cannot_change_the_pinned_request_address() -> None:
+    from focusproof.openhands_runtime.tools.url_fetcher import BoundedUrlFetcher
+
+    resolver_results = iter(
+        [
+            (ip_address("93.184.216.34"),),
+            (ip_address("127.0.0.1"),),
+        ]
+    )
+    resolver_calls: list[str] = []
+    requests: list[httpx.Request] = []
+
+    def rebinding_resolver(hostname: str) -> tuple[Address, ...]:
+        resolver_calls.append(hostname)
+        return next(resolver_results)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/plain"},
+            content=b"safe",
+        )
+
+    client = client_for(httpx.MockTransport(handler))
+    try:
+        BoundedUrlFetcher(
+            policy=UrlSafetyPolicy(allow_http=False, resolver=rebinding_resolver),
+            client=client,
+            total_timeout_seconds=15.0,
+        ).fetch("https://rebind.example/guide")
+    finally:
+        client.close()
+
+    assert resolver_calls == ["rebind.example"]
+    assert len(requests) == 1
+    assert requests[0].url.host == "93.184.216.34"
+    assert requests[0].headers["host"] == "rebind.example"
 
 
 def test_fetcher_disables_connection_and_cookie_reuse_for_pinned_requests() -> None:
