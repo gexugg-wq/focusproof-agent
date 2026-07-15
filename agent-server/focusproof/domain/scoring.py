@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import unicodedata
+from collections import Counter
 
 from focusproof.domain.review import Finding, ReviewResult, ReviewStatus
 from focusproof.runtime.evidence import Evidence, LearningGoal
@@ -26,6 +28,9 @@ _GOAL_STOP_WORDS = {
     "using",
     "with",
 }
+_NEAR_COPY_MIN_GOAL_COVERAGE = 0.8
+_NEAR_COPY_MAX_EVIDENCE_NOVELTY = 0.2
+_NEAR_COPY_MAX_GOAL_OMISSION = 0.2
 
 
 def _text(evidence: Evidence) -> str:
@@ -62,6 +67,65 @@ def _meaningful_terms(text: str) -> set[str]:
     }
 
 
+def _normalized_copy_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    return "".join(character for character in normalized if character.isalnum())
+
+
+def _copy_comparison_units(text: str) -> list[str]:
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    units: list[str] = []
+    word: list[str] = []
+
+    def flush_word() -> None:
+        if word:
+            units.append("".join(word))
+            word.clear()
+
+    for character in normalized:
+        if _CJK_CHARACTER_RE.fullmatch(character):
+            flush_word()
+            units.append(character)
+        elif character.isalnum():
+            word.append(character)
+        else:
+            flush_word()
+    flush_word()
+    return units
+
+
+def _is_near_copy(candidate: str, source: str) -> bool:
+    normalized_candidate = _normalized_copy_text(candidate)
+    normalized_source = _normalized_copy_text(source)
+    if not normalized_candidate or not normalized_source:
+        return False
+    if normalized_candidate == normalized_source:
+        return True
+
+    candidate_units = _copy_comparison_units(candidate)
+    source_units = _copy_comparison_units(source)
+    if not candidate_units or not source_units:
+        return False
+    candidate_counts = Counter(candidate_units)
+    source_counts = Counter(source_units)
+    shared_count = sum((candidate_counts & source_counts).values())
+    goal_coverage = shared_count / len(source_units)
+    evidence_novelty = (len(candidate_units) - shared_count) / len(candidate_units)
+    goal_omission = (len(source_units) - shared_count) / len(source_units)
+    return (
+        goal_coverage >= _NEAR_COPY_MIN_GOAL_COVERAGE
+        and evidence_novelty <= _NEAR_COPY_MAX_EVIDENCE_NOVELTY
+        and goal_omission <= _NEAR_COPY_MAX_GOAL_OMISSION
+    )
+
+
+def _restates_goal_without_new_information(goal: LearningGoal, text: str) -> bool:
+    return _is_near_copy(text, goal.goal) or _is_near_copy(
+        text,
+        f"{goal.title} {goal.goal}",
+    )
+
+
 def _dimensions(score: int, understanding: int) -> dict[str, int]:
     return {
         "goalClarity": min(15, max(5, score // 8)),
@@ -95,16 +159,59 @@ def score_learning_session(
     joined_text = " ".join(_text(item) for item in evidence)
     answer_text = " ".join(answers)
     first_id = evidence[0].evidenceId
-    has_specific_text = any(item.evidenceType == "text" and not _is_generic(_text(item)) for item in evidence)
     has_specific_answer = _has_specific_answer(answer_text)
-    goal_terms = _meaningful_terms(f"{goal.title} {goal.goal}")
-    submitted_terms = _meaningful_terms(f"{joined_text} {answer_text}")
-    has_goal_alignment = bool(goal_terms & submitted_terms)
     has_successful_verification = any(
         observation.status == "success" for observation in observations
     )
-
     text_items = [item for item in evidence if item.evidenceType == "text"]
+    copied_text_items = [
+        item
+        for item in text_items
+        if _restates_goal_without_new_information(goal, _text(item))
+    ]
+    copied_evidence_ids = {item.evidenceId for item in copied_text_items}
+    has_independent_specific_text = any(
+        item.evidenceId not in copied_evidence_ids and not _is_generic(_text(item))
+        for item in text_items
+    )
+    if (
+        copied_text_items
+        and not has_independent_specific_text
+        and not has_specific_answer
+        and not has_successful_verification
+    ):
+        findings.append(
+            Finding(
+                severity="warning",
+                message=(
+                    "The submitted text restates the learning goal but does not provide "
+                    "an independent explanation, example, reflection, or output."
+                ),
+                evidenceIds=[item.evidenceId for item in copied_text_items],
+            )
+        )
+        return ReviewResult(
+            status="WeakEvidence",
+            score=35,
+            confidence=0.45,
+            dimensions=_dimensions(35, 4),
+            findings=findings,
+            summary=(
+                "Restating the learning goal alone is not independent evidence of learning."
+            ),
+            nextStep=(
+                "Add a concrete explanation, worked example, reflection, or independent output."
+            ),
+        )
+
+    has_specific_text = any(
+        item.evidenceType == "text" and not _is_generic(_text(item))
+        for item in evidence
+    )
+    goal_terms = _meaningful_terms(f"{goal.title} {goal.goal}")
+    submitted_terms = _meaningful_terms(f"{joined_text} {answer_text}")
+    has_goal_alignment = bool(goal_terms & submitted_terms)
+
     if (
         text_items
         and all(_is_generic(_text(item)) for item in text_items)

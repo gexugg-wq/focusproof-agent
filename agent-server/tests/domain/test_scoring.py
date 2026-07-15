@@ -257,3 +257,163 @@ def test_substantive_cjk_text_is_not_treated_as_generic() -> None:
 
     assert result.score >= 60
     assert result.status == "LikelyLearning"
+
+
+def _goal_copy_warning_messages(result: object) -> list[str]:
+    findings = getattr(result, "findings")
+    return [
+        finding.message
+        for finding in findings
+        if finding.severity == "warning" and "restates the learning goal" in finding.message
+    ]
+
+
+def test_exact_english_goal_copy_is_weak_evidence() -> None:
+    copied = "Explain how an append-only event log rebuilds application state."
+    result = score_learning_session(
+        general_goal("Understand event replay", copied),
+        [text_evidence("ev_copy_en", copied)],
+        [],
+    )
+
+    assert result.score < 60
+    assert result.status == "WeakEvidence"
+    assert _goal_copy_warning_messages(result)
+    assert result.findings[0].evidenceIds == ["ev_copy_en"]
+
+
+def test_goal_copy_normalizes_unicode_case_whitespace_and_punctuation() -> None:
+    goal = "Explain how an append-only event log rebuilds application state."
+    formatted_copy = (
+        "  ＥＸＰＬＡＩＮ, HOW   an APPEND—ONLY event log\n"
+        "rebuilds application state！！！  "
+    )
+    result = score_learning_session(
+        general_goal("Understand event replay", goal),
+        [text_evidence("ev_copy_normalized", formatted_copy)],
+        [],
+    )
+
+    assert result.score < 60
+    assert result.status == "WeakEvidence"
+    assert _goal_copy_warning_messages(result)
+
+
+def test_exact_chinese_goal_copy_is_weak_evidence() -> None:
+    copied = "解释为什么实验需要对照组，并说明如何排除其他变量。"
+    result = score_learning_session(
+        general_goal("理解实验对照", copied),
+        [text_evidence("ev_copy_zh", copied)],
+        [],
+    )
+
+    assert result.score < 60
+    assert result.status == "WeakEvidence"
+    assert _goal_copy_warning_messages(result)
+
+
+def test_light_goal_rewording_without_new_information_is_weak_evidence() -> None:
+    goal = "Explain how an append-only event log rebuilds application state."
+    rewording = "Describe how an append-only event log rebuilds application state."
+    result = score_learning_session(
+        general_goal("Understand event replay", goal),
+        [text_evidence("ev_copy_reworded", rewording)],
+        [],
+    )
+
+    assert result.score < 60
+    assert result.status == "WeakEvidence"
+    assert _goal_copy_warning_messages(result)
+
+
+def test_shared_domain_terms_with_independent_explanation_are_not_goal_copy() -> None:
+    goal = "Explain how an append-only event log rebuilds application state."
+    explanation = (
+        "Replay starts from an empty reducer state and applies each stored event in order. "
+        "A deposit increments the balance while a later withdrawal decrements it, so the "
+        "same final view can be reproduced without overwriting history."
+    )
+    result = score_learning_session(
+        general_goal("Understand event replay", goal),
+        [text_evidence("ev_independent_explanation", explanation)],
+        [],
+    )
+
+    assert result.score >= 60
+    assert result.status == "LikelyLearning"
+    assert not _goal_copy_warning_messages(result)
+
+
+def test_quoted_goal_followed_by_concrete_example_is_not_goal_copy() -> None:
+    goal = "Explain how an append-only event log rebuilds application state."
+    evidence = (
+        f"{goal} For example, replay begins with a zero balance, then a deposit event adds "
+        "ten and a withdrawal event subtracts three, producing the same final balance of seven."
+    )
+    result = score_learning_session(
+        general_goal("Understand event replay", goal),
+        [text_evidence("ev_goal_plus_example", evidence)],
+        [],
+    )
+
+    assert result.score >= 60
+    assert result.status == "LikelyLearning"
+    assert not _goal_copy_warning_messages(result)
+
+
+def test_goal_copy_plus_independent_strong_evidence_is_not_globally_weakened() -> None:
+    goal = "Explain how an append-only event log rebuilds application state."
+    independent = (
+        "I rebuilt a balance by reducing ordered deposit and withdrawal events from zero. "
+        "Deleting the cached view did not lose the result because replay recomputed it from "
+        "the retained history."
+    )
+    result = score_learning_session(
+        general_goal("Understand event replay", goal),
+        [
+            text_evidence("ev_copy_with_peer", goal),
+            text_evidence("ev_independent_peer", independent),
+        ],
+        [],
+    )
+
+    assert result.score >= 60
+    assert result.status == "LikelyLearning"
+    assert not _goal_copy_warning_messages(result)
+
+
+def test_goal_copy_plus_specific_answer_is_scored_from_independent_answer() -> None:
+    goal = "Explain how an append-only event log rebuilds application state."
+    answer = (
+        "Starting with an empty balance, replay applies each deposit and withdrawal once in "
+        "sequence; retaining those events lets the same view be rebuilt after a cache loss."
+    )
+    result = score_learning_session(
+        general_goal("Understand event replay", goal),
+        [text_evidence("ev_copy_with_answer", goal)],
+        [answer],
+    )
+
+    assert result.score >= 60
+    assert result.status == "LikelyLearning"
+    assert not _goal_copy_warning_messages(result)
+
+
+def test_goal_copy_plus_successful_observation_uses_normal_scoring() -> None:
+    goal = "Explain how an append-only event log rebuilds application state."
+    observation = Observation(
+        toolName="focusproof_independent_output_verification",
+        status="success",
+        facts={"output_verified": True, "artifact_kind": "worked_example"},
+        sourceRefs=["ev_copy_with_observation", "artifact:worked-example"],
+    )
+    result = score_learning_session(
+        general_goal("Understand event replay", goal),
+        [text_evidence("ev_copy_with_observation", goal)],
+        [],
+        [observation],
+    )
+
+    assert result.score >= 60
+    assert result.status == "LikelyLearning"
+    assert not _goal_copy_warning_messages(result)
