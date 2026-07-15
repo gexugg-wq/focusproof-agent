@@ -161,6 +161,19 @@ stops that repair for AI0.
 | Q-05 | strong follow-up answer | result support can improve relative to unanswered/weak input |
 | Q-06 | time spent only | never sufficient proof of effective learning |
 
+#### Q-03 Semantic-Association Residual Risk
+
+AI0 accepted the Q-02 copied-goal boundary at `fa11900`. Q-03 remains a
+separate residual risk: current English word intersection and Chinese character
+intersection are low-confidence heuristics only. They do not prove that a
+detailed item is semantically related to the learning goal.
+
+AI4B must not continue adding stop words, character thresholds, or lexical
+similarity rules to claim semantic understanding. Public release remains
+blocked from claiming reliable detection of every detailed-but-semantically-
+unrelated false-learning submission until real Agent/LLM semantic assessment
+is integrated with deterministic scoring boundaries and accepted by AI0.
+
 ### 5.3 Security
 
 | ID | Threat | Acceptance |
