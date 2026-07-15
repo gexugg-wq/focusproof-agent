@@ -108,6 +108,7 @@ class EvidenceRepository(Protocol):
 
 
 class AnswerRepository(Protocol):
+    def get(self, session_id: str, question_id: str) -> StoredAnswer | None: ...
     def upsert(self, session_id: str, question_id: str, answer: str) -> StoredAnswer: ...
     def list_for_session(self, session_id: str) -> list[StoredAnswer]: ...
     def mark_synced(
@@ -275,6 +276,10 @@ class SqlEvidenceRepository:
 class SqlAnswerRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
+
+    def get(self, session_id: str, question_id: str) -> StoredAnswer | None:
+        model = self._session.get(LearnerAnswerModel, (session_id, question_id))
+        return _stored_answer(model) if model is not None else None
 
     def upsert(self, session_id: str, question_id: str, answer: str) -> StoredAnswer:
         now = datetime.now(UTC)

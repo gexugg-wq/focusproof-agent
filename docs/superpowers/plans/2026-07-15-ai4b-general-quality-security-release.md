@@ -453,6 +453,13 @@ Assert a second review for that session receives the existing explicit busy
 response and does not enter the LLM. Run two different sessions with separate
 barriers and assert both enter before either is released.
 
+Also define and test the retry contract for concurrent identical Answer
+submissions. With the current SQLite transaction boundary, one contender may
+receive a retryable `503` instead of the idempotent `200`; Task 2.1 deliberately
+does not expand database concurrency handling to normalize this case. Task 4
+must make that policy explicit and verify safe retry without duplicate Answer
+versions or native events.
+
 - [ ] **Step 4: Prove shutdown semantics**
 
 Start an in-flight review, begin app shutdown, and assert manager interruption

@@ -163,7 +163,7 @@ def test_review_lock_timeout_returns_top_level_409(tmp_path: Path) -> None:
     }
 
 
-def test_evidence_commit_succeeds_with_sync_pending_while_review_lock_is_held(
+def test_evidence_waits_for_shared_review_lock_before_committing(
     tmp_path: Path,
 ) -> None:
     project_root = Path(__file__).resolve().parents[3]
@@ -177,23 +177,33 @@ def test_evidence_commit_succeeds_with_sync_pending_while_review_lock_is_held(
     )
     with TestClient(app) as client:
         session_id = _create_session(client)
+        payload = {"evidenceType": "text", "textContent": "durable evidence"}
         with app.state.run_lock.acquire(session_id):
-            response = client.post(
+            busy = client.post(
                 f"/sessions/{session_id}/evidence",
-                json={"evidenceType": "text", "textContent": "durable evidence"},
+                json=payload,
             )
+        state_while_busy = client.get(f"/sessions/{session_id}").json()["state"]
+        response = client.post(f"/sessions/{session_id}/evidence", json=payload)
         state = client.get(f"/sessions/{session_id}").json()["state"]
         review = client.post(f"/sessions/{session_id}/review")
         events = client.get(f"/sessions/{session_id}/events").json()["events"]
 
+    assert busy.status_code == 409
+    assert busy.json() == {
+        "code": "session_busy",
+        "sessionId": session_id,
+        "retryable": True,
+    }
+    assert state_while_busy["evidence"] == []
     assert response.status_code == 200
-    assert response.json()["syncPending"] is True
+    assert response.json()["syncPending"] is False
     assert [item["textContent"] for item in state["evidence"]] == ["durable evidence"]
     assert review.status_code == 200
     assert sum(event["type"] == "evidence.submitted" for event in events) == 1
 
 
-def test_answer_commit_succeeds_with_sync_pending_while_review_lock_is_held(
+def test_answer_waits_for_shared_review_lock_before_committing(
     tmp_path: Path,
 ) -> None:
     project_root = Path(__file__).resolve().parents[3]
@@ -207,17 +217,27 @@ def test_answer_commit_succeeds_with_sync_pending_while_review_lock_is_held(
     )
     with TestClient(app) as client:
         session_id = _create_session(client)
+        payload = {"questionId": "q_busy", "answer": "durable answer"}
         with app.state.run_lock.acquire(session_id):
-            response = client.post(
+            busy = client.post(
                 f"/sessions/{session_id}/answer",
-                json={"questionId": "q_busy", "answer": "durable answer"},
+                json=payload,
             )
+        state_while_busy = client.get(f"/sessions/{session_id}").json()["state"]
+        response = client.post(f"/sessions/{session_id}/answer", json=payload)
         state = client.get(f"/sessions/{session_id}").json()["state"]
         review = client.post(f"/sessions/{session_id}/review")
         events = client.get(f"/sessions/{session_id}/events").json()["events"]
 
+    assert busy.status_code == 409
+    assert busy.json() == {
+        "code": "session_busy",
+        "sessionId": session_id,
+        "retryable": True,
+    }
+    assert state_while_busy["answers"] == {}
     assert response.status_code == 200
-    assert response.json()["syncPending"] is True
+    assert response.json()["syncPending"] is False
     assert state["answers"] == {"q_busy": "durable answer"}
     assert review.status_code == 200
     assert sum(event["type"] == "answer.submitted" for event in events) == 1

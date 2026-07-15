@@ -14,7 +14,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import Engine
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from focusproof.api.auth import VerifiedIdentity, get_verified_identity
@@ -38,6 +38,7 @@ from focusproof.openhands_runtime.handle import RuntimeMode, RuntimeReviewResult
 from focusproof.openhands_runtime.locks import (
     FileSessionRunLock,
     SessionBusyError,
+    SessionRunLock,
 )
 from focusproof.openhands_runtime.manager import ConversationManager
 from focusproof.openhands_runtime.tool_registry import release_repository_provider
@@ -55,7 +56,7 @@ from focusproof.persistence.schema_check import (
     SchemaOutOfDateError,
     check_schema_revision,
 )
-from focusproof.persistence.unit_of_work import UnitOfWorkFactory
+from focusproof.persistence.unit_of_work import UnitOfWork, UnitOfWorkFactory
 from focusproof.runtime.evidence import Evidence, LearningGoal, hash_evidence_content
 from focusproof.runtime.view import AgentView, SessionView, ToolDescription
 
@@ -67,6 +68,12 @@ class ServiceUnavailableError(RuntimeError):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+class SessionFinalizedError(RuntimeError):
+    def __init__(self, session_id: str) -> None:
+        super().__init__(f"Session {session_id} is finalized")
+        self.session_id = session_id
 
 
 class RequestBodyLimitMiddleware:
@@ -256,6 +263,21 @@ def _install_exception_handlers(application: FastAPI) -> None:
             },
         )
 
+    @application.exception_handler(SessionFinalizedError)
+    async def session_finalized_handler(
+        request: Request,
+        exc: SessionFinalizedError,
+    ) -> JSONResponse:
+        del request
+        return JSONResponse(
+            status_code=409,
+            content={
+                "code": "session_finalized",
+                "sessionId": exc.session_id,
+                "retryable": False,
+            },
+        )
+
     @application.exception_handler(SQLAlchemyError)
     async def database_error_handler(
         request: Request,
@@ -339,8 +361,8 @@ def _install_routes(
         identity: Annotated[VerifiedIdentity, Depends(get_verified_identity)],
         uow_factory: Annotated[UnitOfWorkFactory, Depends(get_uow_factory)],
         manager: Annotated[ConversationManager, Depends(get_conversation_manager)],
+        run_lock: Annotated[SessionRunLock, Depends(get_session_run_lock)],
     ) -> dict[str, str | bool]:
-        _owned_session(uow_factory, session_id, identity.verified_user_id)
         evidence_id = _evidence_id_for_request(session_id, request)
         record = StoredEvidence(
             evidence_id=evidence_id,
@@ -353,25 +375,33 @@ def _install_routes(
             conversation_synced_at=None,
             created_at=datetime.now(UTC),
         )
-        try:
+        reviewed_replay = False
+        with run_lock.acquire(session_id):
             with uow_factory() as uow:
-                if uow.evidence.get(session_id, evidence_id) is None:
+                session = _owned_session_in_uow(
+                    uow,
+                    session_id,
+                    identity.verified_user_id,
+                )
+                existing = uow.evidence.get(session_id, evidence_id)
+                if session.status == "reviewed":
+                    if existing is None:
+                        raise SessionFinalizedError(session_id)
+                    reviewed_replay = True
+                elif existing is None:
                     uow.evidence.add(record)
                     uow.commit()
-        except IntegrityError:
-            with uow_factory() as uow:
-                if uow.evidence.get(session_id, evidence_id) is None:
-                    raise
         sync_pending = False
-        try:
-            manager.send_evidence(session_id, identity.verified_user_id)
-        except (
-            SessionBusyError,
-            RuntimeUnavailableError,
-            RuntimeCreationError,
-            ValueError,
-        ):
-            sync_pending = True
+        if not reviewed_replay:
+            try:
+                manager.send_evidence(session_id, identity.verified_user_id)
+            except (
+                SessionBusyError,
+                RuntimeUnavailableError,
+                RuntimeCreationError,
+                ValueError,
+            ):
+                sync_pending = True
         return {
             "evidenceId": evidence_id,
             "sessionId": session_id,
@@ -385,21 +415,39 @@ def _install_routes(
         identity: Annotated[VerifiedIdentity, Depends(get_verified_identity)],
         uow_factory: Annotated[UnitOfWorkFactory, Depends(get_uow_factory)],
         manager: Annotated[ConversationManager, Depends(get_conversation_manager)],
+        run_lock: Annotated[SessionRunLock, Depends(get_session_run_lock)],
     ) -> dict[str, str | bool]:
-        _owned_session(uow_factory, session_id, identity.verified_user_id)
-        with uow_factory() as uow:
-            uow.answers.upsert(session_id, request.questionId, request.answer)
-            uow.commit()
+        reviewed_replay = False
+        with run_lock.acquire(session_id):
+            with uow_factory() as uow:
+                session = _owned_session_in_uow(
+                    uow,
+                    session_id,
+                    identity.verified_user_id,
+                )
+                existing = uow.answers.get(session_id, request.questionId)
+                if session.status == "reviewed":
+                    if existing is None or existing.answer != request.answer:
+                        raise SessionFinalizedError(session_id)
+                    reviewed_replay = True
+                else:
+                    uow.answers.upsert(
+                        session_id,
+                        request.questionId,
+                        request.answer,
+                    )
+                    uow.commit()
         sync_pending = False
-        try:
-            manager.send_answer(session_id, identity.verified_user_id)
-        except (
-            SessionBusyError,
-            RuntimeUnavailableError,
-            RuntimeCreationError,
-            ValueError,
-        ):
-            sync_pending = True
+        if not reviewed_replay:
+            try:
+                manager.send_answer(session_id, identity.verified_user_id)
+            except (
+                SessionBusyError,
+                RuntimeUnavailableError,
+                RuntimeCreationError,
+                ValueError,
+            ):
+                sync_pending = True
         return {
             "sessionId": session_id,
             "questionId": request.questionId,
@@ -551,6 +599,11 @@ def get_conversation_manager(request: Request) -> ConversationManager:
     return cast(ConversationManager, request.app.state.conversation_manager)
 
 
+def get_session_run_lock(request: Request) -> SessionRunLock:
+    _require_ready(request)
+    return cast(SessionRunLock, request.app.state.run_lock)
+
+
 def get_event_log(request: Request) -> PersistentAuditEventLog:
     _require_ready(request)
     return cast(PersistentAuditEventLog, request.app.state.audit_log)
@@ -580,6 +633,17 @@ def _owned_session(
 ) -> StoredSession:
     with uow_factory() as uow:
         session = uow.sessions.get(session_id)
+    if session is None or session.owner_user_id != verified_user_id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
+def _owned_session_in_uow(
+    uow: UnitOfWork,
+    session_id: str,
+    verified_user_id: str,
+) -> StoredSession:
+    session = uow.sessions.get(session_id)
     if session is None or session.owner_user_id != verified_user_id:
         raise HTTPException(status_code=404, detail="Session not found")
     return session

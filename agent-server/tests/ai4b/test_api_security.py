@@ -57,6 +57,38 @@ def _event_count(client: TestClient, session_id: str, event_type: str) -> int:
     return sum(event["type"] == event_type for event in events)
 
 
+def _fact_counts(client: TestClient, session_id: str) -> dict[str, int]:
+    state = client.get(f"/sessions/{session_id}").json()["state"]
+    events = client.get(f"/sessions/{session_id}/events").json()["events"]
+    reviews = client.get(f"/sessions/{session_id}/reviews").json()["reviews"]
+    return {
+        "evidence": len(state["evidence"]),
+        "answers": len(state["answers"]),
+        "events": len(events),
+        "reviews": len(reviews),
+    }
+
+
+def _answer_version(running: Any, session_id: str, question_id: str) -> int:
+    with running.app.state.uow_factory() as uow:
+        answers = uow.answers.list_for_session(session_id)
+    return int(
+        next(
+            answer.version
+            for answer in answers
+            if answer.question_id == question_id
+        )
+    )
+
+
+def _session_finalized_response(session_id: str) -> dict[str, object]:
+    return {
+        "code": "session_finalized",
+        "sessionId": session_id,
+        "retryable": False,
+    }
+
+
 def test_duplicate_evidence_is_one_persisted_and_synchronized_record(
     ai4b_app_factory: Callable[..., Any],
 ) -> None:
@@ -196,6 +228,178 @@ def test_completed_review_replay_returns_existing_result_without_new_events(
         assert second.json()["reviewResult"] == first.json()["reviewResult"]
         assert events_after_second == events_after_first
         assert len(reviews) == 1
+
+
+def test_reviewed_session_replays_identical_evidence_without_new_facts(
+    ai4b_app_factory: Callable[..., Any],
+) -> None:
+    payload = {
+        "evidenceType": "text",
+        "textContent": "Replay rebuilds state by applying each event in order.",
+        "metadata": {"source": "reviewed-replay"},
+    }
+    with ai4b_app_factory(_completed_review_llm) as running:
+        session_id = _create_session(running.client)
+        original = running.client.post(
+            f"/sessions/{session_id}/evidence", json=payload
+        )
+        review = running.client.post(f"/sessions/{session_id}/review")
+        before = _fact_counts(running.client, session_id)
+
+        replay = running.client.post(
+            f"/sessions/{session_id}/evidence",
+            json={
+                "metadata": {"source": "reviewed-replay"},
+                "textContent": payload["textContent"],
+                "evidenceType": "text",
+            },
+        )
+
+        assert review.status_code == 200
+        assert replay.status_code == 200
+        assert replay.json()["evidenceId"] == original.json()["evidenceId"]
+        assert _fact_counts(running.client, session_id) == before
+
+
+def test_reviewed_session_rejects_new_evidence_without_changing_facts(
+    ai4b_app_factory: Callable[..., Any],
+) -> None:
+    with ai4b_app_factory(_completed_review_llm) as running:
+        session_id = _create_session(running.client)
+        running.client.post(
+            f"/sessions/{session_id}/evidence",
+            json={
+                "evidenceType": "text",
+                "textContent": "Replay applies stored events in sequence.",
+            },
+        )
+        review = running.client.post(f"/sessions/{session_id}/review")
+        before = _fact_counts(running.client, session_id)
+
+        rejected = running.client.post(
+            f"/sessions/{session_id}/evidence",
+            json={
+                "evidenceType": "text",
+                "textContent": "This is a new fact after review completion.",
+            },
+        )
+
+        assert review.status_code == 200
+        assert rejected.status_code == 409
+        assert rejected.json() == _session_finalized_response(session_id)
+        assert _fact_counts(running.client, session_id) == before
+
+
+def test_reviewed_session_replays_identical_answer_without_new_version_or_facts(
+    ai4b_app_factory: Callable[..., Any],
+) -> None:
+    payload = {
+        "questionId": "q_reviewed_replay",
+        "answer": "Replay applies each stored event to an empty initial state.",
+    }
+    with ai4b_app_factory(_completed_review_llm) as running:
+        session_id = _create_session(running.client)
+        running.client.post(f"/sessions/{session_id}/answer", json=payload)
+        review = running.client.post(f"/sessions/{session_id}/review")
+        before = _fact_counts(running.client, session_id)
+        version_before = _answer_version(
+            running, session_id, str(payload["questionId"])
+        )
+
+        replay = running.client.post(f"/sessions/{session_id}/answer", json=payload)
+
+        assert review.status_code == 200
+        assert replay.status_code == 200
+        assert _answer_version(
+            running, session_id, str(payload["questionId"])
+        ) == version_before
+        assert _fact_counts(running.client, session_id) == before
+
+
+def test_reviewed_session_rejects_new_and_modified_answers_without_changing_facts(
+    ai4b_app_factory: Callable[..., Any],
+) -> None:
+    original = {
+        "questionId": "q_frozen",
+        "answer": "Replay applies each event exactly once and in order.",
+    }
+    with ai4b_app_factory(_completed_review_llm) as running:
+        session_id = _create_session(running.client)
+        running.client.post(f"/sessions/{session_id}/answer", json=original)
+        review = running.client.post(f"/sessions/{session_id}/review")
+        before = _fact_counts(running.client, session_id)
+        version_before = _answer_version(running, session_id, "q_frozen")
+
+        modified = running.client.post(
+            f"/sessions/{session_id}/answer",
+            json={**original, "answer": "A changed answer after review."},
+        )
+        added = running.client.post(
+            f"/sessions/{session_id}/answer",
+            json={"questionId": "q_new", "answer": "A new answer after review."},
+        )
+
+        assert review.status_code == 200
+        for rejected in (modified, added):
+            assert rejected.status_code == 409
+            assert rejected.json() == _session_finalized_response(session_id)
+        assert _answer_version(running, session_id, "q_frozen") == version_before
+        assert _fact_counts(running.client, session_id) == before
+
+
+def test_reviewed_session_freeze_survives_fastapi_restart(
+    ai4b_app_factory: Callable[..., Any],
+) -> None:
+    evidence_payload = {
+        "evidenceType": "text",
+        "textContent": "Restart recovery reopens the same persisted event history.",
+    }
+    answer_payload = {
+        "questionId": "q_restart",
+        "answer": "The same database and conversation ID restore prior facts.",
+    }
+    with ai4b_app_factory(_completed_review_llm) as first_app:
+        session_id = _create_session(first_app.client)
+        evidence = first_app.client.post(
+            f"/sessions/{session_id}/evidence", json=evidence_payload
+        )
+        first_app.client.post(
+            f"/sessions/{session_id}/answer", json=answer_payload
+        )
+        review = first_app.client.post(f"/sessions/{session_id}/review")
+        assert review.status_code == 200
+        evidence_id = evidence.json()["evidenceId"]
+
+    with ai4b_app_factory(_completed_review_llm) as restarted:
+        before = _fact_counts(restarted.client, session_id)
+        same_evidence = restarted.client.post(
+            f"/sessions/{session_id}/evidence", json=evidence_payload
+        )
+        same_answer = restarted.client.post(
+            f"/sessions/{session_id}/answer", json=answer_payload
+        )
+        new_evidence = restarted.client.post(
+            f"/sessions/{session_id}/evidence",
+            json={
+                **evidence_payload,
+                "textContent": "A changed evidence fact after restart.",
+            },
+        )
+        changed_answer = restarted.client.post(
+            f"/sessions/{session_id}/answer",
+            json={**answer_payload, "answer": "A changed answer after restart."},
+        )
+        replayed_review = restarted.client.post(f"/sessions/{session_id}/review")
+
+        assert same_evidence.status_code == 200
+        assert same_evidence.json()["evidenceId"] == evidence_id
+        assert same_answer.status_code == 200
+        for rejected in (new_evidence, changed_answer):
+            assert rejected.status_code == 409
+            assert rejected.json() == _session_finalized_response(session_id)
+        assert replayed_review.status_code == 200
+        assert replayed_review.json()["reviewResult"] == review.json()["reviewResult"]
+        assert _fact_counts(restarted.client, session_id) == before
 
 
 @pytest.mark.parametrize(
