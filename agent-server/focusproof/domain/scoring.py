@@ -138,16 +138,28 @@ def _has_novel_information(candidate: str, source: str) -> bool:
     return novelty > _NEAR_COPY_MAX_EVIDENCE_NOVELTY
 
 
-def _has_independent_goal_aligned_answer(goal: LearningGoal, answer: str) -> bool:
+def _has_basic_goal_association(goal: LearningGoal, text: str) -> bool:
+    goal_text = f"{goal.title} {goal.goal}"
+    if _meaningful_terms(goal_text) & _meaningful_terms(text):
+        return True
+    goal_cjk = set(_CJK_CHARACTER_RE.findall(goal_text))
+    text_cjk = set(_CJK_CHARACTER_RE.findall(text))
+    return len(goal_cjk & text_cjk) >= 2
+
+
+def _answer_adds_limited_support(goal: LearningGoal, answer: str) -> bool:
     if not _has_specific_answer(answer):
         return False
     if _restates_goal_without_new_information(goal, answer):
         return False
     if not _has_novel_information(answer, f"{goal.title} {goal.goal}"):
         return False
-    goal_terms = _meaningful_terms(f"{goal.title} {goal.goal}")
-    answer_terms = _meaningful_terms(answer)
-    return bool(goal_terms & answer_terms)
+    return _has_basic_goal_association(goal, answer)
+
+
+def _is_specific_goal_aligned_text(goal: LearningGoal, evidence: Evidence) -> bool:
+    text = _text(evidence)
+    return not _is_generic(text) and _has_basic_goal_association(goal, text)
 
 
 def _dimensions(score: int, understanding: int) -> dict[str, int]:
@@ -180,11 +192,10 @@ def score_learning_session(
             nextStep="Submit concrete notes, outputs, or artifacts from the learning session.",
         )
 
-    joined_text = " ".join(_text(item) for item in evidence)
     answer_text = " ".join(answers)
     first_id = evidence[0].evidenceId
     has_specific_answer = _has_specific_answer(answer_text)
-    has_independent_answer = _has_independent_goal_aligned_answer(goal, answer_text)
+    answer_adds_limited_support = _answer_adds_limited_support(goal, answer_text)
     has_successful_verification = any(
         observation.status == "success" for observation in observations
     )
@@ -195,46 +206,47 @@ def score_learning_session(
         if _restates_goal_without_new_information(goal, _text(item))
     ]
     copied_evidence_ids = {item.evidenceId for item in copied_text_items}
-    has_independent_specific_text = any(
-        item.evidenceId not in copied_evidence_ids and not _is_generic(_text(item))
+    has_independent_aligned_specific_text = any(
+        item.evidenceId not in copied_evidence_ids
+        and _is_specific_goal_aligned_text(goal, item)
         for item in text_items
     )
-    if (
-        copied_text_items
-        and not has_independent_specific_text
-        and not has_independent_answer
-    ):
+    if copied_text_items and not has_independent_aligned_specific_text:
+        copied_only_score = 50 if answer_adds_limited_support else 35
+        copied_only_understanding = 10 if answer_adds_limited_support else 4
         findings.append(
             Finding(
                 severity="warning",
                 message=(
-                    "The submitted text restates the learning goal but does not provide "
-                    "an independent explanation, example, reflection, or output."
+                    "The submitted text restates the learning goal. A related, specific answer "
+                    "can provide limited support, but copied evidence cannot establish learning "
+                    "without a related, specific, independent output."
                 ),
                 evidenceIds=[item.evidenceId for item in copied_text_items],
             )
         )
         return ReviewResult(
             status="WeakEvidence",
-            score=35,
-            confidence=0.45,
-            dimensions=_dimensions(35, 4),
+            score=copied_only_score,
+            confidence=0.55 if answer_adds_limited_support else 0.45,
+            dimensions=_dimensions(copied_only_score, copied_only_understanding),
             findings=findings,
             summary=(
-                "Restating the learning goal alone is not independent evidence of learning."
+                "Restating the learning goal is not independent evidence of learning."
             ),
             nextStep=(
                 "Add a concrete explanation, worked example, reflection, or independent output."
             ),
         )
 
-    has_specific_text = any(
-        item.evidenceType == "text" and not _is_generic(_text(item))
-        for item in evidence
+    has_specific_aligned_text = any(
+        item.evidenceId not in copied_evidence_ids
+        and _is_specific_goal_aligned_text(goal, item)
+        for item in text_items
     )
-    goal_terms = _meaningful_terms(f"{goal.title} {goal.goal}")
-    submitted_terms = _meaningful_terms(f"{joined_text} {answer_text}")
-    has_goal_alignment = bool(goal_terms & submitted_terms)
+    has_goal_alignment = has_specific_aligned_text or (
+        has_specific_answer and _has_basic_goal_association(goal, answer_text)
+    )
 
     if (
         text_items
@@ -261,7 +273,7 @@ def score_learning_session(
 
     score = 45
     understanding = 8
-    if has_specific_text:
+    if has_specific_aligned_text:
         score += 12
         understanding += 6
     if has_goal_alignment:

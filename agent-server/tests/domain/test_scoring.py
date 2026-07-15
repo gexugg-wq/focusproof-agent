@@ -382,7 +382,7 @@ def test_goal_copy_plus_independent_strong_evidence_is_not_globally_weakened() -
     assert not _goal_copy_warning_messages(result)
 
 
-def test_goal_copy_plus_specific_answer_is_scored_from_independent_answer() -> None:
+def test_goal_copy_plus_specific_answer_improves_support_but_remains_weak() -> None:
     goal = "Explain how an append-only event log rebuilds application state."
     answer = (
         "Starting with an empty balance, replay applies each deposit and withdrawal once in "
@@ -394,9 +394,9 @@ def test_goal_copy_plus_specific_answer_is_scored_from_independent_answer() -> N
         [answer],
     )
 
-    assert result.score >= 60
-    assert result.status == "LikelyLearning"
-    assert not _goal_copy_warning_messages(result)
+    assert 35 < result.score < 60
+    assert result.status == "WeakEvidence"
+    assert _goal_copy_warning_messages(result)
 
 
 def test_goal_copy_plus_answer_copying_goal_remains_weak() -> None:
@@ -462,6 +462,90 @@ def test_goal_copy_plus_unrelated_success_observation_remains_weak() -> None:
         [text_evidence("ev_copy_with_unrelated_observation", goal)],
         [],
         [observation],
+    )
+
+    assert result.score < 60
+    assert result.status == "WeakEvidence"
+    assert _goal_copy_warning_messages(result)
+
+
+def test_goal_copy_plus_generic_filler_answer_remains_weak() -> None:
+    goal = "Explain how an append-only event log rebuilds application state."
+    result = score_learning_session(
+        general_goal("Understand event replay", goal),
+        [text_evidence("ev_copy_with_filler", goal)],
+        ["I learned a lot and gained many useful insights about this topic today."],
+    )
+
+    assert result.score < 60
+    assert result.status == "WeakEvidence"
+    assert _goal_copy_warning_messages(result)
+
+
+def test_goal_copy_plus_detailed_unrelated_evidence_remains_weak() -> None:
+    goal = "Explain how an append-only event log rebuilds application state."
+    unrelated = (
+        "Impressionist painters placed complementary colors beside each other and used short "
+        "visible brush strokes to represent changing outdoor light across a landscape."
+    )
+    result = score_learning_session(
+        general_goal("Understand event replay", goal),
+        [
+            text_evidence("ev_copy_with_unrelated_peer", goal),
+            text_evidence("ev_detailed_unrelated_peer", unrelated),
+        ],
+        [],
+    )
+
+    assert result.score < 60
+    assert result.status == "WeakEvidence"
+    assert _goal_copy_warning_messages(result)
+
+
+def test_goal_copy_plus_related_specific_evidence_uses_normal_scoring() -> None:
+    goal = "Explain how an append-only event log rebuilds application state."
+    related = (
+        "Event replay starts from an empty state and applies each stored event in order. "
+        "For example, a deposit adds ten to a zero balance and a withdrawal subtracts three, "
+        "so rebuilding from the retained history deterministically returns seven."
+    )
+    result = score_learning_session(
+        general_goal("Understand event replay", goal),
+        [
+            text_evidence("ev_copy_with_related_peer", goal),
+            text_evidence("ev_specific_related_peer", related),
+        ],
+        [],
+    )
+
+    assert result.score >= 60
+    assert result.status == "LikelyLearning"
+    assert not _goal_copy_warning_messages(result)
+
+
+def test_chinese_goal_copy_plus_specific_correct_answer_stays_below_likely() -> None:
+    goal = "解释为什么实验需要对照组，并说明如何排除其他变量。"
+    answer = (
+        "对照组保持光照以外的条件一致；例如只遮住一组叶片，再比较颜色变化，"
+        "就能把观察到的差异归因于光照而不是水分或温度。"
+    )
+    result = score_learning_session(
+        general_goal("理解实验对照", goal),
+        [text_evidence("ev_copy_zh_with_answer", goal)],
+        [answer],
+    )
+
+    assert 35 < result.score < 60
+    assert result.status == "WeakEvidence"
+    assert _goal_copy_warning_messages(result)
+
+
+def test_chinese_goal_copy_plus_generic_filler_answer_remains_weak() -> None:
+    goal = "解释为什么实验需要对照组，并说明如何排除其他变量。"
+    result = score_learning_session(
+        general_goal("理解实验对照", goal),
+        [text_evidence("ev_copy_zh_with_filler", goal)],
+        ["我学到了很多内容，感觉收获很大，以后还会继续认真学习这个主题。"],
     )
 
     assert result.score < 60
