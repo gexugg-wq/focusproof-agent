@@ -34,6 +34,8 @@ def ai4b_app_factory(tmp_path: Path) -> Callable[..., object]:
     @contextmanager
     def factory(
         llm_factory: Callable[[str], TestLLM],
+        *,
+        review_timeout_seconds: float = 60.0,
     ) -> Iterator[RunningAi4bApp]:
         project_root = Path(__file__).resolve().parents[3]
         database_url = f"sqlite+pysqlite:///{tmp_path / 'ai4b.sqlite3'}"
@@ -48,6 +50,7 @@ def ai4b_app_factory(tmp_path: Path) -> Callable[..., object]:
             database_url=database_url,
             data_dir=tmp_path,
             llm_factory=llm_factory,
+            review_timeout_seconds=review_timeout_seconds,
         )
         with TestClient(app) as client:
             yield RunningAi4bApp(

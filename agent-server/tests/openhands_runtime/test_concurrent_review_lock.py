@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
 from pathlib import Path
@@ -107,3 +108,114 @@ def test_two_concurrent_reviews_enter_conversation_run_once(
         first.result(timeout=2)
     assert run_count == 1
     manager.close_all()
+
+
+def test_reviews_for_different_sessions_enter_native_runs_concurrently(
+    tmp_path: Path,
+    repository: SessionRepository,
+    learning_goal: LearningGoal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_lock = FileSessionRunLock(tmp_path / "var", timeout_seconds=0.2)
+    manager = ConversationManager(
+        repository=repository,
+        audit_log=InMemoryEventLog(),
+        project_root=tmp_path,
+        llm_factory=lambda session_id: TestLLM.from_messages([]),
+        run_lock=run_lock,
+    )
+    first_handle = manager.create("sess_parallel_a", learning_goal)
+    second_handle = manager.create("sess_parallel_b", learning_goal)
+    session_by_conversation = {
+        id(first_handle.conversation): "sess_parallel_a",
+        id(second_handle.conversation): "sess_parallel_b",
+    }
+    entered = {
+        "sess_parallel_a": Event(),
+        "sess_parallel_b": Event(),
+    }
+    release = Event()
+    original_arun = cast(
+        Callable[[LocalConversation], Any],
+        cast(Any, LocalConversation.arun),
+    )
+
+    async def blocking_arun(conversation: LocalConversation) -> None:
+        session_id = session_by_conversation[id(conversation)]
+        entered[session_id].set()
+        await asyncio.to_thread(release.wait, 2)
+        await original_arun(conversation)
+
+    monkeypatch.setattr(LocalConversation, "arun", blocking_arun)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(manager.run_review, "sess_parallel_a")
+        second = executor.submit(manager.run_review, "sess_parallel_b")
+        assert entered["sess_parallel_a"].wait(timeout=1)
+        assert entered["sess_parallel_b"].wait(timeout=1)
+        release.set()
+        first.result(timeout=2)
+        second.result(timeout=2)
+
+    manager.close_all()
+
+
+def test_cancelling_waiting_review_does_not_interrupt_current_review(
+    tmp_path: Path,
+    repository: SessionRepository,
+    learning_goal: LearningGoal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = ConversationManager(
+        repository=repository,
+        audit_log=InMemoryEventLog(),
+        project_root=tmp_path,
+        llm_factory=lambda session_id: TestLLM.from_messages([]),
+        run_lock=FileSessionRunLock(tmp_path / "var", timeout_seconds=1),
+    )
+    manager.create("sess_cancel_contender", learning_goal)
+    first_entered = Event()
+    release_first = Event()
+    primary_interrupted = Event()
+    arun_calls = 0
+    original_interrupt = cast(
+        Callable[[LocalConversation], None],
+        cast(Any, LocalConversation.interrupt),
+    )
+
+    async def blocking_arun(conversation: LocalConversation) -> None:
+        nonlocal arun_calls
+        del conversation
+        arun_calls += 1
+        first_entered.set()
+        while not release_first.is_set():
+            await asyncio.sleep(0.01)
+
+    def record_interrupt(conversation: LocalConversation) -> None:
+        primary_interrupted.set()
+        original_interrupt(conversation)
+
+    monkeypatch.setattr(LocalConversation, "arun", blocking_arun)
+    monkeypatch.setattr(LocalConversation, "interrupt", record_interrupt)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        primary = executor.submit(
+            manager.run_review,
+            "sess_cancel_contender",
+            None,
+            "review-primary",
+        )
+        assert first_entered.wait(timeout=1)
+        contender = executor.submit(
+            manager.run_review,
+            "sess_cancel_contender",
+            None,
+            "review-contender",
+        )
+        time.sleep(0.05)
+        manager.interrupt("sess_cancel_contender", "review-contender")
+        assert primary_interrupted.wait(timeout=0.1) is False
+        release_first.set()
+        assert primary.result(timeout=1).reviewStatus == "failed"
+        assert contender.result(timeout=1).reviewStatus == "failed"
+
+    assert arun_calls == 1

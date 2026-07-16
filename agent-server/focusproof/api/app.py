@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from secrets import token_hex
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -40,7 +42,10 @@ from focusproof.openhands_runtime.locks import (
     SessionBusyError,
     SessionRunLock,
 )
-from focusproof.openhands_runtime.manager import ConversationManager
+from focusproof.openhands_runtime.manager import (
+    DEFAULT_REVIEW_TIMEOUT_SECONDS,
+    ConversationManager,
+)
 from focusproof.openhands_runtime.tool_registry import release_repository_provider
 from focusproof.persistence.database import (
     create_database_engine,
@@ -128,7 +133,7 @@ class RequestBodyLimitMiddleware:
                 message = messages[message_index]
                 message_index += 1
                 return message
-            return {"type": "http.request", "body": b"", "more_body": False}
+            return await receive()
 
         await self._app(scope, replay_receive, send)
 
@@ -147,6 +152,7 @@ def create_app(
     data_dir: Path | None = None,
     lock_timeout_seconds: float | None = None,
     llm_factory: LLMFactory | None = None,
+    review_timeout_seconds: float = DEFAULT_REVIEW_TIMEOUT_SECONDS,
 ) -> FastAPI:
     resolved_data_dir = (
         data_dir
@@ -190,6 +196,7 @@ def create_app(
                 llm_factory=llm_factory,
                 uow_factory=uow_factory,
                 run_lock=run_lock,
+                review_timeout_seconds=review_timeout_seconds,
             )
             application.state.engine = engine
             application.state.uow_factory = uow_factory
@@ -204,11 +211,13 @@ def create_app(
         try:
             yield
         finally:
-            if manager is not None:
-                manager.close_all()
-            release_repository_provider()
-            if engine is not None:
-                engine.dispose()
+            try:
+                if manager is not None:
+                    manager.close_all()
+            finally:
+                release_repository_provider()
+                if engine is not None:
+                    engine.dispose()
 
     application = FastAPI(title="FocusProof Agent Server", lifespan=lifespan)
     application.add_middleware(
@@ -455,15 +464,36 @@ def _install_routes(
         }
 
     @application.post("/sessions/{session_id}/review", response_model=None)
-    def review_session(
+    async def review_session(
         session_id: str,
+        request: Request,
         identity: Annotated[VerifiedIdentity, Depends(get_verified_identity)],
         uow_factory: Annotated[UnitOfWorkFactory, Depends(get_uow_factory)],
         manager: Annotated[ConversationManager, Depends(get_conversation_manager)],
     ) -> dict[str, Any] | JSONResponse:
         _owned_session(uow_factory, session_id, identity.verified_user_id)
+        review_call_id = token_hex(16)
+        review_task = asyncio.create_task(
+            asyncio.to_thread(
+                manager.run_review,
+                session_id,
+                identity.verified_user_id,
+                review_call_id,
+            )
+        )
         try:
-            result = manager.run_review(session_id, identity.verified_user_id)
+            while not review_task.done():
+                if await request.is_disconnected():
+                    manager.interrupt(session_id, review_call_id)
+                    try:
+                        await review_task
+                    finally:
+                        raise asyncio.CancelledError
+                await asyncio.sleep(0.01)
+            result = await review_task
+        except asyncio.CancelledError:
+            manager.interrupt(session_id, review_call_id)
+            raise
         except RuntimeUnavailableError:
             return _runtime_unavailable(session_id, "unavailable")
         except (RuntimeCreationError, ValueError):
