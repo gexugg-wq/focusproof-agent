@@ -35,7 +35,8 @@ export default defineConfig({
       timeout: 120000
     },
     {
-      command: "npm run dev -- --hostname 127.0.0.1 --port 3000",
+      command:
+        "npm run build && ./node_modules/.bin/next start --hostname 127.0.0.1 --port 3000",
       cwd: frontendDir,
       env: {
         FOCUSPROOF_API_BASE_URL: "http://127.0.0.1:8000"
