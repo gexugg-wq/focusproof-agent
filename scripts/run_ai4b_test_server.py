@@ -138,10 +138,12 @@ def build_app(args: argparse.Namespace) -> FastAPI:
     if args.host != LOOPBACK_HOST:
         raise ValueError("AI4B test server is restricted to 127.0.0.1")
     data_dir = Path(args.data_dir).resolve()
+    database_url = str(args.database_url)
+    focusproof.api.app._validate_database_path(database_url, data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
-    _apply_migrations(str(args.database_url))
+    _apply_migrations(database_url)
     return focusproof.api.app.create_app(
-        database_url=str(args.database_url),
+        database_url=database_url,
         data_dir=data_dir,
         llm_factory=_scenario_factory(str(args.scenario)),
     )

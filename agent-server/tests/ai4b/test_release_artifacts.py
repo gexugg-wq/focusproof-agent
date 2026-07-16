@@ -239,6 +239,37 @@ def test_test_server_is_loopback_only_and_reuses_production_runtime(
         )
 
 
+def test_test_server_rejects_external_sqlite_path_before_side_effects(
+    tmp_path: Path,
+) -> None:
+    server = _load_script("run_ai4b_test_server")
+    data_dir = tmp_path / "data"
+    external_database = tmp_path / "outside.sqlite3"
+    args = server.parse_args(
+        [
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8123",
+            "--database-url",
+            f"sqlite+pysqlite:///{external_database}",
+            "--data-dir",
+            str(data_dir),
+            "--scenario",
+            "general-flow",
+        ]
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="SQLite database path must be inside FOCUSPROOF_DATA_DIR",
+    ):
+        server.build_app(args)
+
+    assert external_database.exists() is False
+    assert data_dir.exists() is False
+
+
 def test_scripted_smoke_rejects_non_loopback_targets() -> None:
     smoke = _load_script("ai4b_smoke")
     with pytest.raises(SystemExit):
