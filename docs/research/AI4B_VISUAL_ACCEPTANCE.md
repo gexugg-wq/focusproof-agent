@@ -15,6 +15,14 @@ capture helper asserts that no `nextjs-portal` development element exists and
 takes the full-page PNG from the unmodified production DOM. No screenshot or
 DOM post-processing is applied.
 
+The production capture is isolated in
+`frontend/playwright.visual.config.ts` and runs with:
+
+`npx playwright test --config playwright.visual.config.ts`
+
+The default Task 6 Playwright configuration remains on its existing
+development-server path and does not write the AI4B visual evidence.
+
 Successful Session creation, evidence submission, review, answer submission,
 completion, Build Log persistence, and refresh recovery are not intercepted.
 The 360 px failure state creates and loads a real Session, then uses Playwright
@@ -32,15 +40,15 @@ Test node:
 | --- | --- | --- | --- | --- | --- |
 | [1440x900-completed.png](assets/ai4b/1440x900-completed.png) | 1440×900 | 1440×1529 full page | completed | Long replay goal, text evidence, local-only URL evidence, follow-up answer, persisted review | Accepted |
 | [1280x720-completed.png](assets/ai4b/1280x720-completed.png) | 1280×720 | 1280×1641 full page | completed | Same real completed flow at the narrower desktop grid | Accepted |
-| [390x844-awaiting-user.png](assets/ai4b/390x844-awaiting-user.png) | 390×844 | 390×2386 full page | awaiting_user | Real review question after text and URL evidence | Accepted |
-| [360x800-failed-input-preserved.png](assets/ai4b/360x800-failed-input-preserved.png) | 360×800 | 360×1347 full page | failed Evidence POST, Session remains running | Real Session plus one deterministic retryable 503; entered replay explanation remains visible | Accepted |
+| [390x844-awaiting-user.png](assets/ai4b/390x844-awaiting-user.png) | 390×844 | 390×2406 full page | awaiting_user | Real review question after text and URL evidence | Accepted |
+| [360x800-failed-input-preserved.png](assets/ai4b/360x800-failed-input-preserved.png) | 360×800 | 360×1367 full page | failed Evidence POST, Session remains running | Real Session plus one deterministic retryable 503; entered replay explanation remains visible | Accepted |
 
 SHA-256:
 
-- `1440x900-completed.png`: `893977a82e1bf3c2c11bd1f102a06fa8f040988b2f9caabca3ac993430614141`
-- `1280x720-completed.png`: `e17451dd59a58838e6fd99422bbba2509b6f92e360145d08d80d3ad0d99327eb`
-- `390x844-awaiting-user.png`: `4c224a6b43aea617bccad0e4022e77437a812083e243c2816e1f40be734c09dc`
-- `360x800-failed-input-preserved.png`: `287cdbda8c0b7f6f1714beebf5f640fdf0a5b96be131c5183b08de677d129352`
+- `1440x900-completed.png`: `ecc8bc99fd2fc0431101fc49c34e08de625837b3937cf9bbcb42af87d660dd57`
+- `1280x720-completed.png`: `a0ecfb7d8c105e9be63fb596c4e1a16ff38bab0f17d46403b277207a1e9d3f15`
+- `390x844-awaiting-user.png`: `3c723154f5795626ffeef28e72046465c6c296039a464216cbab6d35d88ff95b`
+- `360x800-failed-input-preserved.png`: `636c944afb875eebd63f4dbcd57dd86eb7faec51b68c4e8e4dbf4649652ae74f`
 
 ## VIS-01 — Horizontal overflow
 
@@ -87,6 +95,7 @@ Both desktop screenshots clearly show:
 
 No overlap, clipped control, horizontal scrollbar, secret, provider key, raw
 environment value, or misleading proof-success state was observed.
+No Next.js development indicator or other framework chrome is present.
 
 Conclusion: accepted.
 
@@ -95,7 +104,8 @@ Conclusion: accepted.
 At 390×844 the three-column desktop layout reflows into one readable column.
 The `Awaiting user` state, question, answer field, and submit button are
 explicit and reachable. Long goal, submitted evidence, URL, and generated
-question ID wrap without widening the page.
+question ID wrap without widening the page. The Evidence input, tabs, submit
+button, and status message are unobstructed.
 
 Conclusion: accepted.
 
@@ -104,6 +114,8 @@ Conclusion: accepted.
 At 360×800 the retryable Runtime failure message is visible next to the intact
 Evidence text. The Session remains running, no success fact is displayed, and
 the Build Log contains only facts persisted before the rejected submission.
+The textarea content, submit button, failure message, and review state are
+unobstructed.
 
 All four captures use the general deterministic replay topic. Web3 remains an
 optional evidence tab; wallet metadata, transactions, contracts, and on-chain

@@ -3,13 +3,14 @@ import path from "node:path";
 
 const frontendDir = __dirname;
 const repositoryDir = path.resolve(frontendDir, "..");
-const runtimeDir = path.join(frontendDir, "test-results/ai4b-runtime");
+const runtimeDir = path.join(frontendDir, "test-results/ai4b-visual-runtime");
 const databasePath = path.join(runtimeDir, "focusproof.sqlite3");
 const pythonPath = path.join(repositoryDir, ".venv/bin/python3.12");
 
 export default defineConfig({
   testDir: "./e2e",
-  outputDir: "test-results/artifacts",
+  testMatch: "ai4b-real-flow.spec.ts",
+  outputDir: "test-results/ai4b-visual-artifacts",
   timeout: 30000,
   workers: 1,
   expect: { timeout: 5000 },
@@ -35,7 +36,8 @@ export default defineConfig({
       timeout: 120000
     },
     {
-      command: "npm run dev -- --hostname 127.0.0.1 --port 3000",
+      command:
+        "npm run build && ./node_modules/.bin/next start --hostname 127.0.0.1 --port 3000",
       cwd: frontendDir,
       env: {
         FOCUSPROOF_API_BASE_URL: "http://127.0.0.1:8000"
@@ -46,9 +48,25 @@ export default defineConfig({
     }
   ],
   projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },
-    { name: "desktop-1280", use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 720 } } },
-    { name: "mobile", use: { ...devices["Pixel 5"], viewport: { width: 390, height: 844 } } },
-    { name: "mobile-360", use: { ...devices["Pixel 5"], viewport: { width: 360, height: 800 } } }
+    {
+      name: "chromium",
+      metadata: { visualCapture: true },
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } }
+    },
+    {
+      name: "desktop-1280",
+      metadata: { visualCapture: true },
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 720 } }
+    },
+    {
+      name: "mobile",
+      metadata: { visualCapture: true },
+      use: { ...devices["Pixel 5"], viewport: { width: 390, height: 844 } }
+    },
+    {
+      name: "mobile-360",
+      metadata: { visualCapture: true },
+      use: { ...devices["Pixel 5"], viewport: { width: 360, height: 800 } }
+    }
   ]
 });

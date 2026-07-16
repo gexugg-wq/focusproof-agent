@@ -3,7 +3,7 @@ import path from "node:path";
 
 const assetsDir = path.resolve(__dirname, "../../docs/research/assets/ai4b");
 const longGoal =
-  "Explain how an append-only event history makes deterministic replay possible, including why immutable ordering preserves earlier facts, how a projection can be rebuilt from an empty state, and which verification boundary prevents a mutable view from silently replacing the durable learning record.";
+  "Explain how an append-only event history makes deterministic replay possible, including why immutable ordering preserves earlier facts, how a projection can be rebuilt from an empty state after a clean process restart, and which verification boundary prevents a mutable view from silently replacing the durable learning record.";
 const evidenceText =
   "Append-only event replay rebuilds state by applying immutable events in sequence. Earlier facts remain available, each projection step is deterministic, and a disposable view can be regenerated without rewriting the durable history that explains how the current result was produced.";
 const sourceUrl =
@@ -131,6 +131,7 @@ async function expectGeometry(page: Page, focalElements: Locator[]): Promise<voi
 }
 
 async function capture(page: Page, testInfo: TestInfo, project: string, fileName: string) {
+  if (testInfo.project.metadata.visualCapture !== true) return;
   if (testInfo.project.name !== project) return;
   await settleLayout(page);
   await expect(page.locator("nextjs-portal")).toHaveCount(0);
