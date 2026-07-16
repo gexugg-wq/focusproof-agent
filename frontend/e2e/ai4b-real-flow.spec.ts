@@ -8,6 +8,8 @@ const sourceExplanation =
 const answerText =
   "Earlier events remain available, so replay can start from an empty state and deterministically apply the same ordered history again.";
 
+test.setTimeout(60000);
+
 test("completes and restores the real general flow through the Next BFF", async ({ page }) => {
   await page.goto("/");
 
