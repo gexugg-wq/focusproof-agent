@@ -28,12 +28,39 @@ describe("FocusProof BFF policy", () => {
 });
 
 describe("API errors", () => {
-  it("returns real Error instances for structured API failures", () => {
+  it("maps session_busy conflicts as temporary and retryable", () => {
     const error = mapApiError(409, { code: "session_busy", retryable: true });
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toBeInstanceOf(Error);
+    expect(error.code).toBe("session_busy");
     expect(error.message).toContain("Session processing");
     expect(error.retryable).toBe(true);
+  });
+
+  it("maps session_finalized conflicts as permanent with a clear message", () => {
+    const error = mapApiError(409, { code: "session_finalized", retryable: false });
+
+    expect(error).toMatchObject({
+      code: "session_finalized",
+      retryable: false,
+      message: "This session is complete. New facts cannot be submitted."
+    });
+  });
+
+  it("keeps unknown conflicts generic and honors explicit retryability", () => {
+    const permanent = mapApiError(409, { code: "unknown_conflict", retryable: false });
+    const temporary = mapApiError(409, { code: "unknown_conflict", retryable: true });
+
+    expect(permanent).toMatchObject({
+      code: "unknown_conflict",
+      retryable: false,
+      message: "FocusProof request failed. Please retry."
+    });
+    expect(temporary).toMatchObject({
+      code: "unknown_conflict",
+      retryable: true,
+      message: "FocusProof request failed. Please retry."
+    });
   });
 
   it("maps access errors without pretending success", () => {

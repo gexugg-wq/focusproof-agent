@@ -34,9 +34,12 @@ export function isAllowedFocusProofRequest(method: string, path: readonly string
 export function mapApiError(status: number, payload: unknown): ApiError {
   const data = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
   const code = typeof data.code === "string" ? data.code : status === 0 ? "network_error" : "request_failed";
-  const retryable = data.retryable === true || status === 409 || status === 503 || status === 0;
-  if (status === 409 || code === "session_busy") {
+  const retryable = data.retryable === true || status === 503 || status === 0;
+  if (code === "session_busy") {
     return new ApiError({ status, code: "session_busy", retryable: true, message: "Session processing is still in progress. Please retry shortly." });
+  }
+  if (code === "session_finalized") {
+    return new ApiError({ status, code, retryable: false, message: "This session is complete. New facts cannot be submitted." });
   }
   if (status === 503 || code === "backend_unavailable" || code === "runtime_unavailable") {
     return new ApiError({ status: status || 503, code, retryable: true, message: "Agent Runtime current unavailable. Page data has been preserved." });
