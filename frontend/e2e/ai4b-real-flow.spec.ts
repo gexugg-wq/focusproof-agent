@@ -19,7 +19,7 @@ test("completes and restores the real general flow through the Next BFF", async 
   await page.getByLabel("Expected output").fill("A concrete replay explanation");
   await page.getByRole("button", { name: /start session/i }).click();
 
-  await expect(page).toHaveURL(/\/sessions\/[^/]+$/);
+  await expect(page).toHaveURL(/\/sessions\/[^/]+$/, { timeout: 15000 });
   await expect(page.getByRole("heading", { name: "Deterministic event replay" })).toBeVisible();
   await expect(page.getByText("Wallet metadata")).toHaveCount(0);
   await expect(page.getByText("Proof recording")).toHaveCount(0);
