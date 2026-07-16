@@ -3,7 +3,7 @@
 import React from "react";
 import { FileText, Link, Send, WalletCards } from "lucide-react";
 import { useState } from "react";
-import type { SubmitEvidenceRequest, SyncResponse } from "@/lib/api/contracts";
+import type { Evidence, SubmitEvidenceRequest, SyncResponse } from "@/lib/api/contracts";
 import { getSafeErrorMessage } from "@/lib/api/client";
 import { buildEvidencePayload } from "@/lib/evidence/payloads";
 
@@ -13,11 +13,13 @@ export function EvidencePanel({
   sessionId,
   domain,
   walletAddress,
+  submittedEvidence = [],
   onSubmitEvidence
 }: {
   sessionId: string;
   domain: string;
   walletAddress: string | null;
+  submittedEvidence?: Evidence[];
   onSubmitEvidence: (payload: SubmitEvidenceRequest) => Promise<Pick<SyncResponse, "syncPending">>;
 }) {
   const [mode, setMode] = useState<EvidenceMode>(domain.toLowerCase() === "web3" ? "web3" : "text");
@@ -81,6 +83,20 @@ export function EvidencePanel({
         <button className="btn w-fit" disabled={busy} type="submit"><Send size={16} />{busy ? "Submitting..." : "Submit evidence"}</button>
         <p aria-live="polite" className="text-sm text-slate-700">{message}</p>
       </form>
+      {submittedEvidence.length > 0 ? (
+        <div aria-label="Submitted evidence" className="grid gap-2">
+          <h3 className="font-medium">Submitted evidence</h3>
+          <ol className="grid gap-2">
+            {submittedEvidence.map((evidence) => (
+              <li className="rounded-md border border-line p-3 text-sm" key={evidence.evidenceId}>
+                <p className="font-medium">{evidence.evidenceType}</p>
+                {evidence.textContent ? <p>{evidence.textContent}</p> : null}
+                {evidence.sourceUrl ? <p>{evidence.sourceUrl}</p> : null}
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -57,7 +57,13 @@ export function SessionWorkspace({ sessionId }: { sessionId: string }) {
         {web3Context ? <WalletPanel onWalletChange={setWalletAddress} /> : null}
       </aside>
       <div className="grid content-start gap-4">
-        <EvidencePanel sessionId={sessionId} domain={session.state.goal.domain} walletAddress={walletAddress} onSubmitEvidence={(payload) => evidence.mutateAsync(payload)} />
+        <EvidencePanel
+          sessionId={sessionId}
+          domain={session.state.goal.domain}
+          walletAddress={walletAddress}
+          submittedEvidence={session.state.evidence}
+          onSubmitEvidence={(payload) => evidence.mutateAsync(payload)}
+        />
         <ReviewPanel session={session} onRequestReview={() => review.mutateAsync()} onSubmitAnswer={(input) => answer.mutateAsync(input)} />
       </div>
       <div className="grid h-fit gap-2">

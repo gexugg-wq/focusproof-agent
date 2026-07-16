@@ -38,5 +38,10 @@
     "tailwindcss": "^3.4.15",
     "typescript": "^5.6.3",
     "vitest": "^2.1.5"
+  },
+  "overrides": {
+    "next": {
+      "postcss": "8.5.18"
+    }
   }
 }

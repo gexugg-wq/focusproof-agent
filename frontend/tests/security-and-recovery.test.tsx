@@ -279,3 +279,81 @@ describe("error recovery", () => {
     await waitFor(() => expect(submitAnswer).toHaveBeenCalledTimes(1));
   });
 });
+
+describe("review state accessibility", () => {
+  it("exposes awaiting user as an accessible review state", async () => {
+    const awaiting: RuntimeReviewResult = {
+      sessionId: "sess_security",
+      conversationMode: "openhands-local-scripted-test",
+      usedOpenHandsConversation: true,
+      reviewStatus: "awaiting_user",
+      agentQuestions: [
+        {
+          questionId: "q_state",
+          question: "Explain the central idea."
+        }
+      ]
+    };
+    render(
+      wrap(
+        <ReviewPanel
+          session={sessionDetail()}
+          onRequestReview={vi.fn().mockResolvedValue(awaiting)}
+          onSubmitAnswer={vi.fn()}
+        />
+      )
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /end learning/i }));
+
+    expect(
+      await screen.findByRole("status", { name: /review state/i })
+    ).toHaveTextContent(/awaiting user/i);
+  });
+
+  it("exposes completed as an accessible review state", () => {
+    render(
+      wrap(
+        <ReviewPanel
+          session={sessionDetail({
+            status: "reviewed",
+            reviewResult: {
+              status: "LikelyLearning",
+              score: 82,
+              confidence: 0.75,
+              dimensions: { evidence: 80 },
+              findings: [],
+              summary: "Completed summary",
+              nextStep: "Continue practice"
+            }
+          })}
+          onRequestReview={vi.fn()}
+          onSubmitAnswer={vi.fn()}
+        />
+      )
+    );
+
+    expect(
+      screen.getByRole("status", { name: /review state/i })
+    ).toHaveTextContent(/completed/i);
+  });
+
+  it("exposes failed as an accessible review state", async () => {
+    render(
+      wrap(
+        <ReviewPanel
+          session={sessionDetail()}
+          onRequestReview={vi.fn().mockRejectedValue(new Error("Review failed safely."))}
+          onSubmitAnswer={vi.fn()}
+        />
+      )
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /end learning/i }));
+
+    expect(
+      await screen.findByRole("status", { name: /review state/i })
+    ).toHaveTextContent(/failed/i);
+    expect(screen.getByText("Review failed safely.")).toBeInTheDocument();
+  });
+});
