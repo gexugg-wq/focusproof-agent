@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from openhands.sdk import Agent, Conversation, LLM
-from openhands.sdk.conversation.impl.local_conversation import LocalConversation
+from openhands.sdk.conversation import LocalConversation
 from openhands.sdk.conversation.types import ConversationCallbackType
 from openhands.sdk.testing import TestLLM
 from openhands.sdk.tool import Tool

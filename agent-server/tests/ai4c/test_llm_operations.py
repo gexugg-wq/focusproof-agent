@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from openhands.sdk import LLM
+import openhands.sdk.conversation as conversation_module
+from openhands.sdk.conversation import LocalConversation as PublicLocalConversation
 from pydantic import ValidationError
 
 from focusproof.config.profiles import RealLlmPolicy, load_runtime_settings
@@ -104,6 +108,15 @@ def usage_snapshot_from(handle: ConversationHandle) -> ProviderUsageSnapshot:
     return handle.provider_usage_snapshot()
 
 
+def _load_probe_module(module_name: str, source_path: Path) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(module_name, source_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_deterministic_profile_ignores_provider_values() -> None:
     settings = load_runtime_settings(
         {
@@ -190,6 +203,36 @@ def test_factory_uses_validated_runtime_settings_without_dotenv(
         assert handle.conversation.agent.llm.max_output_tokens == 1_024
     finally:
         handle.conversation.close()
+
+
+def test_runtime_modules_bind_public_local_conversation_export(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from focusproof.openhands_runtime import factory as factory_module
+    from focusproof.openhands_runtime import handle as handle_module
+
+    class SentinelLocalConversation(PublicLocalConversation):
+        pass
+
+    assert SentinelLocalConversation is not PublicLocalConversation
+
+    with monkeypatch.context() as context:
+        context.setattr(
+            conversation_module,
+            "LocalConversation",
+            SentinelLocalConversation,
+        )
+        probe_handle = _load_probe_module(
+            "focusproof_openhands_runtime_handle_probe",
+            Path(handle_module.__file__).resolve(),
+        )
+        probe_factory = _load_probe_module(
+            "focusproof_openhands_runtime_factory_probe",
+            Path(factory_module.__file__).resolve(),
+        )
+
+        assert probe_handle.LocalConversation is SentinelLocalConversation
+        assert probe_factory.LocalConversation is SentinelLocalConversation
 
 
 def test_factory_sets_public_local_conversation_budget(tmp_path: Path) -> None:

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
-from openhands.sdk.conversation.impl.local_conversation import LocalConversation
+from openhands.sdk.conversation import LocalConversation
 from pydantic import BaseModel, ConfigDict, Field
 
 from focusproof.domain.review import ReviewResult

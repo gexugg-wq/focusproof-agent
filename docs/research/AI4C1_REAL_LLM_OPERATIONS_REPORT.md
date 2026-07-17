@@ -14,6 +14,9 @@
   - `7f711cd72307f2e9998444e8d805ff5457f62b7b` — global paid-provider admission and failure closing.
   - `eaa5caa0897a860514069210854f5ce604dd3cd1` — separately authorized real-provider smoke contract.
   - `de383cf169c5828ad1002802ba792fd76ab0860b` — deterministic release-gate corrections found by the full gate.
+  - Follow-up acceptance correction — runtime modules now import
+    `LocalConversation` from the public `openhands.sdk.conversation` export
+    rather than the private `impl` path.
 
 ## Changed Files
 
@@ -107,8 +110,9 @@ Mypy 2.2.0.
   FocusProof performs no provider HTTP calls.
 - Existing `openhands.sdk.Agent` remains the reasoning owner.
 - `openhands.sdk.conversation.Conversation` remains the default factory path;
-  `openhands.sdk.conversation.LocalConversation` is used directly only to pass
-  its public `max_budget_per_run` option.
+  `openhands.sdk.conversation.LocalConversation` is imported through the
+  official public export, not the private `impl` path, and is used directly
+  only to pass its public `max_budget_per_run` option.
 - `LocalConversation.arun()`, `interrupt()`, `close()`, native state/EventLog,
   `ConversationStats.get_combined_metrics()` and SDK `Metrics` remain the run,
   lifecycle, fact and usage sources.
