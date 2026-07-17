@@ -27,6 +27,7 @@ from focusproof.api.models import (
     SubmitEvidenceRequest,
 )
 from focusproof.config.env import get_env_status
+from focusproof.config.profiles import load_runtime_settings
 from focusproof.domain.review import ReviewResult
 from focusproof.openhands_adapter import real_conversation
 from focusproof.openhands_adapter.capabilities import get_openhands_capabilities
@@ -46,6 +47,7 @@ from focusproof.openhands_runtime.manager import (
     DEFAULT_REVIEW_TIMEOUT_SECONDS,
     ConversationManager,
 )
+from focusproof.openhands_runtime.provider_admission import BoundedProviderAdmission
 from focusproof.openhands_runtime.tool_registry import release_repository_provider
 from focusproof.persistence.database import (
     create_database_engine,
@@ -188,6 +190,22 @@ def create_app(
                 resolved_data_dir,
                 timeout_seconds=configured_lock_timeout,
             )
+            runtime_settings = (
+                load_runtime_settings(os.environ) if llm_factory is None else None
+            )
+            real_llm_policy = (
+                runtime_settings.real_llm if runtime_settings is not None else None
+            )
+            provider_admission = (
+                BoundedProviderAdmission(
+                    max_concurrent=real_llm_policy.max_concurrent_reviews,
+                    acquire_timeout_seconds=(
+                        real_llm_policy.admission_timeout_seconds
+                    ),
+                )
+                if real_llm_policy is not None
+                else None
+            )
             manager = ConversationManager(
                 repository=evidence_provider,
                 audit_log=audit_log,
@@ -196,7 +214,13 @@ def create_app(
                 llm_factory=llm_factory,
                 uow_factory=uow_factory,
                 run_lock=run_lock,
-                review_timeout_seconds=review_timeout_seconds,
+                review_timeout_seconds=(
+                    min(review_timeout_seconds, real_llm_policy.max_review_seconds)
+                    if real_llm_policy is not None
+                    else review_timeout_seconds
+                ),
+                provider_admission=provider_admission,
+                runtime_settings=runtime_settings,
             )
             application.state.engine = engine
             application.state.uow_factory = uow_factory

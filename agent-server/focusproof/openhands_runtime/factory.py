@@ -244,7 +244,7 @@ class ConversationFactory:
 
     def _max_iterations(self) -> int:
         policy = self._runtime_settings.real_llm if self._runtime_settings else None
-        return policy.max_iterations if policy else 6
+        return min(policy.max_iterations, policy.max_calls_per_review) if policy else 6
 
     def _max_budget_per_run(self) -> float | None:
         policy = self._runtime_settings.real_llm if self._runtime_settings else None

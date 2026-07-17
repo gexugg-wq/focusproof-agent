@@ -13,6 +13,10 @@ from focusproof.openhands_runtime.handle import (
     ConversationHandle,
     ProviderUsageSnapshot,
 )
+from focusproof.openhands_runtime.provider_admission import (
+    BoundedProviderAdmission,
+    ProviderAdmissionUnavailableError,
+)
 from focusproof.runtime.evidence import Evidence, LearningGoal
 
 
@@ -199,6 +203,17 @@ def test_factory_sets_public_local_conversation_budget(tmp_path: Path) -> None:
         handle.conversation.close()
 
 
+def test_factory_caps_native_iterations_to_provider_call_limit(tmp_path: Path) -> None:
+    handle = create_real_mode_handle_with_fake_sdk_llm(
+        tmp_path,
+        max_cost_usd=0.10,
+    )
+    try:
+        assert handle.conversation.max_iteration_per_run == 4
+    finally:
+        handle.conversation.close()
+
+
 def test_usage_snapshot_contains_aggregates_only(tmp_path: Path) -> None:
     handle = handle_with_recorded_sdk_metrics(tmp_path)
     try:
@@ -218,3 +233,15 @@ def test_usage_snapshot_contains_aggregates_only(tmp_path: Path) -> None:
         }
     finally:
         handle.conversation.close()
+
+
+def test_global_provider_admission_rejects_second_paid_run_before_llm() -> None:
+    admission = BoundedProviderAdmission(
+        max_concurrent=1,
+        acquire_timeout_seconds=0.01,
+    )
+
+    with admission.acquire():
+        with pytest.raises(ProviderAdmissionUnavailableError):
+            with admission.acquire():
+                raise AssertionError("second run entered")

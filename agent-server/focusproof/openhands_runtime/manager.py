@@ -12,6 +12,7 @@ from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
 from openhands.sdk.event.base import Event as OpenHandsEvent
 
 from focusproof.domain.review import ReviewResult
+from focusproof.config.profiles import RuntimeSettings
 from focusproof.openhands_runtime.evidence_messages import runtime_evidence_payload
 from focusproof.openhands_runtime.factory import (
     ConversationFactory,
@@ -21,6 +22,10 @@ from focusproof.openhands_runtime.factory import (
 from focusproof.openhands_runtime.handle import ConversationHandle, RuntimeReviewResult
 from focusproof.openhands_runtime.locks import SessionRunLock
 from focusproof.openhands_runtime.projector import AuditProjection, OpenHandsEventProjector
+from focusproof.openhands_runtime.provider_admission import (
+    ProviderAdmission,
+    ProviderAdmissionUnavailableError,
+)
 from focusproof.openhands_runtime.result_extractor import AuditQuery, RuntimeResultExtractor
 from focusproof.openhands_runtime.synchronizer import ConversationSynchronizer
 from focusproof.openhands_runtime.tools import SessionEvidenceRepository
@@ -58,6 +63,8 @@ class ConversationManager:
         review_timeout_seconds: float = DEFAULT_REVIEW_TIMEOUT_SECONDS,
         uow_factory: UnitOfWorkFactoryLike | None = None,
         run_lock: SessionRunLock | None = None,
+        provider_admission: ProviderAdmission | None = None,
+        runtime_settings: RuntimeSettings | None = None,
     ) -> None:
         self._audit_log = audit_log
         self._lifecycle_lock = RLock()
@@ -75,6 +82,7 @@ class ConversationManager:
         self._goals: dict[str, LearningGoal] = {}
         self._uow_factory = uow_factory
         self._run_lock = run_lock or _NoopSessionRunLock()
+        self._provider_admission = provider_admission
         self._synchronizer = (
             ConversationSynchronizer(uow_factory) if uow_factory is not None else None
         )
@@ -86,6 +94,7 @@ class ConversationManager:
             data_dir=data_dir,
             llm_factory=llm_factory,
             callback_factory=self._create_projector_callback,
+            runtime_settings=runtime_settings,
         )
         self._accepting_reviews = True
 
@@ -235,12 +244,23 @@ class ConversationManager:
             if recovered.reviewStatus != "failed":
                 return recovered
             try:
-                asyncio.run(
-                    asyncio.wait_for(
-                        handle.conversation.arun(),
-                        timeout=self._review_timeout_seconds,
+                if self._provider_admission is None:
+                    asyncio.run(
+                        asyncio.wait_for(
+                            handle.conversation.arun(),
+                            timeout=self._review_timeout_seconds,
+                        )
                     )
-                )
+                else:
+                    with self._provider_admission.acquire():
+                        asyncio.run(
+                            asyncio.wait_for(
+                                handle.conversation.arun(),
+                                timeout=self._review_timeout_seconds,
+                            )
+                        )
+            except ProviderAdmissionUnavailableError:
+                raise
             except TimeoutError:
                 handle.conversation.interrupt()
                 return self._failure_result(handle, "TimeoutError")
