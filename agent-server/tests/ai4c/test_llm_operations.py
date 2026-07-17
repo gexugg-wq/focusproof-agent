@@ -53,7 +53,7 @@ def complete_fake_dashscope_environment() -> dict[str, str]:
 
 
 def fake_real_llm_policy(**overrides: object) -> RealLlmPolicy:
-    values: dict[str, object] = complete_fake_dashscope_environment()
+    values: dict[str, object] = dict(complete_fake_dashscope_environment())
     values.update(overrides)
     settings = load_runtime_settings(
         {key: str(value) for key, value in values.items()}
