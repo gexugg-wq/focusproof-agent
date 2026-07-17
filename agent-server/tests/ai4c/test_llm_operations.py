@@ -9,6 +9,10 @@ from pydantic import ValidationError
 from focusproof.config.profiles import RealLlmPolicy, load_runtime_settings
 from focusproof.openhands_adapter.llm_config import build_openhands_llm
 from focusproof.openhands_runtime.factory import ConversationFactory
+from focusproof.openhands_runtime.handle import (
+    ConversationHandle,
+    ProviderUsageSnapshot,
+)
 from focusproof.runtime.evidence import Evidence, LearningGoal
 
 
@@ -52,6 +56,48 @@ def fake_real_llm_policy(**overrides: object) -> RealLlmPolicy:
     )
     assert settings.real_llm is not None
     return settings.real_llm
+
+
+def create_real_mode_handle_with_fake_sdk_llm(
+    tmp_path: Path,
+    *,
+    max_cost_usd: float,
+) -> ConversationHandle:
+    values = complete_fake_dashscope_environment()
+    values["FOCUSPROOF_LLM_MAX_COST_USD"] = str(max_cost_usd)
+    settings = load_runtime_settings(values)
+    return ConversationFactory(
+        repository=EmptyRepository(),
+        project_root=tmp_path,
+        runtime_settings=settings,
+    ).create(
+        "sess_usage",
+        LearningGoal(
+            domain="general",
+            title="Learn bounded providers",
+            goal="Explain why provider calls need explicit bounds.",
+        ),
+    )
+
+
+def handle_with_recorded_sdk_metrics(tmp_path: Path) -> ConversationHandle:
+    handle = create_real_mode_handle_with_fake_sdk_llm(
+        tmp_path,
+        max_cost_usd=0.10,
+    )
+    llm = handle.conversation.agent.llm
+    metrics = llm.metrics
+    metrics.add_token_usage(50, 10, 0, 0, 16_384, "response-1")
+    metrics.add_token_usage(70, 20, 0, 0, 16_384, "response-2")
+    metrics.add_cost(0.004)
+    metrics.add_response_latency(0.25, "response-1")
+    metrics.add_response_latency(0.75, "response-2")
+    handle.conversation.state.stats.usage_to_metrics[llm.usage_id] = metrics
+    return handle
+
+
+def usage_snapshot_from(handle: ConversationHandle) -> ProviderUsageSnapshot:
+    return handle.provider_usage_snapshot()
 
 
 def test_deterministic_profile_ignores_provider_values() -> None:
@@ -138,5 +184,37 @@ def test_factory_uses_validated_runtime_settings_without_dotenv(
         assert handle.runtime_mode == "openhands-local-real"
         assert handle.conversation.agent.llm.max_input_tokens == 16_384
         assert handle.conversation.agent.llm.max_output_tokens == 1_024
+    finally:
+        handle.conversation.close()
+
+
+def test_factory_sets_public_local_conversation_budget(tmp_path: Path) -> None:
+    handle = create_real_mode_handle_with_fake_sdk_llm(
+        tmp_path,
+        max_cost_usd=0.10,
+    )
+    try:
+        assert handle.conversation.max_budget_per_run == 0.10
+    finally:
+        handle.conversation.close()
+
+
+def test_usage_snapshot_contains_aggregates_only(tmp_path: Path) -> None:
+    handle = handle_with_recorded_sdk_metrics(tmp_path)
+    try:
+        snapshot = usage_snapshot_from(handle)
+
+        assert snapshot.call_count == 2
+        assert snapshot.input_tokens == 120
+        assert snapshot.output_tokens == 30
+        assert snapshot.cost_usd == pytest.approx(0.004)
+        assert snapshot.latency_seconds == pytest.approx(1.0)
+        assert set(snapshot.model_dump()) == {
+            "call_count",
+            "input_tokens",
+            "output_tokens",
+            "cost_usd",
+            "latency_seconds",
+        }
     finally:
         handle.conversation.close()

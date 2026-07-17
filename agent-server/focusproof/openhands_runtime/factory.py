@@ -167,22 +167,39 @@ class ConversationFactory:
             else None
         )
         try:
-            conversation = Conversation(
-                agent=agent,
-                workspace=workspace_path,
-                persistence_dir=persistence_path,
-                conversation_id=conversation_id,
-                callbacks=callbacks,
-                max_iteration_per_run=6,
-                visualizer=None,
-                delete_on_close=False,
-                tags={
-                    "application": "focusproof",
-                    "sessionid": session_id,
-                    "toolsetversion": toolset_version,
-                },
-                user_id=user_id,
-            )
+            tags = {
+                "application": "focusproof",
+                "sessionid": session_id,
+                "toolsetversion": toolset_version,
+            }
+            budget = self._max_budget_per_run()
+            if budget is None:
+                conversation = Conversation(
+                    agent=agent,
+                    workspace=workspace_path,
+                    persistence_dir=persistence_path,
+                    conversation_id=conversation_id,
+                    callbacks=callbacks,
+                    max_iteration_per_run=self._max_iterations(),
+                    visualizer=None,
+                    delete_on_close=False,
+                    tags=tags,
+                    user_id=user_id,
+                )
+            else:
+                conversation = LocalConversation(
+                    agent=agent,
+                    workspace=workspace_path,
+                    persistence_dir=persistence_path,
+                    conversation_id=conversation_id,
+                    callbacks=callbacks,
+                    max_iteration_per_run=self._max_iterations(),
+                    visualizer=None,
+                    delete_on_close=False,
+                    tags=tags,
+                    user_id=user_id,
+                    max_budget_per_run=budget,
+                )
         except Exception as exc:
             raise RuntimeCreationError(
                 "OpenHands LocalConversation creation failed"
@@ -216,6 +233,7 @@ class ConversationFactory:
 
     def _create_production_llm(self, session_id: str) -> LLM:
         settings = self._runtime_settings or load_runtime_settings(os.environ)
+        self._runtime_settings = settings
         policy = settings.real_llm
         if policy is None:
             raise RuntimeUnavailableError("OpenHands LLM configuration is unavailable")
@@ -223,6 +241,14 @@ class ConversationFactory:
             policy,
             usage_id=f"focusproof-{session_id}",
         )
+
+    def _max_iterations(self) -> int:
+        policy = self._runtime_settings.real_llm if self._runtime_settings else None
+        return policy.max_iterations if policy else 6
+
+    def _max_budget_per_run(self) -> float | None:
+        policy = self._runtime_settings.real_llm if self._runtime_settings else None
+        return policy.max_cost_usd if policy else None
 
     def _session_tools(
         self,
