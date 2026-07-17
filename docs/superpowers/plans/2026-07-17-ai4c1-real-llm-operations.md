@@ -167,7 +167,7 @@ the production factory/manager and native OpenHands Conversation path once;
 def test_deterministic_profile_ignores_provider_values() -> None:
     settings = load_runtime_settings({
         "FOCUSPROOF_PROFILE": "deterministic-test",
-        "DASHSCOPE_API_KEY": "fake-key-must-not-be-loaded",
+        "DASHSCOPE_API_KEY": "placeholder",
     })
     assert settings.profile == "deterministic-test"
     assert settings.real_llm is None
