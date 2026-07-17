@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import asyncio
-from typing import Annotated, cast
+from typing import Annotated
 
 from fastapi import Header, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -20,14 +19,14 @@ class VerifiedIdentity(BaseModel):
         return self.principal_id
 
 
-def get_verified_identity(
-    request: Request = cast(Request, None),
+async def get_verified_identity(
+    request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> VerifiedIdentity:
-    if request is None or getattr(request.app.state, "allow_anonymous_identity", False):
+    if getattr(request.app.state, "allow_anonymous_identity", False):
         return VerifiedIdentity(verified_user_id=DEVELOPMENT_USER_ID)
 
     from focusproof.api.oidc import get_token_verifier, require_verified_identity
 
     verifier = get_token_verifier()
-    return asyncio.run(require_verified_identity(authorization, verifier))
+    return await require_verified_identity(verifier, authorization)

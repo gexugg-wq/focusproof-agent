@@ -1,15 +1,25 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
+from fastapi import Request
 from fastapi.testclient import TestClient
 import jwt
 from jwt import PyJWKSet
 from pydantic import ValidationError
 import pytest
 
-from focusproof.api.auth import DEVELOPMENT_USER_ID, VerifiedIdentity
-from focusproof.api.oidc import get_token_verifier, require_verified_identity
+from focusproof.api.auth import DEVELOPMENT_USER_ID, VerifiedIdentity, get_verified_identity
+from focusproof.api.oidc import (
+    IdentityUnavailableError,
+    InvalidTokenError,
+    OidcTokenVerifier,
+    get_token_verifier,
+    require_verified_identity,
+)
 from focusproof.config.identity import OidcSettings, load_oidc_settings
 
 from .oidc_fixture import (
@@ -64,6 +74,73 @@ def _install_jwks_fetch(
         return next_response
 
     monkeypatch.setattr(jwt.PyJWKClient, "fetch_data", fake_fetch_data)
+
+
+class MutableMonotonicClock:
+    def __init__(self, now: float = 1_000.0) -> None:
+        self._now = now
+
+    def __call__(self) -> float:
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        self._now += seconds
+
+
+class MutableJwksSource:
+    def __init__(self, document: dict[str, object]) -> None:
+        self._document = document
+        self._failure: Exception | None = None
+        self.fetch_count = 0
+
+    def set_document(self, document: dict[str, object]) -> None:
+        self._document = document
+        self._failure = None
+
+    def fail_with(self, exc: Exception) -> None:
+        self._failure = exc
+
+    def fetch_data(self, self_client: jwt.PyJWKClient) -> dict[str, object]:
+        del self_client
+        self.fetch_count += 1
+        if self._failure is not None:
+            raise self._failure
+        return self._document
+
+
+def _install_dynamic_jwks_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+    source: MutableJwksSource,
+) -> None:
+    def fake_fetch_data(self: jwt.PyJWKClient) -> dict[str, object]:
+        return source.fetch_data(self)
+
+    monkeypatch.setattr(jwt.PyJWKClient, "fetch_data", fake_fetch_data)
+
+
+def _settings_for_fixture(fixture: LocalOidcFixture) -> OidcSettings:
+    return load_oidc_settings(_oidc_env(fixture), profile="staging")
+
+
+def _request_with_anonymous_mode(*, allow_anonymous_identity: bool) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "headers": [],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "client": ("testclient", 50000),
+            "root_path": "",
+            "app": SimpleNamespace(
+                state=SimpleNamespace(
+                    allow_anonymous_identity=allow_anonymous_identity,
+                )
+            ),
+        }
+    )
 
 
 def test_local_dev_can_explicitly_keep_anonymous_identity(
@@ -302,6 +379,113 @@ def test_configured_staging_without_principal_resolver_fails_closed(
 
     assert response.status_code == 503
     assert response.json() == {"code": "identity_unavailable", "retryable": False}
+
+
+def test_verifier_uses_cached_signing_key_until_ttl_then_fails_closed_on_outage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = local_oidc_fixture()
+    clock = MutableMonotonicClock()
+    source = MutableJwksSource({"keys": [fixture.public_jwk]})
+    _install_dynamic_jwks_fetch(monkeypatch, source)
+    verifier = OidcTokenVerifier(
+        _settings_for_fixture(fixture),
+        principal_resolver=StaticPrincipalResolver("principal_oidc_ttl"),
+        monotonic_clock=clock,
+        max_cached_signing_keys=2,
+    )
+    token = fixture.token()
+
+    first = asyncio.run(verifier.verify(token))
+    source.fail_with(RuntimeError("jwks offline"))
+    cached = asyncio.run(verifier.verify(token))
+    clock.advance(301)
+
+    assert first.principal_id == "principal_oidc_ttl"
+    assert cached.principal_id == "principal_oidc_ttl"
+    assert source.fetch_count == 1
+    with pytest.raises(InvalidTokenError):
+        asyncio.run(verifier.verify(token))
+    assert source.fetch_count == 2
+
+
+def test_verifier_refreshes_same_kid_after_ttl_and_rejects_old_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_fixture = local_oidc_fixture()
+    second_fixture = local_oidc_fixture()
+    clock = MutableMonotonicClock()
+    source = MutableJwksSource({"keys": [first_fixture.public_jwk]})
+    _install_dynamic_jwks_fetch(monkeypatch, source)
+    verifier = OidcTokenVerifier(
+        _settings_for_fixture(first_fixture),
+        principal_resolver=StaticPrincipalResolver("principal_oidc_rotation"),
+        monotonic_clock=clock,
+        max_cached_signing_keys=2,
+    )
+    rotated_jwk = dict(second_fixture.public_jwk, kid=first_fixture.kid)
+    old_token = first_fixture.token()
+
+    first = asyncio.run(verifier.verify(old_token))
+    clock.advance(301)
+    source.set_document({"keys": [rotated_jwk]})
+    new_token = second_fixture.token(kid=first_fixture.kid)
+    refreshed = asyncio.run(verifier.verify(new_token))
+
+    assert first.principal_id == "principal_oidc_rotation"
+    assert refreshed.principal_id == "principal_oidc_rotation"
+    with pytest.raises(InvalidTokenError):
+        asyncio.run(verifier.verify(old_token))
+
+
+def test_verifier_evicts_oldest_kid_when_cache_capacity_is_reached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixtures = [local_oidc_fixture(), local_oidc_fixture(), local_oidc_fixture()]
+    clock = MutableMonotonicClock()
+    source = MutableJwksSource({"keys": [fixtures[0].public_jwk]})
+    _install_dynamic_jwks_fetch(monkeypatch, source)
+    verifier = OidcTokenVerifier(
+        _settings_for_fixture(fixtures[0]),
+        principal_resolver=StaticPrincipalResolver("principal_oidc_capacity"),
+        monotonic_clock=clock,
+        max_cached_signing_keys=2,
+    )
+
+    for fixture in fixtures:
+        source.set_document({"keys": [fixture.public_jwk]})
+        identity = asyncio.run(verifier.verify(fixture.token()))
+        assert identity.principal_id == "principal_oidc_capacity"
+
+    source.fail_with(RuntimeError("jwks offline"))
+    cached_second = asyncio.run(verifier.verify(fixtures[1].token()))
+    cached_third = asyncio.run(verifier.verify(fixtures[2].token()))
+
+    assert cached_second.principal_id == "principal_oidc_capacity"
+    assert cached_third.principal_id == "principal_oidc_capacity"
+    with pytest.raises(InvalidTokenError):
+        asyncio.run(verifier.verify(fixtures[0].token()))
+
+
+def test_identity_dependency_is_async_and_only_allows_local_dev_anonymous() -> None:
+    assert inspect.iscoroutinefunction(get_verified_identity)
+
+    local_dev_identity = asyncio.run(
+        get_verified_identity(
+            _request_with_anonymous_mode(allow_anonymous_identity=True),
+            None,
+        )
+    )
+
+    assert local_dev_identity.principal_id == DEVELOPMENT_USER_ID
+
+    with pytest.raises(IdentityUnavailableError):
+        asyncio.run(
+            get_verified_identity(
+                _request_with_anonymous_mode(allow_anonymous_identity=False),
+                None,
+            )
+        )
 
 
 def test_staging_app_without_oidc_config_fails_closed_but_health_stays_secret_free(

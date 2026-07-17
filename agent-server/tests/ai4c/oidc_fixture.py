@@ -35,6 +35,7 @@ class LocalOidcFixture:
         issuer: str | None = None,
         audience: str | None = None,
         algorithm: str = "RS256",
+        kid: str | None = None,
     ) -> str:
         import time
 
@@ -48,7 +49,7 @@ class LocalOidcFixture:
             "exp": now + expires_delta_seconds,
         }
         key: bytes | str = self.private_key_pem
-        headers = {"kid": self.kid}
+        headers = {"kid": kid or self.kid}
         if algorithm.startswith("HS"):
             key = sha256(self.private_key_pem).hexdigest()
         return str(jwt.encode(payload, key, algorithm=algorithm, headers=headers))
