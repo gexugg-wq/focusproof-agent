@@ -1,9 +1,9 @@
 # FocusProof Agent Architecture
 
-Version: Architecture Baseline v0.6
+Version: Architecture Baseline v0.7
 Primary runtime: Python Agent Server
 Frontend: Next.js and TypeScript
-First domain plugin: Web3 learning on Monad Testnet
+Optional domain plugin backlog: Web3 learning, deferred
 Long-term scope: general knowledge learning verification
 
 ## 1. Product Goal
@@ -18,9 +18,33 @@ FocusProof Agent verifies whether a learning session produced credible, reviewab
 - learning output,
 - reflection and next-step plan.
 
-The first demo focuses on Web3 learning because Web3 evidence can be externally checked through transaction hashes, contract addresses and block explorers. The architecture, however, must support any knowledge domain.
+The historical plan selected Web3 as a first plugin because some evidence can
+be checked externally. The accepted MVP is now the domain-general text/URL
+learning flow. Web3 remains an optional plugin backlog and is not part of
+AI4C production readiness.
 
-Accepted implementation baseline: AI4A.3.1. Next design gate: AI4B.0.
+Accepted implementation baseline: AI4B at `bf5c9a8`. Next design gate: AI4C.0
+Production Readiness.
+
+### 1.1 AI4C Production-Readiness Boundary
+
+AI4C keeps the accepted domain-general text/URL product and executes four
+strictly sequential implementation gates after its design is accepted:
+
+1. real-LLM operations through the OpenHands SDK LLM/LiteLLM integration;
+2. FastAPI OIDC identity verification and product authorization;
+3. reproducible single-host OCI staging with PostgreSQL and paired OpenHands
+   persistence recovery;
+4. final production-readiness acceptance.
+
+DashScope is the first real-provider acceptance instance, not an architecture
+dependency. The FastAPI OIDC verifier is the only authoritative application
+identity boundary. AI4C does not add Web3, contracts, wallets, on-chain proof,
+multimodal evidence or a second OpenHands runtime.
+
+AI4C is not a public-deployment authorization. If only a local OIDC test issuer
+or isolated staging substitutes are exercised, the strongest result is
+`staging-ready with blockers`.
 
 ## 2. What Changes From v0.1
 

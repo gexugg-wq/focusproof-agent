@@ -1,13 +1,27 @@
 # OpenHands Reuse Strategy
 
-Version: v0.6
+Version: v0.7
 Primary runtime language: Python
-Product scope: general learning verification, with Web3 as the first domain plugin
+Product scope: general learning verification; optional Web3 plugin deferred
 
-Accepted runtime baseline: AI4A.3.1 on OpenHands SDK 1.31.0. AI4B must consume
-the accepted Conversation/tool/event boundary and must not redesign the Agent
-runtime. The application-owned bounded URL execution pool remains a documented
-SDK gap for process-wide blocking-I/O limits; it is not a second tool runtime.
+Accepted runtime baseline: AI4B at `bf5c9a8` on OpenHands SDK 1.31.0. AI4C must
+consume the accepted Conversation/tool/event boundary and must not redesign the
+Agent runtime. DashScope real-provider acceptance uses the SDK LLM/LiteLLM
+integration and remains provider-neutral. OIDC, admission and product logging
+are FocusProof policy boundaries, not alternate Conversation orchestration.
+
+The AI4C gap audit is limited to:
+
+- the existing bounded URL execution pool for process-wide blocking-I/O limits;
+- the SDK 1.31.0 `Conversation` factory not forwarding the public
+  `LocalConversation.max_budget_per_run` option;
+- FocusProof-wide or per-principal provider admission outside the SDK's
+  per-LLM/run controls;
+- FocusProof identity and product-data redaction, which the SDK cannot define.
+
+Each local addition must remain minimal, use public SDK types and lifecycle,
+and include a removal condition. It must not schedule Agent steps, own
+Conversation state or create another runtime.
 
 ## 1. Why This Changes the Plan
 
