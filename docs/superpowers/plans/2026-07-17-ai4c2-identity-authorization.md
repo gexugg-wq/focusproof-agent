@@ -147,7 +147,7 @@ env -u DASHSCOPE_API_KEY -u OPENAI_API_KEY -u FOCUSPROOF_LLM_API_KEY -u ANTHROPI
 ```bash
 env -u DASHSCOPE_API_KEY -u OPENAI_API_KEY -u FOCUSPROOF_LLM_API_KEY -u ANTHROPIC_API_KEY \
   .venv/bin/python -m pytest agent-server/tests/ai4c/test_identity_authorization.py \
-  agent-server/tests/api/test_security.py -q
+  agent-server/tests/ai4b/test_api_security.py -q
 .venv/bin/ruff check agent-server
 .venv/bin/mypy agent-server
 git diff --check
