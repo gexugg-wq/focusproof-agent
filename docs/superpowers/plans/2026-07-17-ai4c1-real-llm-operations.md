@@ -81,7 +81,7 @@ class RealLlmPolicy(BaseModel):
     num_retries: int
     retry_min_wait_seconds: int
     retry_max_wait_seconds: int
-    max_input_tokens: int
+    context_window_tokens: int
     max_output_tokens: int
     max_iterations: int
     max_review_seconds: int
@@ -220,7 +220,7 @@ FOCUSPROOF_LLM_REQUEST_TIMEOUT_SECONDS=30
 FOCUSPROOF_LLM_NUM_RETRIES=1
 FOCUSPROOF_LLM_RETRY_MIN_WAIT_SECONDS=1
 FOCUSPROOF_LLM_RETRY_MAX_WAIT_SECONDS=4
-FOCUSPROOF_LLM_MAX_INPUT_TOKENS=8192
+FOCUSPROOF_LLM_CONTEXT_WINDOW_TOKENS=16384
 FOCUSPROOF_LLM_MAX_OUTPUT_TOKENS=1024
 FOCUSPROOF_LLM_MAX_ITERATIONS=6
 FOCUSPROOF_LLM_MAX_REVIEW_SECONDS=60
@@ -274,7 +274,7 @@ def test_build_openhands_llm_uses_sdk_and_every_bound() -> None:
     assert llm.base_url == policy.base_url
     assert llm.num_retries == 1
     assert llm.timeout == 30
-    assert llm.max_input_tokens == 8192
+    assert llm.max_input_tokens == policy.context_window_tokens == 16384
     assert llm.max_output_tokens == 1024
     assert llm.log_completions is False
     assert llm.input_cost_per_token == policy.input_cost_per_token
@@ -309,7 +309,8 @@ def build_openhands_llm(policy: RealLlmPolicy, usage_id: str) -> LLM:
         retry_min_wait=policy.retry_min_wait_seconds,
         retry_max_wait=policy.retry_max_wait_seconds,
         timeout=policy.request_timeout_seconds,
-        max_input_tokens=policy.max_input_tokens,
+        # SDK max_input_tokens is the model context window, not a per-call quota.
+        max_input_tokens=policy.context_window_tokens,
         max_output_tokens=policy.max_output_tokens,
         input_cost_per_token=policy.input_cost_per_token,
         output_cost_per_token=policy.output_cost_per_token,
@@ -321,6 +322,13 @@ def build_openhands_llm(policy: RealLlmPolicy, usage_id: str) -> LLM:
 `ConversationFactory` receives an immutable `RuntimeSettings`. Production LLM
 creation calls this function; injected `LLMFactory` remains restricted to SDK
 `TestLLM` in deterministic tests.
+
+OpenHands SDK 1.31.0 requires an effective context window of at least 16,384
+tokens. `ALLOW_SHORT_CONTEXT_WINDOWS` is prohibited and the implementation must
+not read or set it. FocusProof does not add a tokenizer, prompt truncator or
+provider client to claim a separate per-request input-token quota. Existing
+HTTP/request/Evidence size bounds constrain product input; output, cost, call,
+timeout, retry and admission controls constrain paid execution.
 
 - [ ] **Step 4: Run focused green and failure tests**
 
@@ -532,7 +540,6 @@ def test_dashscope_smoke_uses_native_bounded_conversation(request: pytest.Fixtur
     assert result.actionEventsCount >= 1
     assert result.observationEventsCount >= 1
     assert usage.call_count <= 4
-    assert usage.input_tokens <= 8192 * 4
     assert usage.output_tokens <= 1024 * 4
     assert usage.cost_usd <= 0.10
     assert usage.latency_seconds <= 60
@@ -553,9 +560,10 @@ Expected: the real smoke is deselected and no provider config is loaded.
 - [ ] **Step 3: Implement exact guard and bounds**
 
 `require_exact_real_llm_selection()` accepts only `-m real_llm`, refuses mixed
-marker expressions and validates: concurrency 1, retries 1, four calls, 8192
-input tokens/call, 1024 output tokens/call, USD 0.10 total, 30-second provider
-timeout and 60-second review timeout.
+marker expressions and validates: concurrency 1, retries 1, four calls, a
+16,384-token SDK context window (not a per-call input quota), 1024 output
+tokens/call, USD 0.10 total, 30-second provider timeout and 60-second review
+timeout. It rejects any environment containing `ALLOW_SHORT_CONTEXT_WINDOWS`.
 
 - [ ] **Step 4: Run deterministic green tests**
 
