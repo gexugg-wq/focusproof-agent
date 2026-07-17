@@ -25,7 +25,9 @@ class RealLlmPolicy(BaseModel):
     retry_max_wait_seconds: int = Field(
         alias="FOCUSPROOF_LLM_RETRY_MAX_WAIT_SECONDS", ge=0
     )
-    max_input_tokens: int = Field(alias="FOCUSPROOF_LLM_MAX_INPUT_TOKENS", gt=0)
+    context_window_tokens: int = Field(
+        alias="FOCUSPROOF_LLM_CONTEXT_WINDOW_TOKENS", ge=16_384
+    )
     max_output_tokens: int = Field(alias="FOCUSPROOF_LLM_MAX_OUTPUT_TOKENS", gt=0)
     max_iterations: int = Field(alias="FOCUSPROOF_LLM_MAX_ITERATIONS", gt=0)
     max_review_seconds: int = Field(alias="FOCUSPROOF_LLM_MAX_REVIEW_SECONDS", gt=0)
@@ -67,6 +69,10 @@ class _RealLlmEnvironment(RealLlmPolicy):
     local_model_cost_map: Literal["true"] = Field(
         alias="LITELLM_LOCAL_MODEL_COST_MAP"
     )
+    short_context_override: None = Field(
+        default=None,
+        alias="ALLOW_SHORT_CONTEXT_WINDOWS",
+    )
 
 
 _PROFILE_ADAPTER: TypeAdapter[RuntimeProfile] = TypeAdapter(RuntimeProfile)
@@ -89,6 +95,8 @@ def load_runtime_settings(environ: Mapping[str, str]) -> RuntimeSettings:
 
     validated = _RealLlmEnvironment.model_validate(dict(environ))
     policy = RealLlmPolicy.model_validate(
-        validated.model_dump(exclude={"local_model_cost_map"})
+        validated.model_dump(
+            exclude={"local_model_cost_map", "short_context_override"}
+        )
     )
     return RuntimeSettings(profile=profile, real_llm=policy)

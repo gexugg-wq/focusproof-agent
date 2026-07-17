@@ -4,9 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from openhands.sdk import LLM
 from pydantic import SecretStr
 
 from focusproof.config.env import get_env_status, load_project_env
+from focusproof.config.profiles import RealLlmPolicy
 
 
 @dataclass(frozen=True)
@@ -15,6 +17,25 @@ class OpenHandsLLMConfig:
     api_key: SecretStr
     base_url: str | None
     provider_hint: str
+
+
+def build_openhands_llm(policy: RealLlmPolicy, usage_id: str) -> LLM:
+    return LLM(
+        usage_id=usage_id,
+        model=policy.model,
+        api_key=policy.api_key,
+        base_url=policy.base_url,
+        num_retries=policy.num_retries,
+        retry_min_wait=policy.retry_min_wait_seconds,
+        retry_max_wait=policy.retry_max_wait_seconds,
+        timeout=policy.request_timeout_seconds,
+        max_input_tokens=policy.context_window_tokens,
+        max_output_tokens=policy.max_output_tokens,
+        input_cost_per_token=policy.input_cost_per_token,
+        output_cost_per_token=policy.output_cost_per_token,
+        log_completions=False,
+        stream=False,
+    )
 
 
 def build_openhands_llm_config(project_root: Path | None = None) -> OpenHandsLLMConfig | None:

@@ -112,10 +112,14 @@ def test_review_returns_structured_503_when_llm_config_is_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "focusproof.openhands_runtime.factory.build_openhands_llm_config",
-        lambda project_root: None,
-    )
+    monkeypatch.setenv("FOCUSPROOF_PROFILE", "local-dev")
+    for key in (
+        "FOCUSPROOF_LLM_PROVIDER",
+        "FOCUSPROOF_LLM_MODEL",
+        "FOCUSPROOF_LLM_BASE_URL",
+        "FOCUSPROOF_LLM_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
     test_app = _migrated_app(tmp_path)
     with TestClient(test_app) as client:
         session_id = _create_session(client)

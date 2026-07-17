@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Callable, Collection
 from pathlib import Path
@@ -12,7 +13,8 @@ from openhands.sdk.testing import TestLLM
 from openhands.sdk.tool import Tool
 import httpx
 
-from focusproof.openhands_adapter.llm_config import build_openhands_llm_config
+from focusproof.config.profiles import RuntimeSettings, load_runtime_settings
+from focusproof.openhands_adapter.llm_config import build_openhands_llm
 from focusproof.openhands_runtime.capabilities import (
     VerificationCapabilityRegistry,
     build_builtin_capabilities,
@@ -60,6 +62,7 @@ class ConversationFactory:
         tool_assembler: SessionToolAssembler | None = None,
         url_fetcher: UrlFetcher | None = None,
         url_execution_pool: BoundedUrlExecutionPool | None = None,
+        runtime_settings: RuntimeSettings | None = None,
     ) -> None:
         self._repository = repository
         configure_repository_provider(repository)
@@ -99,6 +102,7 @@ class ConversationFactory:
         self._data_dir = (data_dir or self._project_root / "var").resolve()
         self._llm_factory = llm_factory
         self._callback_factory = callback_factory
+        self._runtime_settings = runtime_settings
 
     def create(
         self,
@@ -211,14 +215,13 @@ class ConversationFactory:
         raise ValueError("injected llm_factory must return the SDK TestLLM")
 
     def _create_production_llm(self, session_id: str) -> LLM:
-        config = build_openhands_llm_config(self._project_root)
-        if config is None:
+        settings = self._runtime_settings or load_runtime_settings(os.environ)
+        policy = settings.real_llm
+        if policy is None:
             raise RuntimeUnavailableError("OpenHands LLM configuration is unavailable")
-        return LLM(
+        return build_openhands_llm(
+            policy,
             usage_id=f"focusproof-{session_id}",
-            model=config.model,
-            api_key=config.api_key,
-            base_url=config.base_url,
         )
 
     def _session_tools(
