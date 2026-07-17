@@ -2,7 +2,7 @@
 
 FocusProof Agent is a general learning verification system. It evaluates whether a learning session produced credible, reviewable evidence, using the learner's goal, submitted evidence, tool observations, explanations, follow-up answers, learning output, reflection and next-step plan.
 
-AI1 through AI4A are complete. The repository now contains the OpenHands-native Python review runtime, persistent product projections, a general text/URL verification framework, and the frontend MVP. The next development phase is AI4B.0, a design gate for optional on-chain proof recording, contract boundaries, integration security and Monad Testnet deployment sequencing.
+AI1 through AI4B are complete. The repository now contains the OpenHands-native Python review runtime, persistent product projections, a general text/URL verification framework, the frontend MVP, and an accepted general quality, security and release-readiness baseline. The next development phase is AI4C.0, a design gate for production identity, real-LLM provider operation and reproducible deployment. Multimodal evidence remains a later phase.
 
 ## Why Python Agent Server
 
@@ -68,4 +68,6 @@ checks the Alembic revision and never applies migrations automatically.
 - AI2 owns the completed Python Agent Server and OpenHands Conversation runtime.
 - AI3 owns the completed frontend MVP and optional wallet user flow.
 - AI4A owns the completed general text/URL verification framework.
-- AI4B is next: contract, proof-recording integration, security and deployment, split into sequential design and implementation gates.
+- AI4B owns the completed general quality, security and release-readiness baseline.
+- AI4C is next: production identity, real-LLM operational hardening and reproducible staging deployment, split into sequential design and implementation gates.
+- Optional Web3 proof recording remains a domain-plugin backlog and cannot redefine the general runtime.

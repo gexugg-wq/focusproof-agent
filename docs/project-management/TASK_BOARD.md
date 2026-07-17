@@ -55,15 +55,17 @@ Current decision:
 - OpenHands SDK should be used directly, with OpenHands Conversation/ConversationState/EventLog acting as the official agent runtime path.
 
 The project should not be split into too many worker AIs during the demo stage.
-Five logical worker roles are enough; AI4 is split into sequential AI4A and AI4B
-phases so backend framework work cannot be confused with contract deployment work:
+Five logical worker roles are enough; AI4 is split into sequential AI4A, AI4B
+and AI4C phases so verification-framework, release-baseline and production-readiness
+work cannot be confused:
 
 - AI0: controller and architect.
 - AI1: project scaffold and OpenHands reuse investigation.
 - AI2: Python Agent Server, OpenHands SDK integration, Conversation-backed runtime, learning agent logic and tools.
 - AI3: frontend, wallet UX and user flows after AI2 promotes Conversation into the official review path.
 - AI4A: general verification tool framework on the existing OpenHands runtime.
-- AI4B: contract, integration tests, security and deployment.
+- AI4B: general integration tests, security and release-readiness baseline.
+- AI4C: production identity, real-LLM operations and reproducible staging deployment.
 
 ## 3. Directory Ownership
 
@@ -74,7 +76,8 @@ phases so backend framework work cannot be confused with contract deployment wor
 | AI2 | Python Agent Server + OpenHands Conversation Runtime | `agent-server/`, `fixtures/`, dependency config, `docs/research/` runtime reports | Frontend UI ownership, Solidity contract ownership |
 | AI3 | Frontend + Wallet UX | `frontend/` | LLM secrets, database direct writes, server-side scoring |
 | AI4A | General Verification Framework | `agent-server/focusproof/openhands_runtime/`, narrowly affected `agent-server/focusproof/domain/` modules, `agent-server/tests/`, `fixtures/`, `docs/research/`, necessary Python dependency declarations | `frontend/`, `contracts/`, `.env`, `var/`, OpenHands SDK source, public protocol or architecture changes without AI0 approval |
-| AI4B | Contract + QA + Deployment | `contracts/`, `scripts/`, `docs/security/`, `docs/deployment/`, cross-system tests | Product scoring rewrites without AI0 approval |
+| AI4B | General QA + Security + Release Readiness | cross-system tests, narrowly affected backend/frontend fixes, `docs/security/`, `docs/deployment/`, `docs/research/` | New product features, multimodal work, public deployment |
+| AI4C | Production Readiness | identity/runtime/deployment modules approved by AI4C.0, their tests, deployment config and reports | Multimodal work, Web3 specialization, OpenHands mirror implementations, scoring rewrites without AI0 approval |
 
 Two AIs must not edit the same file at the same time.
 
@@ -335,80 +338,57 @@ AI4A stops after local commits and AI0 review. It must not push or begin AI4B.
 
 Status: completed and accepted at AI4A.3.1. Accepted commits end at `4387333`.
 
-## 9. AI4B: Contract + QA + Deployment
+## 9. AI4B: General QA + Security + Release Readiness
 
-Status: next, beginning with the AI4B.0 design gate. No contract or deployment
-implementation starts until AI0 and the user approve that design.
+Status: completed and accepted at `bf5c9a8`.
+
+Delivered:
+
+- cross-system backend, frontend and real-BFF browser acceptance,
+- security boundaries for identity ownership, XSS, SSRF and bounded input,
+- restart, recovery, locking and shutdown reliability,
+- four-viewport production visual acceptance,
+- local, staging and operations runbooks,
+- final acceptance matrix and release-readiness report.
+
+AI4B did not deploy publicly, run a Web3 transaction, record an on-chain proof,
+add multimodal input or approve a production identity provider. Those remain
+explicitly outside the accepted AI4B baseline.
+
+## 10. AI4C: Production Readiness
+
+Status: next, beginning with the AI4C.0 design and clarification gate.
 
 Goal:
 
-Implement lightweight proof recording, then verify the whole system with integration, security and deployment checks.
+Turn the accepted single-user/local MVP into a reproducible staging-ready
+service without changing the domain-general learning-verification boundary.
 
-Contract fields:
+AI4C is split into sequential gates:
 
-- `sessionId`,
-- `learner`,
-- `domain`,
-- `score`,
-- `effectiveMinutes`,
-- `summaryHash`,
-- `proofVersion`,
-- `createdAt`.
+- AI4C.0: architecture/specification, OpenHands reuse audit, threat model,
+  provider decisions, migration boundaries and acceptance matrix.
+- AI4C.1: real-LLM provider runtime, schema enforcement, bounded retries,
+  deadlines, rate/cost controls, redaction and deterministic test separation.
+- AI4C.2: verified identity, authorization, resource ownership, revocation and
+  audit attribution, while retaining an explicitly isolated local-dev identity.
+- AI4C.3: reproducible SDK/dependency packaging, PostgreSQL/staging validation,
+  secrets/configuration, observability, backup/restore and deployment smoke.
+- AI4C.4: end-to-end production-readiness acceptance and AI0 closure report.
 
-Contract must support:
+Constraints:
 
-- authorized proof recorder,
-- duplicate session rejection,
-- score bounds,
-- `ProofRecorded` event,
-- read proof by session.
+- Reuse suitable public OpenHands SDK APIs directly; do not create equivalent
+  FocusProof-owned Agent, Conversation, EventLog, Action, Observation or Tool
+  runtime semantics.
+- Every local runtime addition requires a documented SDK gap and removal plan.
+- AI4C must not add OCR, ASR, image, audio or PDF input; those belong to AI5.
+- AI4C must not make Web3, wallets, Monad or contracts part of the core path.
+- No public deployment, merge or push is authorized by the design gate.
+- Production code starts only after AI0 accepts the AI4C.0 written design and
+  implementation plan.
 
-Contract must not store:
-
-- full notes,
-- images,
-- audio,
-- code,
-- full conversations,
-- raw private evidence.
-
-Integration tests:
-
-- only generic summary submitted,
-- notes plus code,
-- notes plus error log,
-- valid transaction but weak explanation,
-- invalid transaction,
-- wrong chain transaction,
-- wallet mismatch,
-- evidence-goal mismatch,
-- contradictory evidence,
-- score improves after good follow-up answer,
-- proof recording blocked before review completion.
-
-Security checks:
-
-- prompt injection,
-- XSS,
-- SSRF,
-- oversized files,
-- unauthorized session read,
-- forged wallet address,
-- replay request,
-- unreviewed proof recording,
-- LLM output forging tool observations.
-
-Deployment docs:
-
-- local WSL development,
-- frontend dev server,
-- agent-server dev server,
-- environment variables,
-- database setup,
-- Monad Testnet deployment,
-- production deployment notes.
-
-## 10. Development Phases
+## 11. Development Phases
 
 | Phase | Content | Owner | Status |
 |---|---|---|---|
@@ -418,17 +398,23 @@ Deployment docs:
 | 3 | OpenHands Conversation core integration and persistence hardening | AI2 | done |
 | 4 | frontend MVP and general-learning acceptance correction | AI3 | done |
 | 5 | general verification tool framework: registry, text and URL | AI4A | done |
-| 6 | contract, integration, security and deployment | AI4B | next |
-| 7 | multimodal expansion | AI2 + AI3 + AI4B | later |
+| 6 | general integration, security and release-readiness baseline | AI4B | done |
+| 7 | production identity, real-LLM operations and reproducible staging | AI4C | next |
+| 8 | multimodal evidence expansion | AI2 + AI3 + AI4 | later |
+| P1 | optional Web3 specialization and on-chain proof | domain plugin owners | backlog |
 
-## 11. Next Execution Task
+## 12. Next Execution Task
 
-The next task is AI4B.0 design, not contract implementation.
+The next task is AI4C.0 design, not production implementation.
 
-AI4B.0 must define the optional proof-recording boundary for a domain-general
-learning product, canonical proof payload and hashing rules, recorder authority,
-wallet ownership semantics, local contract toolchain, backend integration
-boundary, security gates and the final Monad Testnet deployment gate. It must
-split later work into AI4B.1 local contract, AI4B.2 backend proof integration and
-AI4B.3 integration/security/deployment. It must not modify runtime behavior or
-deploy a contract during the design gate.
+AI4 must first inspect the accepted baseline and ask AI0 clarification questions
+one at a time. Before drafting the design, AI4 must restate the objective,
+non-goals, public interfaces, OpenHands reuse boundary, migration risks and
+acceptance criteria, and report at least 90% confidence that the task is
+understood. AI0 must answer each question and explicitly approve that confidence
+gate.
+
+AI4C.0 then produces a written design and implementation plan for the sequential
+AI4C.1-AI4C.4 gates. It must not modify production behavior. Each later gate
+stops after local verification and commit for AI0 review; AI0 actively accepts,
+rejects or issues a narrow repair instruction before the next gate begins.

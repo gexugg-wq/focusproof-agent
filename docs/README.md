@@ -1,6 +1,6 @@
 # FocusProof Agent Documentation
 
-当前基线：AI4A.3.1 已通过 AI0 验收；下一阶段是 AI4B.0 设计门禁。AI4B.0 只确定可选链上证明、合约、集成安全和部署边界，不直接开始部署。
+当前基线：AI4B 已在提交 `bf5c9a8` 通过 AI0 验收，文本/URL 通用学习验证 MVP、OpenHands 原生运行时、持久化、前端、质量与安全基线均已完成。下一阶段是 AI4C.0 Production Readiness 设计门禁，先定义正式身份、真实 LLM 运行和可复现部署边界；多模态输入属于后续 AI5，不在 AI4C 范围内。
 
 本目录按职责分类管理：
 
