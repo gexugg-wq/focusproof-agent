@@ -40,5 +40,5 @@ mypy_path = ["agent-server"]
 
 [tool.pytest.ini_options]
 markers = [
-    "real_llm: runs the explicit OpenHands real-LLM integration test",
+    "real_llm: runs the separately authorized bounded OpenHands provider smoke",
 ]
