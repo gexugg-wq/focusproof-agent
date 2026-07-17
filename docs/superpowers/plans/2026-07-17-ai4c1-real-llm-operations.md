@@ -47,7 +47,19 @@
 Frontend, persistence models/migrations, scoring and protocol documents are not
 owned by AI4C.1.
 
+## OpenHands Reuse Acceptance Gate
+
+Before every runtime Task, inspect and cite the relevant OpenHands SDK 1.31.0
+public API. When the SDK already provides the required capability, use it
+directly. Any local imitation of an Agent, Conversation, EventLog, Action,
+Observation, Tool protocol or LLM client fails AI4C.1 acceptance.
+
 ## Fixed Interfaces
+
+The ellipses in this code block are Python typing-stub notation that displays
+signature contracts only. The corresponding Task steps define the complete
+red test, implementation and verification work; the ellipses are not an
+alternative implementation or a second runtime.
 
 ```python
 from collections.abc import Mapping
@@ -87,13 +99,11 @@ class RuntimeSettings(BaseModel):
     real_llm: RealLlmPolicy | None
 
 
-def load_runtime_settings(environ: Mapping[str, str]) -> RuntimeSettings:
-    raise NotImplementedError
+def load_runtime_settings(environ: Mapping[str, str]) -> RuntimeSettings: ...
 
 
 class ProviderAdmission(Protocol):
-    def acquire(self) -> AbstractContextManager[None]:
-        raise NotImplementedError
+    def acquire(self) -> AbstractContextManager[None]: ...
 ```
 
 `deterministic-test` has no `RealLlmPolicy`. `local-dev` may omit it. `staging`
