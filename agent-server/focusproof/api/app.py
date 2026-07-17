@@ -14,18 +14,28 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 from sqlalchemy import Engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from focusproof.api.auth import VerifiedIdentity, get_verified_identity
+from focusproof.api.oidc import (
+    IdentityUnavailableError,
+    InvalidTokenError,
+    OidcTokenVerifier,
+    PrincipalResolver,
+    configure_token_verifier,
+    reset_token_verifier,
+)
 from focusproof.api.models import (
     CreateSessionRequest,
     DebugConversationTestRequest,
     SubmitAnswerRequest,
     SubmitEvidenceRequest,
 )
+from focusproof.config.identity import load_oidc_settings
 from focusproof.config.env import get_env_status
 from focusproof.config.profiles import load_runtime_settings
 from focusproof.domain.review import ReviewResult
@@ -154,8 +164,12 @@ def create_app(
     data_dir: Path | None = None,
     lock_timeout_seconds: float | None = None,
     llm_factory: LLMFactory | None = None,
+    principal_resolver: PrincipalResolver | None = None,
     review_timeout_seconds: float = DEFAULT_REVIEW_TIMEOUT_SECONDS,
 ) -> FastAPI:
+    configured_profile = os.environ.get("FOCUSPROOF_PROFILE") or (
+        "deterministic-test" if llm_factory is not None else "local-dev"
+    )
     resolved_data_dir = (
         data_dir
         if data_dir is not None
@@ -179,8 +193,23 @@ def create_app(
         engine: Engine | None = None
         manager: ConversationManager | None = None
         application.state.readiness_error = None
+        application.state.allow_anonymous_identity = False
         resolved_data_dir.mkdir(parents=True, exist_ok=True)
         try:
+            oidc_settings = load_oidc_settings(
+                os.environ,
+                profile=configured_profile,
+            )
+            application.state.allow_anonymous_identity = not oidc_settings.enabled
+            token_verifier = None
+            if oidc_settings.enabled and principal_resolver is not None:
+                token_verifier = OidcTokenVerifier(
+                    oidc_settings,
+                    principal_resolver=principal_resolver,
+                )
+            elif oidc_settings.enabled:
+                application.state.readiness_error = "identity_unavailable"
+            configure_token_verifier(token_verifier)
             engine = create_database_engine(configured_database_url)
             check_schema_revision(engine, PROJECT_ROOT / "alembic.ini")
             uow_factory = UnitOfWorkFactory(create_session_factory(engine))
@@ -228,6 +257,9 @@ def create_app(
             application.state.evidence_provider = evidence_provider
             application.state.run_lock = run_lock
             application.state.conversation_manager = manager
+        except ValidationError:
+            application.state.readiness_error = "identity_unavailable"
+            configure_token_verifier(None)
         except SchemaOutOfDateError:
             application.state.readiness_error = "schema_out_of_date"
         except SQLAlchemyError:
@@ -239,6 +271,7 @@ def create_app(
                 if manager is not None:
                     manager.close_all()
             finally:
+                reset_token_verifier()
                 release_repository_provider()
                 if engine is not None:
                     engine.dispose()
@@ -279,6 +312,29 @@ def _install_exception_handlers(application: FastAPI) -> None:
         return JSONResponse(
             status_code=503,
             content={"code": exc.code, "retryable": True},
+        )
+
+    @application.exception_handler(IdentityUnavailableError)
+    async def identity_unavailable_handler(
+        request: Request,
+        exc: IdentityUnavailableError,
+    ) -> JSONResponse:
+        del request
+        return JSONResponse(
+            status_code=503,
+            content={"code": exc.code, "retryable": False},
+        )
+
+    @application.exception_handler(InvalidTokenError)
+    async def invalid_token_handler(
+        request: Request,
+        exc: InvalidTokenError,
+    ) -> JSONResponse:
+        del request, exc
+        return JSONResponse(
+            status_code=401,
+            content={"code": "invalid_token", "retryable": False},
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
     @application.exception_handler(SessionBusyError)

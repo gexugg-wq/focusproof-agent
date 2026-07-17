@@ -12,6 +12,7 @@ dependencies = [
     "fastapi",
     "filelock>=3.16,<4",
     "httpx",
+    "PyJWT[crypto]>=2.13,<3",
     "pydantic",
     "sqlalchemy>=2.0,<3",
     "uvicorn",
