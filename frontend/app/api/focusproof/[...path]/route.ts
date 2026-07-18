@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAllowedFocusProofRequest } from "@/lib/api/errors";
+import { getForwardableBearer } from "@/lib/auth/server";
 
 type RouteContext = {
   params: Promise<{
@@ -17,13 +18,18 @@ async function proxy(request: NextRequest, context: RouteContext): Promise<NextR
   const baseUrl = process.env.FOCUSPROOF_API_BASE_URL ?? "http://127.0.0.1:8000";
   const target = baseUrl.replace(/\/$/, "") + "/" + path.map(encodeURIComponent).join("/");
   const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.text();
+  const headers = new Headers({
+    "content-type": request.headers.get("content-type") ?? "application/json"
+  });
+  const authorization = getForwardableBearer(request.headers);
+  if (authorization) headers.set("authorization", authorization);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let upstream: Response;
   try {
     upstream = await fetch(target, {
       method: request.method,
-      headers: { "content-type": request.headers.get("content-type") ?? "application/json" },
+      headers,
       body,
       cache: "no-store",
       signal: controller.signal
@@ -41,9 +47,13 @@ async function proxy(request: NextRequest, context: RouteContext): Promise<NextR
     }
     return NextResponse.json({ code: "upstream_non_json", retryable: false }, { status: 502 });
   }
+  const responseHeaders = new Headers({ "content-type": "application/json" });
+  if (upstream.status === 401 && upstream.headers.get("www-authenticate") === "Bearer") {
+    responseHeaders.set("www-authenticate", "Bearer");
+  }
   return new NextResponse(text || "null", {
     status: upstream.status,
-    headers: { "content-type": "application/json" }
+    headers: responseHeaders
   });
 }
 

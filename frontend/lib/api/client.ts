@@ -1,5 +1,6 @@
 import { ApiError, mapApiError } from "./errors";
 import type { CreateSessionInput, FocusProofEvent, RuntimeReviewResult, SessionDetail, SubmitEvidenceRequest, SyncResponse } from "./contracts";
+import { fetchWithOidcAccessToken } from "@/lib/auth/browser";
 
 async function parseResponsePayload(response: Response): Promise<unknown> {
   const text = await response.text();
@@ -18,7 +19,7 @@ async function parseResponsePayload(response: Response): Promise<unknown> {
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
-    response = await fetch("/api/focusproof" + path, {
+    response = await fetchWithOidcAccessToken("/api/focusproof" + path, {
       ...init,
       headers: {
         "content-type": "application/json",

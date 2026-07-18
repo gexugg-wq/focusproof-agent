@@ -166,7 +166,7 @@ describe("untrusted content rendering", () => {
 });
 
 describe("BFF security boundary", () => {
-  it("forwards only content-type and never returns environment or fetch errors", async () => {
+  it("forwards only content-type and valid Bearer identity without leaking server errors", async () => {
     const environmentSecret = "sk-ai4b-bff-environment-secret";
     process.env.OPENAI_API_KEY = environmentSecret;
     const fetchMock = vi.fn().mockRejectedValue(
@@ -194,6 +194,7 @@ describe("BFF security boundary", () => {
 
     const upstreamInit = fetchMock.mock.calls[0][1] as RequestInit;
     expect([...new Headers(upstreamInit.headers).entries()]).toEqual([
+      ["authorization", "Bearer browser-secret"],
       ["content-type", "application/json"]
     ]);
     expect(response.status).toBe(503);
