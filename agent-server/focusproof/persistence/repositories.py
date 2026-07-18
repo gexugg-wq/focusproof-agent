@@ -14,6 +14,7 @@ from focusproof.persistence.models import (
     LearnerAnswerModel,
     LearningSessionModel,
     ReviewModel,
+    VerifiedPrincipalModel,
 )
 
 
@@ -85,6 +86,15 @@ class StoredReview(StoredModel):
     created_at: datetime
 
 
+class StoredPrincipal(StoredModel):
+    principal_id: str
+    issuer: str
+    subject: str
+    active: bool
+    created_at: datetime
+    state_changed_at: datetime
+
+
 class SessionRepository(Protocol):
     def create(self, record: StoredSession) -> StoredSession: ...
     def get(self, session_id: str) -> StoredSession | None: ...
@@ -140,6 +150,54 @@ class ReviewRepository(Protocol):
     def add_from_native_event(self, record: StoredReview) -> StoredReview: ...
     def list_for_session(self, session_id: str) -> list[StoredReview]: ...
 
+
+class PrincipalRepository(Protocol):
+    def add(self, record: StoredPrincipal) -> StoredPrincipal: ...
+    def get_exact(self, *, issuer: str, subject: str) -> StoredPrincipal | None: ...
+    def set_active(self, principal_id: str, *, active: bool) -> bool: ...
+
+
+class SqlPrincipalRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, record: StoredPrincipal) -> StoredPrincipal:
+        self._session.add(
+            VerifiedPrincipalModel(
+                principal_id=record.principal_id,
+                issuer=record.issuer,
+                subject=record.subject,
+                active=record.active,
+                created_at=record.created_at,
+                state_changed_at=record.state_changed_at,
+            )
+        )
+        self._session.flush()
+        return record
+
+    def get_exact(self, *, issuer: str, subject: str) -> StoredPrincipal | None:
+        model = self._session.scalar(
+            select(VerifiedPrincipalModel).where(
+                VerifiedPrincipalModel.issuer == issuer,
+                VerifiedPrincipalModel.subject == subject,
+            )
+        )
+        return _stored_principal(model) if model is not None else None
+
+    def set_active(self, principal_id: str, *, active: bool) -> bool:
+        changed_at = datetime.now(UTC)
+        result = cast(
+            CursorResult[Any],
+            self._session.execute(
+                update(VerifiedPrincipalModel)
+                .where(
+                    VerifiedPrincipalModel.principal_id == principal_id,
+                    VerifiedPrincipalModel.active != active,
+                )
+                .values(active=active, state_changed_at=changed_at)
+            ),
+        )
+        return bool(result.rowcount)
 
 class SqlSessionRepository:
     def __init__(self, session: Session) -> None:
@@ -519,4 +577,15 @@ def _stored_review(model: ReviewModel) -> StoredReview:
         native_event_count=model.native_event_count,
         source_openhands_event_id=model.source_openhands_event_id,
         created_at=model.created_at,
+    )
+
+
+def _stored_principal(model: VerifiedPrincipalModel) -> StoredPrincipal:
+    return StoredPrincipal(
+        principal_id=model.principal_id,
+        issuer=model.issuer,
+        subject=model.subject,
+        active=model.active,
+        created_at=model.created_at,
+        state_changed_at=model.state_changed_at,
     )
