@@ -190,6 +190,38 @@ The official SDK remains the source for:
 FocusProof-owned additions are limited to OIDC/product authorization, security
 audit minimization, HMAC fingerprinting, and retention policy.
 
+## Fifth Independent Review Finding and Repair
+
+The fifth independent review found one remaining P1 gap in the AI4C.2 security
+audit boundary: protected requests rejected before route handler execution were
+not guaranteed to write a `security_audit_events` row. Specifically,
+`RequestBodyLimitMiddleware` could return 413 before identity resolution, and
+FastAPI request validation could return 422 before the handler-local success
+audit call.
+
+Repair commit `fix: audit protected pre-route failures` closes this as an auth
+boundary issue, not a business-success issue. Protected route detection now uses
+actual FastAPI `APIRoute.matches(scope)` plus recursive dependency metadata for
+the existing `get_verified_identity` dependency; `/health` and
+`/openhands/capabilities` remain public and unaudited. The FastAPI dependency,
+body-limit middleware, and validation handler all call the same explicit core
+identity boundary, which continues to reuse `OidcTokenVerifier`,
+`UowPrincipalResolver`, and `SecurityAuditSink` without copying OIDC/JWT logic.
+
+New focused regression evidence:
+
+```bash
+.venv/bin/python -m pytest agent-server/tests/ai4c/test_security_audit.py -q
+```
+
+Result before the final full gate: 33 passed, 1 warning in 13.89s. The added
+cases cover all three body-model protected POST endpoints returning 422,
+Content-Length and chunked 413, missing/invalid/disabled credentials taking
+401/403 precedence over 422/413, audit-unavailable 503 fail-closed behavior,
+protected route metadata coverage, public route non-audit behavior, spoofed
+client request IDs, and no product/runtime side effects for denied pre-handler
+requests.
+
 ## Full Credential-Free Gate
 
 Backend:
@@ -201,7 +233,8 @@ env -u DASHSCOPE_API_KEY -u OPENAI_API_KEY -u FOCUSPROOF_LLM_API_KEY -u ANTHROPI
   -m 'not real_llm and not postgres and not staging_external'
 ```
 
-Result: 546 passed, 1 deselected, 16 warnings in 184.44s.
+Result after fifth-review repair: 562 passed, 1 deselected, 16 warnings in
+196.91s.
 
 Real-provider contract without live provider call:
 
@@ -218,13 +251,14 @@ Static checks:
 
 ```bash
 .venv/bin/ruff check agent-server
-.venv/bin/mypy --cache-dir=/tmp/focusproof-mypy-task5-final.* agent-server
-.venv/bin/mypy --cache-dir=/tmp/focusproof-mypy-task5-final.* agent-server
+.venv/bin/mypy --cache-dir=/tmp/focusproof-mypy-repair-p1 agent-server
+.venv/bin/mypy --cache-dir=/tmp/focusproof-mypy-repair-p1 agent-server
 git diff --check
 ```
 
-Results: Ruff passed; cold Mypy passed for 139 source files; warm Mypy passed
-for 139 source files; diff check passed.
+Results after fifth-review repair: Ruff passed; cold Mypy passed for 139
+source files; warm Mypy passed for 139 source files; migration focused tests
+passed; diff check passed.
 
 Frontend used Linux Node only:
 
@@ -237,10 +271,11 @@ npm run build
 npm run test:e2e
 ```
 
-Results: lint passed; typecheck passed; Vitest 67 passed across 6 files;
-Next production build passed; Playwright 16 passed in 58.5s.
+Results after fifth-review repair: lint passed; typecheck passed; Vitest 67
+passed across 6 files; Next production build passed; Playwright 16 passed in
+1.0m.
 
-Playwright regenerated eight historical AI3 PNG files; those generated
+Playwright regenerated eight historical AI3 PNG files again; those generated
 out-of-scope artifacts were restored exactly to HEAD and were not committed.
 
 ## Dependency Audit

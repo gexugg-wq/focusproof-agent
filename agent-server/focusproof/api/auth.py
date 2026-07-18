@@ -34,8 +34,22 @@ async def get_verified_identity(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> VerifiedIdentity:
+    return await resolve_verified_identity(request, authorization=authorization)
+
+
+async def resolve_verified_identity(
+    request: Request,
+    *,
+    authorization: str | None,
+) -> VerifiedIdentity:
+    cached_identity = getattr(request.state, "verified_identity", None)
+    if isinstance(cached_identity, VerifiedIdentity):
+        return cached_identity
+
     if getattr(request.app.state, "allow_anonymous_identity", False):
-        return VerifiedIdentity(verified_user_id=DEVELOPMENT_USER_ID)
+        identity = VerifiedIdentity(verified_user_id=DEVELOPMENT_USER_ID)
+        request.state.verified_identity = identity
+        return identity
 
     from focusproof.api.oidc import (
         InvalidTokenError,
@@ -68,6 +82,7 @@ async def get_verified_identity(
     context = get_security_audit_context(request)
     context.principal_id = identity.principal_id
     context.token_fingerprint = identity.token_fingerprint
+    request.state.verified_identity = identity
     return identity
 
 

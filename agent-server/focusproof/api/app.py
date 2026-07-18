@@ -13,17 +13,23 @@ from typing import Annotated, Any, cast
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.routing import APIRoute
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sqlalchemy import Engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
+from starlette.datastructures import Headers
+from starlette.routing import Match
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from focusproof.api.auth import (
     VerifiedIdentity,
     get_verified_identity,
     record_security_audit,
+    resolve_verified_identity,
 )
 from focusproof.api.oidc import (
     IdentityUnavailableError,
@@ -88,6 +94,42 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 MAX_REQUEST_BODY_BYTES = 262_144
 
 
+def _request_too_large_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=413,
+        content={"code": "request_too_large", "retryable": False},
+    )
+
+
+def _invalid_token_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=401,
+        content={"code": "invalid_token", "retryable": False},
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _forbidden_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=403,
+        content={"code": "forbidden", "retryable": False},
+    )
+
+
+def _identity_unavailable_response(exc: IdentityUnavailableError) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"code": exc.code, "retryable": False},
+    )
+
+
+def _database_unavailable_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"code": "database_unavailable", "retryable": True},
+    )
+
+
 class ServiceUnavailableError(RuntimeError):
     def __init__(self, code: str) -> None:
         super().__init__(code)
@@ -119,6 +161,28 @@ class RequestBodyLimitMiddleware:
             await self._app(scope, receive, send)
             return
 
+        request = Request(scope, receive)
+        identity: VerifiedIdentity | None = None
+        protected_request = _is_protected_request_scope(scope.get("app"), scope)
+        if protected_request:
+            try:
+                identity = await resolve_verified_identity(
+                    request,
+                    authorization=_authorization_header_from_scope(scope),
+                )
+            except InvalidTokenError:
+                await _invalid_token_response()(scope, receive, send)
+                return
+            except PrincipalDisabledError:
+                await _forbidden_response()(scope, receive, send)
+                return
+            except IdentityUnavailableError as exc:
+                await _identity_unavailable_response(exc)(scope, receive, send)
+                return
+            except SQLAlchemyError:
+                await _database_unavailable_response()(scope, receive, send)
+                return
+
         headers = dict(scope.get("headers", []))
         content_length = headers.get(b"content-length")
         if content_length is not None:
@@ -127,7 +191,16 @@ class RequestBodyLimitMiddleware:
             except ValueError:
                 declared_length = 0
             if declared_length > self._max_body_bytes:
-                await self._reject(scope, receive, send)
+                if protected_request and identity is not None:
+                    try:
+                        _record_authorized_request(request, identity)
+                    except SQLAlchemyError:
+                        await _database_unavailable_response()(scope, receive, send)
+                        return
+                    except IdentityUnavailableError as exc:
+                        await _identity_unavailable_response(exc)(scope, receive, send)
+                        return
+                await _request_too_large_response()(scope, receive, send)
                 return
 
         messages: list[Message] = []
@@ -139,7 +212,16 @@ class RequestBodyLimitMiddleware:
                 break
             received_bytes += len(message.get("body", b""))
             if received_bytes > self._max_body_bytes:
-                await self._reject(scope, receive, send)
+                if protected_request and identity is not None:
+                    try:
+                        _record_authorized_request(request, identity)
+                    except SQLAlchemyError:
+                        await _database_unavailable_response()(scope, receive, send)
+                        return
+                    except IdentityUnavailableError as exc:
+                        await _identity_unavailable_response(exc)(scope, receive, send)
+                        return
+                await _request_too_large_response()(scope, receive, send)
                 return
             if not message.get("more_body", False):
                 break
@@ -156,13 +238,52 @@ class RequestBodyLimitMiddleware:
 
         await self._app(scope, replay_receive, send)
 
-    @staticmethod
-    async def _reject(scope: Scope, receive: Receive, send: Send) -> None:
-        response = JSONResponse(
-            status_code=413,
-            content={"code": "request_too_large", "retryable": False},
+
+def _authorization_header_from_scope(scope: Scope) -> str | None:
+    return Headers(scope=scope).get("authorization")
+
+
+def _is_protected_request_scope(application: object, scope: Scope) -> bool:
+    if not isinstance(application, FastAPI):
+        return False
+    for route in application.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        match, _ = route.matches(scope)
+        if match is not Match.FULL:
+            continue
+        if _dependant_uses_dependency(route.dependant, get_verified_identity):
+            return True
+    return False
+
+
+def _dependant_uses_dependency(dependant: Any, dependency: object) -> bool:
+    if getattr(dependant, "call", None) is dependency:
+        return True
+    return any(
+        _dependant_uses_dependency(child, dependency)
+        for child in getattr(dependant, "dependencies", ()) or ()
+    )
+
+
+async def _record_protected_validation_failure(
+    request: Request,
+) -> JSONResponse | None:
+    try:
+        identity = await resolve_verified_identity(
+            request,
+            authorization=request.headers.get("authorization"),
         )
-        await response(scope, receive, send)
+        _record_authorized_request(request, identity)
+    except InvalidTokenError:
+        return _invalid_token_response()
+    except PrincipalDisabledError:
+        return _forbidden_response()
+    except IdentityUnavailableError as exc:
+        return _identity_unavailable_response(exc)
+    except SQLAlchemyError:
+        return _database_unavailable_response()
+    return None
 
 
 def create_app(
@@ -370,10 +491,7 @@ def _install_exception_handlers(application: FastAPI) -> None:
         exc: IdentityUnavailableError,
     ) -> JSONResponse:
         del request
-        return JSONResponse(
-            status_code=503,
-            content={"code": exc.code, "retryable": False},
-        )
+        return _identity_unavailable_response(exc)
 
     @application.exception_handler(InvalidTokenError)
     async def invalid_token_handler(
@@ -381,11 +499,7 @@ def _install_exception_handlers(application: FastAPI) -> None:
         exc: InvalidTokenError,
     ) -> JSONResponse:
         del request, exc
-        return JSONResponse(
-            status_code=401,
-            content={"code": "invalid_token", "retryable": False},
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        return _invalid_token_response()
 
     @application.exception_handler(PrincipalDisabledError)
     async def principal_disabled_handler(
@@ -393,10 +507,7 @@ def _install_exception_handlers(application: FastAPI) -> None:
         exc: PrincipalDisabledError,
     ) -> JSONResponse:
         del request, exc
-        return JSONResponse(
-            status_code=403,
-            content={"code": "forbidden", "retryable": False},
-        )
+        return _forbidden_response()
 
     @application.exception_handler(SessionBusyError)
     async def session_busy_handler(
@@ -434,10 +545,18 @@ def _install_exception_handlers(application: FastAPI) -> None:
         exc: SQLAlchemyError,
     ) -> JSONResponse:
         del request, exc
-        return JSONResponse(
-            status_code=503,
-            content={"code": "database_unavailable", "retryable": True},
-        )
+        return _database_unavailable_response()
+
+    @application.exception_handler(RequestValidationError)
+    async def request_validation_handler(
+        request: Request,
+        exc: RequestValidationError,
+    ) -> JSONResponse:
+        if _is_protected_request_scope(request.app, request.scope):
+            audit_response = await _record_protected_validation_failure(request)
+            if audit_response is not None:
+                return audit_response
+        return await request_validation_exception_handler(request, exc)
 
 
 def _install_routes(

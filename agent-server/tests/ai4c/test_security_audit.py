@@ -21,7 +21,8 @@ from openhands.sdk.llm import Message, MessageToolCall, TextContent
 from openhands.sdk.testing import TestLLM
 import pytest
 
-from focusproof.api.app import _evidence_id_for_request
+from focusproof.api import app as app_module
+from focusproof.api.app import MAX_REQUEST_BODY_BYTES, _evidence_id_for_request
 from focusproof.api.models import SubmitEvidenceRequest
 from focusproof.openhands_runtime.manager import ConversationManager
 from focusproof.openhands_runtime.tools.verification import VerificationObservation
@@ -56,6 +57,41 @@ _JWKS_SENTINEL = "task5-jwks-private-sentinel-c9589f935ae74d6e999a"
 
 def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def _session_payload(title: str = "Security audit") -> dict[str, object]:
+    return {
+        "domain": "general",
+        "title": title,
+        "goal": "Prove security audit boundaries are enforced before product writes.",
+    }
+
+
+def _create_session(client: TestClient, token: str) -> str:
+    response = client.post(
+        "/sessions",
+        headers=_auth(token),
+        json=_session_payload(),
+    )
+    assert response.status_code == 200
+    return str(response.json()["sessionId"])
+
+
+def _disable_principal(
+    app: Any,
+    *,
+    issuer: str,
+    subject: str,
+) -> None:
+    with app.state.uow_factory() as uow:
+        principal = uow.principals.get_exact(issuer=issuer, subject=subject)
+        assert principal is not None
+        assert uow.principals.set_active(principal.principal_id, active=False)
+        uow.commit()
+
+
+def _oversized_json_bytes() -> bytes:
+    return b'{"oversized":"' + (b"x" * (MAX_REQUEST_BODY_BYTES + 1)) + b'"}'
 
 
 def _install_jwks_fetch(
@@ -168,9 +204,38 @@ def _facts_counts(database_path: Path) -> dict[str, int]:
 
 
 def _product_fact_counts(database_path: Path) -> dict[str, int]:
-    counts = _facts_counts(database_path)
-    counts.pop("security_audit_events")
-    return counts
+    tables = (
+        "learning_sessions",
+        "evidence",
+        "learner_answers",
+        "audit_events",
+        "reviews",
+        "verified_principals",
+    )
+    with sqlite3.connect(database_path) as connection:
+        return {
+            table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            for table in tables
+        }
+
+
+def _assert_one_new_security_audit(
+    database_path: Path,
+    *,
+    baseline_count: int,
+    reason: str,
+    outcome: str,
+    principal_expected: bool,
+) -> dict[str, object]:
+    rows = _security_rows(database_path)
+    assert len(rows) == baseline_count + 1
+    row = rows[-1]
+    assert row["request_id"]
+    assert str(row["request_id"]).startswith("req_")
+    assert row["reason_category"] == reason
+    assert row["outcome"] == outcome
+    assert (row["principal_id"] is not None) is principal_expected
+    return row
 
 
 def _expected_evidence_id(session_id: str) -> str:
@@ -408,6 +473,319 @@ def test_authentication_failures_write_exactly_one_minimized_security_audit_row(
     assert row["reason_category"] == reason
     assert (row["token_fingerprint"] is not None) is fingerprint_expected
     assert _facts_counts(_database_path(tmp_path))["learning_sessions"] == 0
+
+
+def test_security_audit_protected_route_matcher_uses_fastapi_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = local_oidc_fixture()
+    _configure_staging_identity(monkeypatch, fixture)
+    app = oidc_test_app(tmp_path, fixture)
+    matcher = getattr(app_module, "_is_protected_request_scope", None)
+    assert callable(matcher)
+
+    def scope(method: str, path: str) -> dict[str, object]:
+        return {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "raw_path": path.encode("ascii"),
+            "root_path": "",
+            "query_string": b"",
+            "headers": [],
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "client": ("testclient", 50000),
+        }
+
+    protected = {
+        ("POST", "/sessions"),
+        ("POST", "/sessions/sess_route_match/evidence"),
+        ("POST", "/sessions/sess_route_match/answer"),
+        ("POST", "/sessions/sess_route_match/review"),
+        ("GET", "/sessions/sess_route_match"),
+        ("GET", "/sessions/sess_route_match/events"),
+        ("GET", "/sessions/sess_route_match/reviews"),
+    }
+    public = {
+        ("GET", "/health"),
+        ("GET", "/openhands/capabilities"),
+    }
+
+    assert sum(
+        1
+        for route in app.routes
+        if matcher(
+            app,
+            scope(
+                next(iter(getattr(route, "methods", {"GET"}))),
+                getattr(route, "path", ""),
+            ),
+        )
+    ) == 7
+    for method, path in protected:
+        assert matcher(app, scope(method, path)), (method, path)
+    for method, path in public:
+        assert not matcher(app, scope(method, path)), (method, path)
+
+
+@pytest.mark.parametrize(
+    ("path_suffix", "payload"),
+    [
+        ("", {}),
+        ("/evidence", {}),
+        ("/answer", {}),
+    ],
+)
+def test_valid_identity_validation_errors_are_audited_once_without_product_side_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    path_suffix: str,
+    payload: dict[str, object],
+) -> None:
+    fixture = local_oidc_fixture()
+    _configure_staging_identity(monkeypatch, fixture)
+    _install_jwks_fetch(monkeypatch, {"keys": [fixture.public_jwk]})
+    app = oidc_test_app(tmp_path, fixture)
+    token = fixture.token(subject=_SUBJECT_A)
+    database_path = _database_path(tmp_path)
+
+    with TestClient(app) as client:
+        session_id = _create_session(client, token)
+        baseline_security_count = len(_security_rows(database_path))
+        baseline_product_counts = _product_fact_counts(database_path)
+        path = "/sessions" if path_suffix == "" else f"/sessions/{session_id}{path_suffix}"
+        response = client.post(
+            path,
+            headers={
+                **_auth(token),
+                "X-Request-Id": "client-spoofed-request-id",
+            },
+            json=payload,
+        )
+
+    assert response.status_code == 422
+    assert "detail" in response.json()
+    row = _assert_one_new_security_audit(
+        database_path,
+        baseline_count=baseline_security_count,
+        reason="success",
+        outcome="success",
+        principal_expected=True,
+    )
+    assert row["request_id"] != "client-spoofed-request-id"
+    assert _product_fact_counts(database_path) == baseline_product_counts
+
+
+def test_valid_identity_content_length_oversize_is_audited_once_before_413(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = local_oidc_fixture()
+    _configure_staging_identity(monkeypatch, fixture)
+    _install_jwks_fetch(monkeypatch, {"keys": [fixture.public_jwk]})
+    app = oidc_test_app(tmp_path, fixture)
+    token = fixture.token(subject=_SUBJECT_A)
+    database_path = _database_path(tmp_path)
+
+    with TestClient(app) as client:
+        session_id = _create_session(client, token)
+        baseline_security_count = len(_security_rows(database_path))
+        baseline_product_counts = _product_fact_counts(database_path)
+        response = client.post(
+            f"/sessions/{session_id}/evidence",
+            headers={
+                **_auth(token),
+                "Content-Type": "application/json",
+                "X-Request-Id": "client-spoofed-request-id",
+            },
+            content=_oversized_json_bytes(),
+        )
+
+    assert response.status_code == 413
+    assert response.json() == {"code": "request_too_large", "retryable": False}
+    row = _assert_one_new_security_audit(
+        database_path,
+        baseline_count=baseline_security_count,
+        reason="success",
+        outcome="success",
+        principal_expected=True,
+    )
+    assert row["request_id"] != "client-spoofed-request-id"
+    assert _product_fact_counts(database_path) == baseline_product_counts
+
+
+def test_valid_identity_chunked_oversize_is_audited_once_before_413(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = local_oidc_fixture()
+    _configure_staging_identity(monkeypatch, fixture)
+    _install_jwks_fetch(monkeypatch, {"keys": [fixture.public_jwk]})
+    app = oidc_test_app(tmp_path, fixture)
+    token = fixture.token(subject=_SUBJECT_A)
+    database_path = _database_path(tmp_path)
+
+    def chunked_body() -> Any:
+        yield b'{"oversized":"'
+        yield b"x" * (MAX_REQUEST_BODY_BYTES + 1)
+        yield b'"}'
+
+    with TestClient(app) as client:
+        session_id = _create_session(client, token)
+        baseline_security_count = len(_security_rows(database_path))
+        baseline_product_counts = _product_fact_counts(database_path)
+        response = client.post(
+            f"/sessions/{session_id}/answer",
+            headers={**_auth(token), "Content-Type": "application/json"},
+            content=chunked_body(),
+        )
+
+    assert response.status_code == 413
+    assert response.json() == {"code": "request_too_large", "retryable": False}
+    _assert_one_new_security_audit(
+        database_path,
+        baseline_count=baseline_security_count,
+        reason="success",
+        outcome="success",
+        principal_expected=True,
+    )
+    assert _product_fact_counts(database_path) == baseline_product_counts
+
+
+@pytest.mark.parametrize(
+    ("request_kind", "bypassed_status"),
+    [
+        ("validation", 422),
+        ("oversize", 413),
+    ],
+)
+@pytest.mark.parametrize(
+    ("credential_case", "expected_reason", "principal_expected"),
+    [
+        ("missing", "missing_credentials", False),
+        ("invalid", "invalid_credentials", False),
+        ("disabled", "forbidden", False),
+    ],
+)
+def test_pre_handler_protected_requests_authenticate_before_validation_or_body_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    request_kind: str,
+    bypassed_status: int,
+    credential_case: str,
+    expected_reason: str,
+    principal_expected: bool,
+) -> None:
+    fixture = local_oidc_fixture()
+    _configure_staging_identity(monkeypatch, fixture)
+    _install_jwks_fetch(monkeypatch, {"keys": [fixture.public_jwk]})
+    app = oidc_test_app(tmp_path, fixture)
+    valid_token = fixture.token(subject=_SUBJECT_A)
+    database_path = _database_path(tmp_path)
+
+    with TestClient(app) as client:
+        _create_session(client, valid_token)
+        if credential_case == "missing":
+            headers: dict[str, str] = {}
+        elif credential_case == "invalid":
+            headers = {"Authorization": "Bearer invalid-token-sentinel"}
+        else:
+            _disable_principal(app, issuer=fixture.issuer, subject=_SUBJECT_A)
+            headers = _auth(valid_token)
+
+        baseline_security_count = len(_security_rows(database_path))
+        baseline_product_counts = _product_fact_counts(database_path)
+        if request_kind == "validation":
+            response = client.post("/sessions", headers=headers, json={})
+        else:
+            response = client.post(
+                "/sessions",
+                headers={**headers, "Content-Type": "application/json"},
+                content=_oversized_json_bytes(),
+            )
+
+    assert response.status_code != bypassed_status
+    if credential_case in {"missing", "invalid"}:
+        assert response.status_code == 401
+        assert response.headers["WWW-Authenticate"] == "Bearer"
+        assert response.json() == {"code": "invalid_token", "retryable": False}
+    else:
+        assert response.status_code == 403
+        assert response.json() == {"code": "forbidden", "retryable": False}
+    _assert_one_new_security_audit(
+        database_path,
+        baseline_count=baseline_security_count,
+        reason=expected_reason,
+        outcome="failure",
+        principal_expected=principal_expected,
+    )
+    assert _product_fact_counts(database_path) == baseline_product_counts
+
+
+@pytest.mark.parametrize(
+    "public_path",
+    ["/health", "/openhands/capabilities"],
+)
+def test_public_routes_do_not_write_security_audit_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    public_path: str,
+) -> None:
+    fixture = local_oidc_fixture()
+    _configure_staging_identity(monkeypatch, fixture)
+    _install_jwks_fetch(monkeypatch, {"keys": [fixture.public_jwk]})
+    app = oidc_test_app(tmp_path, fixture)
+
+    with TestClient(app) as client:
+        response = client.get(public_path, headers=_auth(fixture.token()))
+
+    assert response.status_code == 200
+    assert _security_rows(_database_path(tmp_path)) == []
+
+
+@pytest.mark.parametrize(
+    ("request_kind", "path_suffix"),
+    [
+        ("validation", "/answer"),
+        ("oversize", "/evidence"),
+    ],
+)
+def test_pre_handler_audit_unavailable_fails_closed_without_product_or_runtime_side_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    request_kind: str,
+    path_suffix: str,
+) -> None:
+    fixture = local_oidc_fixture()
+    _configure_staging_identity(monkeypatch, fixture)
+    _install_jwks_fetch(monkeypatch, {"keys": [fixture.public_jwk]})
+    app = oidc_test_app(tmp_path, fixture)
+    token = fixture.token(subject=_SUBJECT_A)
+    database_path = _database_path(tmp_path)
+
+    with TestClient(app) as client:
+        session_id = _create_session(client, token)
+        baseline_product_counts = _product_fact_counts(database_path)
+        with app.state.engine.begin() as connection:
+            connection.exec_driver_sql("DROP TABLE security_audit_events")
+        if request_kind == "validation":
+            response = client.post(
+                f"/sessions/{session_id}{path_suffix}",
+                headers=_auth(token),
+                json={},
+            )
+        else:
+            response = client.post(
+                f"/sessions/{session_id}{path_suffix}",
+                headers={**_auth(token), "Content-Type": "application/json"},
+                content=_oversized_json_bytes(),
+            )
+
+    assert response.status_code == 503
+    assert response.json() == {"code": "database_unavailable", "retryable": True}
+    assert _product_fact_counts(database_path) == baseline_product_counts
 
 
 def test_success_forbidden_not_found_and_dependency_failures_are_audited_once_without_sensitive_data(
