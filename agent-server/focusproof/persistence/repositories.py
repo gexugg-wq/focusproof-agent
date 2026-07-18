@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict
-from sqlalchemy import CursorResult, func, select, update
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import CursorResult, delete, func, select, update
 from sqlalchemy.orm import Session
 
 from focusproof.persistence.models import (
@@ -14,7 +14,12 @@ from focusproof.persistence.models import (
     LearnerAnswerModel,
     LearningSessionModel,
     ReviewModel,
+    SecurityAuditEventModel,
     VerifiedPrincipalModel,
+)
+from focusproof.runtime.security_audit import (
+    SecurityAuditOutcome,
+    SecurityAuditReasonCategory,
 )
 
 
@@ -95,6 +100,16 @@ class StoredPrincipal(StoredModel):
     state_changed_at: datetime
 
 
+class StoredSecurityAuditEvent(StoredModel):
+    id: str = Field(default_factory=lambda: f"audit_{uuid4().hex}")
+    request_id: str
+    principal_id: str | None
+    token_fingerprint: str | None
+    outcome: SecurityAuditOutcome
+    reason_category: SecurityAuditReasonCategory
+    occurred_at: datetime
+
+
 class SessionRepository(Protocol):
     def create(self, record: StoredSession) -> StoredSession: ...
     def get(self, session_id: str) -> StoredSession | None: ...
@@ -160,6 +175,11 @@ class PrincipalRepository(Protocol):
     def set_active(self, principal_id: str, *, active: bool) -> bool: ...
 
 
+class SecurityAuditRepository(Protocol):
+    def add(self, record: StoredSecurityAuditEvent) -> StoredSecurityAuditEvent: ...
+    def delete_expired(self, *, cutoff: datetime, limit: int) -> int: ...
+
+
 class SqlPrincipalRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -201,6 +221,51 @@ class SqlPrincipalRepository:
             ),
         )
         return bool(result.rowcount)
+
+
+class SqlSecurityAuditRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, record: StoredSecurityAuditEvent) -> StoredSecurityAuditEvent:
+        self._session.add(
+            SecurityAuditEventModel(
+                id=record.id,
+                request_id=record.request_id,
+                principal_id=record.principal_id,
+                token_fingerprint=record.token_fingerprint,
+                outcome=record.outcome,
+                reason_category=record.reason_category,
+                occurred_at=record.occurred_at,
+            )
+        )
+        self._session.flush()
+        return record
+
+    def delete_expired(self, *, cutoff: datetime, limit: int) -> int:
+        expired_ids = list(
+            self._session.scalars(
+                select(SecurityAuditEventModel.id)
+                .where(SecurityAuditEventModel.occurred_at < cutoff)
+                .order_by(
+                    SecurityAuditEventModel.occurred_at,
+                    SecurityAuditEventModel.id,
+                )
+                .limit(limit)
+            )
+        )
+        if not expired_ids:
+            return 0
+        result = cast(
+            CursorResult[Any],
+            self._session.execute(
+                delete(SecurityAuditEventModel).where(
+                    SecurityAuditEventModel.id.in_(expired_ids)
+                )
+            ),
+        )
+        return int(result.rowcount or 0)
+
 
 class SqlSessionRepository:
     def __init__(self, session: Session) -> None:

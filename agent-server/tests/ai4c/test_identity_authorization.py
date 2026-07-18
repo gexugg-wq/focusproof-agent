@@ -78,7 +78,9 @@ def _oidc_env(
         "FOCUSPROOF_OIDC_AUDIENCE": fixture.audience,
         "FOCUSPROOF_OIDC_JWKS_URI": "https://testserver/__test__/oidc/jwks",
         "FOCUSPROOF_OIDC_ALLOWED_ALGORITHMS": "RS256",
-        "FOCUSPROOF_OIDC_FINGERPRINT_KEY": "placeholder",
+        "FOCUSPROOF_OIDC_FINGERPRINT_KEY": (
+            "identity-authorization-test-hmac-key-32"
+        ),
     }
 
 

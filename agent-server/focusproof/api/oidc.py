@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
-import hashlib
-import hmac
 from dataclasses import dataclass
 from time import monotonic
 from typing import Annotated, Callable, Protocol
@@ -15,6 +13,7 @@ from jwt import PyJWKClient
 
 from focusproof.api.auth import VerifiedIdentity
 from focusproof.config.identity import OidcSettings
+from focusproof.runtime.security_audit import compute_token_fingerprint
 
 
 class InvalidTokenError(RuntimeError):
@@ -175,12 +174,10 @@ def _fingerprint_token(
     key = settings.principal_fingerprint_key
     if key is None:
         raise IdentityUnavailableError()
-    digest = hmac.new(
-        key.get_secret_value().encode("utf-8"),
+    return compute_token_fingerprint(
         encoded_token.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    return f"hmac-sha256:{digest}"
+        key.get_secret_value(),
+    )
 
 
 def get_token_verifier() -> TokenVerifier:

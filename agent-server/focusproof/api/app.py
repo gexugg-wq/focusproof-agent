@@ -20,7 +20,11 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from focusproof.api.auth import VerifiedIdentity, get_verified_identity
+from focusproof.api.auth import (
+    VerifiedIdentity,
+    get_verified_identity,
+    record_security_audit,
+)
 from focusproof.api.oidc import (
     IdentityUnavailableError,
     InvalidTokenError,
@@ -59,6 +63,7 @@ from focusproof.persistence.database import (
     create_database_engine,
     create_session_factory,
 )
+from focusproof.persistence.security_audit import PersistentSecurityAuditSink
 from focusproof.persistence.audit_projection import PersistentAuditProjectionStore
 from focusproof.persistence.providers import (
     IdentityStoragePaths,
@@ -233,6 +238,16 @@ def create_app(
             effective_principal_resolver = principal_resolver or UowPrincipalResolver(
                 uow_factory
             )
+            security_audit_sink = (
+                PersistentSecurityAuditSink(
+                    uow_factory,
+                    retention_seconds=oidc_settings.security_audit_retention_seconds,
+                )
+                if oidc_settings.enabled
+                else None
+            )
+            if security_audit_sink is not None:
+                security_audit_sink.sweep_expired(now=datetime.now(UTC))
             token_verifier = (
                 OidcTokenVerifier(
                     oidc_settings,
@@ -282,6 +297,12 @@ def create_app(
             )
             application.state.engine = engine
             application.state.uow_factory = uow_factory
+            application.state.security_audit_sink = security_audit_sink
+            application.state.security_audit_hmac_key = (
+                oidc_settings.principal_fingerprint_key.get_secret_value()
+                if oidc_settings.principal_fingerprint_key is not None
+                else None
+            )
             application.state.audit_projection_store = audit_projection_store
             application.state.evidence_provider = evidence_provider
             application.state.run_lock = run_lock
@@ -439,11 +460,13 @@ def _install_routes(
 
     @application.post("/sessions")
     def create_session(
-        request: CreateSessionRequest,
+        body: CreateSessionRequest,
+        http_request: Request,
         identity: Annotated[VerifiedIdentity, Depends(get_verified_identity)],
         uow_factory: Annotated[UnitOfWorkFactory, Depends(get_uow_factory)],
         manager: Annotated[ConversationManager, Depends(get_conversation_manager)],
     ) -> dict[str, str]:
+        _record_authorized_request(http_request, identity)
         session_id = f"sess_{uuid4().hex}"
         conversation_id = str(uuid5(NAMESPACE_URL, f"focusproof:{session_id}"))
         now = datetime.now(UTC)
@@ -453,11 +476,11 @@ def _install_routes(
             owner_user_id=identity.verified_user_id,
             status="running",
             adapter_mode=runtime_mode,
-            domain=request.domain,
-            title=request.title,
-            goal=request.goal,
-            expected_output=request.expectedOutput,
-            planned_minutes=request.plannedMinutes,
+            domain=body.domain,
+            title=body.title,
+            goal=body.goal,
+            expected_output=body.expectedOutput,
+            planned_minutes=body.plannedMinutes,
             conversation_id=conversation_id,
             runtime_mode=runtime_mode,
             review_result=None,
@@ -486,26 +509,35 @@ def _install_routes(
     @application.post("/sessions/{session_id}/evidence")
     def submit_evidence(
         session_id: str,
-        request: SubmitEvidenceRequest,
+        body: SubmitEvidenceRequest,
+        http_request: Request,
         identity: Annotated[VerifiedIdentity, Depends(get_verified_identity)],
         uow_factory: Annotated[UnitOfWorkFactory, Depends(get_uow_factory)],
         manager: Annotated[ConversationManager, Depends(get_conversation_manager)],
         run_lock: Annotated[SessionRunLock, Depends(get_session_run_lock)],
     ) -> dict[str, str | bool]:
-        evidence_id = _evidence_id_for_request(session_id, request)
+        evidence_id = _evidence_id_for_request(session_id, body)
         record = StoredEvidence(
             evidence_id=evidence_id,
             session_id=session_id,
-            evidence_type=request.evidenceType,
-            content_hash=hash_evidence_content(request.textContent, request.sourceUrl),
-            text_content=request.textContent,
-            source_url=request.sourceUrl,
-            metadata=request.metadata,
+            evidence_type=body.evidenceType,
+            content_hash=hash_evidence_content(body.textContent, body.sourceUrl),
+            text_content=body.textContent,
+            source_url=body.sourceUrl,
+            metadata=body.metadata,
             conversation_synced_at=None,
             created_at=datetime.now(UTC),
         )
         reviewed_replay = False
         with run_lock.acquire(session_id):
+            _owned_session_or_audit_not_found(
+                uow_factory,
+                session_id,
+                identity.verified_user_id,
+                http_request,
+                identity,
+            )
+            _record_authorized_request(http_request, identity)
             with uow_factory() as uow:
                 session = _owned_session_in_uow(
                     uow,
@@ -540,7 +572,8 @@ def _install_routes(
     @application.post("/sessions/{session_id}/answer")
     def submit_answer(
         session_id: str,
-        request: SubmitAnswerRequest,
+        body: SubmitAnswerRequest,
+        http_request: Request,
         identity: Annotated[VerifiedIdentity, Depends(get_verified_identity)],
         uow_factory: Annotated[UnitOfWorkFactory, Depends(get_uow_factory)],
         manager: Annotated[ConversationManager, Depends(get_conversation_manager)],
@@ -548,22 +581,30 @@ def _install_routes(
     ) -> dict[str, str | bool]:
         reviewed_replay = False
         with run_lock.acquire(session_id):
+            _owned_session_or_audit_not_found(
+                uow_factory,
+                session_id,
+                identity.verified_user_id,
+                http_request,
+                identity,
+            )
+            _record_authorized_request(http_request, identity)
             with uow_factory() as uow:
                 session = _owned_session_in_uow(
                     uow,
                     session_id,
                     identity.verified_user_id,
                 )
-                existing = uow.answers.get(session_id, request.questionId)
+                existing = uow.answers.get(session_id, body.questionId)
                 if session.status == "reviewed":
-                    if existing is None or existing.answer != request.answer:
+                    if existing is None or existing.answer != body.answer:
                         raise SessionFinalizedError(session_id)
                     reviewed_replay = True
                 else:
                     uow.answers.upsert(
                         session_id,
-                        request.questionId,
-                        request.answer,
+                        body.questionId,
+                        body.answer,
                     )
                     uow.commit()
         sync_pending = False
@@ -579,7 +620,7 @@ def _install_routes(
                 sync_pending = True
         return {
             "sessionId": session_id,
-            "questionId": request.questionId,
+            "questionId": body.questionId,
             "syncPending": sync_pending,
         }
 
@@ -591,7 +632,14 @@ def _install_routes(
         uow_factory: Annotated[UnitOfWorkFactory, Depends(get_uow_factory)],
         manager: Annotated[ConversationManager, Depends(get_conversation_manager)],
     ) -> dict[str, Any] | JSONResponse:
-        _owned_session(uow_factory, session_id, identity.verified_user_id)
+        _owned_session_or_audit_not_found(
+            uow_factory,
+            session_id,
+            identity.verified_user_id,
+            request,
+            identity,
+        )
+        _record_authorized_request(request, identity)
         review_call_id = token_hex(16)
         review_task = asyncio.create_task(
             asyncio.to_thread(
@@ -637,10 +685,18 @@ def _install_routes(
     @application.get("/sessions/{session_id}")
     def get_session(
         session_id: str,
+        request: Request,
         identity: Annotated[VerifiedIdentity, Depends(get_verified_identity)],
         uow_factory: Annotated[UnitOfWorkFactory, Depends(get_uow_factory)],
     ) -> dict[str, Any]:
-        session = _owned_session(uow_factory, session_id, identity.verified_user_id)
+        session = _owned_session_or_audit_not_found(
+            uow_factory,
+            session_id,
+            identity.verified_user_id,
+            request,
+            identity,
+        )
+        _record_authorized_request(request, identity)
         with uow_factory() as uow:
             evidence = uow.evidence.list_for_session(session_id)
             answers = uow.answers.list_for_session(session_id)
@@ -673,10 +729,18 @@ def _install_routes(
     @application.get("/sessions/{session_id}/events")
     def get_events(
         session_id: str,
+        request: Request,
         identity: Annotated[VerifiedIdentity, Depends(get_verified_identity)],
         uow_factory: Annotated[UnitOfWorkFactory, Depends(get_uow_factory)],
     ) -> dict[str, list[dict[str, Any]]]:
-        _owned_session(uow_factory, session_id, identity.verified_user_id)
+        _owned_session_or_audit_not_found(
+            uow_factory,
+            session_id,
+            identity.verified_user_id,
+            request,
+            identity,
+        )
+        _record_authorized_request(request, identity)
         with uow_factory() as uow:
             events = uow.audit_events.list(session_id)
         return {
@@ -697,10 +761,18 @@ def _install_routes(
     @application.get("/sessions/{session_id}/reviews")
     def get_reviews(
         session_id: str,
+        request: Request,
         identity: Annotated[VerifiedIdentity, Depends(get_verified_identity)],
         uow_factory: Annotated[UnitOfWorkFactory, Depends(get_uow_factory)],
     ) -> dict[str, list[dict[str, Any]]]:
-        _owned_session(uow_factory, session_id, identity.verified_user_id)
+        _owned_session_or_audit_not_found(
+            uow_factory,
+            session_id,
+            identity.verified_user_id,
+            request,
+            identity,
+        )
+        _record_authorized_request(request, identity)
         with uow_factory() as uow:
             reviews = uow.reviews.list_for_session(session_id)
         return {
@@ -781,6 +853,40 @@ def _owned_session(
     if session is None or session.owner_user_id != verified_user_id:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
+
+
+def _owned_session_or_audit_not_found(
+    uow_factory: UnitOfWorkFactory,
+    session_id: str,
+    verified_user_id: str,
+    request: Request,
+    identity: VerifiedIdentity,
+) -> StoredSession:
+    with uow_factory() as uow:
+        session = uow.sessions.get(session_id)
+    if session is None or session.owner_user_id != verified_user_id:
+        record_security_audit(
+            request,
+            principal_id=identity.verified_user_id,
+            token_fingerprint=identity.token_fingerprint,
+            outcome="failure",
+            reason_category="not_found",
+        )
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
+def _record_authorized_request(
+    request: Request,
+    identity: VerifiedIdentity,
+) -> None:
+    record_security_audit(
+        request,
+        principal_id=identity.verified_user_id,
+        token_fingerprint=identity.token_fingerprint,
+        outcome="success",
+        reason_category="success",
+    )
 
 
 def _owned_session_in_uow(

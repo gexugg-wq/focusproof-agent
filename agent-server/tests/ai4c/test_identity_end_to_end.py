@@ -24,7 +24,7 @@ from focusproof.openhands_runtime.tools.verification import VerificationObservat
 from .oidc_fixture import local_oidc_fixture, oidc_test_app
 
 
-_FINGERPRINT_KEY = "repair1-fingerprint-key"
+_FINGERPRINT_KEY = "repair1-fingerprint-key-with-32-bytes"
 _ISSUER = "https://issuer-sentinel.example.test:8443/tenant/Exact/"
 _SUBJECT_A = "subject-A-sentinel"
 _SUBJECT_B = "subject-B-sentinel"
@@ -165,7 +165,12 @@ def _product_database_text(database_path: Path) -> str:
             for row in connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
             )
-            if row[0] not in {"alembic_version", "verified_principals"}
+            if row[0]
+            not in {
+                "alembic_version",
+                "security_audit_events",
+                "verified_principals",
+            }
         ]
         for table in tables:
             rows = connection.execute(f"SELECT * FROM {table}").fetchall()
@@ -495,7 +500,7 @@ def test_real_signed_identity_chain_is_owner_isolated_and_identity_material_free
         assert principal.principal_id not in runtime_dump
         assert principal_b.principal_id not in runtime_dump
 
-    fingerprint = "hmac-sha256:" + hmac.new(
+    fingerprint = hmac.new(
         _FINGERPRINT_KEY.encode(), token_a.encode(), hashlib.sha256
     ).hexdigest()
     scanned = "\n".join(

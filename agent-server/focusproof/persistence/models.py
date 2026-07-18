@@ -47,6 +47,23 @@ class VerifiedPrincipalModel(Base):
     )
 
 
+class SecurityAuditEventModel(Base):
+    __tablename__ = "security_audit_events"
+    __table_args__ = (
+        Index("ix_security_audit_events_occurred_at_id", "occurred_at", "id"),
+        Index("ix_security_audit_events_principal_id", "principal_id"),
+        UniqueConstraint("request_id", name="uq_security_audit_events_request_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    principal_id: Mapped[str | None] = mapped_column(String(96))
+    token_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason_category: Mapped[str] = mapped_column(String(64), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class LearningSessionModel(Base):
     __tablename__ = "learning_sessions"
 

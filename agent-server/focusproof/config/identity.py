@@ -13,6 +13,12 @@ from pydantic import (
 )
 
 from focusproof.config.profiles import RuntimeProfile
+from focusproof.runtime.security_audit import (
+    DEFAULT_SECURITY_AUDIT_RETENTION_SECONDS,
+    MAX_SECURITY_AUDIT_RETENTION_SECONDS,
+    MIN_SECURITY_AUDIT_RETENTION_SECONDS,
+    validate_security_audit_hmac_key,
+)
 
 _PROFILE_ADAPTER: TypeAdapter[RuntimeProfile] = TypeAdapter(RuntimeProfile)
 
@@ -28,6 +34,7 @@ class OidcSettings(BaseModel):
     clock_skew_seconds: int = 30
     jwks_cache_seconds: int = 300
     principal_fingerprint_key: SecretStr | None
+    security_audit_retention_seconds: int = DEFAULT_SECURITY_AUDIT_RETENTION_SECONDS
 
 
 class _OidcEnvironment(BaseModel):
@@ -52,6 +59,12 @@ class _OidcEnvironment(BaseModel):
     )
     principal_fingerprint_key: SecretStr = Field(
         alias="FOCUSPROOF_OIDC_FINGERPRINT_KEY"
+    )
+    security_audit_retention_seconds: int = Field(
+        default=DEFAULT_SECURITY_AUDIT_RETENTION_SECONDS,
+        alias="FOCUSPROOF_SECURITY_AUDIT_RETENTION_SECONDS",
+        ge=MIN_SECURITY_AUDIT_RETENTION_SECONDS,
+        le=MAX_SECURITY_AUDIT_RETENTION_SECONDS,
     )
 
     @field_validator("allowed_algorithms", mode="before")
@@ -91,6 +104,13 @@ class _OidcEnvironment(BaseModel):
             raise ValueError("OIDC URL values must not contain query or fragment")
         return value
 
+    @field_validator("principal_fingerprint_key", mode="before")
+    @classmethod
+    def validate_fingerprint_key(cls, value: object) -> str:
+        if not isinstance(value, str):
+            raise TypeError("FOCUSPROOF_OIDC_FINGERPRINT_KEY must be a string")
+        return validate_security_audit_hmac_key(value)
+
 
 def load_oidc_settings(
     environ: Mapping[str, str],
@@ -105,6 +125,7 @@ def load_oidc_settings(
             audience=None,
             jwks_uri=None,
             principal_fingerprint_key=None,
+            security_audit_retention_seconds=DEFAULT_SECURITY_AUDIT_RETENTION_SECONDS,
         )
 
     validated = _OidcEnvironment.model_validate(dict(environ))
@@ -117,4 +138,7 @@ def load_oidc_settings(
         clock_skew_seconds=validated.clock_skew_seconds,
         jwks_cache_seconds=validated.jwks_cache_seconds,
         principal_fingerprint_key=validated.principal_fingerprint_key,
+        security_audit_retention_seconds=(
+            validated.security_audit_retention_seconds
+        ),
     )
