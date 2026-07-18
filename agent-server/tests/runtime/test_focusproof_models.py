@@ -19,9 +19,14 @@ def test_focusproof_models_serialize_without_frontend_or_contract_dependencies()
         contentHash="sha256:abc",
         textContent="I learned that events are appended and replayed into views.",
     )
-    action = Action(type="verify_evidence", toolName="FakeTextEvidenceTool", input={}, evidenceIds=["ev_1"])
+    action = Action(
+        type="verify_evidence",
+        toolName="focusproof_text_evidence_verification",
+        input={},
+        evidenceIds=["ev_1"],
+    )
     observation = Observation(
-        toolName="FakeTextEvidenceTool",
+        toolName="focusproof_text_evidence_verification",
         status="success",
         facts={"specific": True},
         sourceRefs=["ev_1"],

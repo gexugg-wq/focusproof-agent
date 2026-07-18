@@ -57,7 +57,7 @@ def test_action_projects_to_verification_or_question_event() -> None:
         session_id="sess_1",
         action=Action(
             type="verify_evidence",
-            toolName="FakeTextEvidenceTool",
+            toolName="focusproof_text_evidence_verification",
             input={"text": "event replay"},
             evidenceIds=["ev_1"],
         ),
@@ -87,7 +87,7 @@ def test_observation_projects_to_verification_completed() -> None:
     event = project_observation_to_focusproof_event(
         session_id="sess_1",
         observation=Observation(
-            toolName="FakeTextEvidenceTool",
+            toolName="focusproof_text_evidence_verification",
             status="success",
             facts={"isSpecific": True},
             sourceRefs=["ev_1"],
