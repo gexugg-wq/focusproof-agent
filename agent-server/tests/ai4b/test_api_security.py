@@ -12,6 +12,8 @@ from openhands.sdk.llm import Message, MessageToolCall, TextContent
 from openhands.sdk.testing import TestLLM
 
 from focusproof.api.auth import VerifiedIdentity, get_verified_identity
+from focusproof.api.oidc import InvalidTokenError
+from focusproof.persistence.providers import PrincipalDisabledError
 
 
 def _completed_review_llm(_: str) -> TestLLM:
@@ -144,19 +146,133 @@ def test_every_session_derived_endpoint_denies_non_owner_without_state_change(
     with ai4b_app_factory(_completed_review_llm) as running:
         running.app.dependency_overrides[get_verified_identity] = identity_override
         session_id = _create_session(running.client)
+        evidence = running.client.post(
+            f"/sessions/{session_id}/evidence",
+            json={
+                "evidenceType": "text",
+                "textContent": "Owner A established a non-empty baseline.",
+            },
+        )
+        answer = running.client.post(
+            f"/sessions/{session_id}/answer",
+            json={"questionId": "q_baseline", "answer": "Owned baseline answer."},
+        )
+        review = running.client.post(f"/sessions/{session_id}/review")
+        assert evidence.status_code == 200
+        assert answer.status_code == 200
+        assert review.status_code == 200
         before = _fact_counts(running.client, session_id)
+        assert all(count > 0 for count in before.values())
 
         current_owner["user_id"] = "owner-b"
+        spoofed_payload = dict(payload or {})
+        spoofed_payload.update(
+            {
+                "ownerUserId": "owner-a",
+                "principal_id": "owner-a",
+                "user_id": "owner-a",
+                "sender": "owner-a",
+                "session_id": session_id,
+            }
+        )
         denied = running.client.request(
             method,
             f"/sessions/{session_id}{suffix}",
-            json=payload,
+            params={"owner": "owner-a", "user_id": "owner-a"},
+            cookies={"owner": "owner-a", "user_id": "owner-a"},
+            headers={
+                "X-Forwarded-User": "owner-a",
+                "X-Owner-User-Id": "owner-a",
+            },
+            json=spoofed_payload if method == "POST" else None,
         )
 
         assert denied.status_code == 404
         assert denied.json() == {"detail": "Session not found"}
 
         current_owner["user_id"] = "owner-a"
+        nonexistent = running.client.request(
+            method,
+            f"/sessions/sess_does_not_exist{suffix}",
+            json=payload if method == "POST" else None,
+        )
+        assert nonexistent.status_code == denied.status_code
+        assert nonexistent.json() == denied.json()
+        assert _fact_counts(running.client, session_id) == before
+
+
+@pytest.mark.parametrize(
+    ("identity_error", "expected_status", "expected_body"),
+    [
+        (
+            InvalidTokenError("missing authorization header"),
+            401,
+            {"code": "invalid_token", "retryable": False},
+        ),
+        (
+            PrincipalDisabledError(),
+            403,
+            {"code": "principal_disabled", "retryable": False},
+        ),
+    ],
+)
+def test_identity_denials_leave_existing_fact_baseline_unchanged(
+    identity_error: Exception,
+    expected_status: int,
+    expected_body: dict[str, object],
+    ai4b_app_factory: Callable[..., Any],
+) -> None:
+    def owner_identity() -> VerifiedIdentity:
+        return VerifiedIdentity(verified_user_id="owner-a")
+
+    def denied_identity() -> VerifiedIdentity:
+        raise identity_error
+
+    with ai4b_app_factory(_completed_review_llm) as running:
+        running.app.dependency_overrides[get_verified_identity] = owner_identity
+        session_id = _create_session(running.client)
+        assert running.client.post(
+            f"/sessions/{session_id}/evidence",
+            json={
+                "evidenceType": "text",
+                "textContent": "Identity denial baseline evidence.",
+            },
+        ).status_code == 200
+        assert running.client.post(
+            f"/sessions/{session_id}/answer",
+            json={"questionId": "q_identity", "answer": "Baseline answer."},
+        ).status_code == 200
+        assert running.client.post(f"/sessions/{session_id}/review").status_code == 200
+        before = _fact_counts(running.client, session_id)
+        assert all(count > 0 for count in before.values())
+
+        running.app.dependency_overrides[get_verified_identity] = denied_identity
+        requests = [
+            ("GET", "", None),
+            ("GET", "/events", None),
+            ("GET", "/reviews", None),
+            (
+                "POST",
+                "/evidence",
+                {"evidenceType": "text", "textContent": "Denied evidence."},
+            ),
+            (
+                "POST",
+                "/answer",
+                {"questionId": "q_denied", "answer": "Denied answer."},
+            ),
+            ("POST", "/review", None),
+        ]
+        for method, suffix, payload in requests:
+            denied = running.client.request(
+                method,
+                f"/sessions/{session_id}{suffix}",
+                json=payload,
+            )
+            assert denied.status_code == expected_status
+            assert denied.json() == expected_body
+
+        running.app.dependency_overrides[get_verified_identity] = owner_identity
         assert _fact_counts(running.client, session_id) == before
 
 

@@ -64,7 +64,13 @@ from focusproof.persistence.database import (
     create_session_factory,
 )
 from focusproof.persistence.event_log import PersistentAuditEventLog
-from focusproof.persistence.providers import UowEvidenceProvider
+from focusproof.persistence.providers import (
+    IdentityStoragePaths,
+    PrincipalDisabledError,
+    UowEvidenceProvider,
+    UowPrincipalResolver,
+    select_identity_storage_paths,
+)
 from focusproof.persistence.repositories import (
     StoredEvidence,
     StoredSession,
@@ -167,15 +173,34 @@ def create_app(
     principal_resolver: PrincipalResolver | None = None,
     review_timeout_seconds: float = DEFAULT_REVIEW_TIMEOUT_SECONDS,
 ) -> FastAPI:
-    configured_profile = os.environ.get("FOCUSPROOF_PROFILE") or (
-        "deterministic-test" if llm_factory is not None else "local-dev"
-    )
+    configured_profile = os.environ.get("FOCUSPROOF_PROFILE") or "local-dev"
     resolved_data_dir = (
         data_dir
         if data_dir is not None
         else PROJECT_ROOT / (os.environ.get("FOCUSPROOF_DATA_DIR") or "./var")
     ).resolve()
     configured_database_url = database_url or _database_url_from_environment()
+    if configured_profile in {"local-dev", "staging", "production"}:
+        current_storage = IdentityStoragePaths(
+            database_url=configured_database_url,
+            conversation_root=resolved_data_dir,
+        )
+        isolated_storage = _isolated_counterpart_storage(resolved_data_dir)
+        selected_storage = select_identity_storage_paths(
+            configured_profile,
+            anonymous_local_dev=(
+                current_storage
+                if configured_profile == "local-dev"
+                else isolated_storage
+            ),
+            verified=(
+                isolated_storage
+                if configured_profile == "local-dev"
+                else current_storage
+            ),
+        )
+        configured_database_url = selected_storage.database_url
+        resolved_data_dir = selected_storage.conversation_root.resolve()
     _validate_database_path(configured_database_url, resolved_data_dir)
     configured_lock_timeout = (
         lock_timeout_seconds
@@ -200,19 +225,27 @@ def create_app(
                 os.environ,
                 profile=configured_profile,
             )
-            application.state.allow_anonymous_identity = not oidc_settings.enabled
-            token_verifier = None
-            if oidc_settings.enabled and principal_resolver is not None:
-                token_verifier = OidcTokenVerifier(
-                    oidc_settings,
-                    principal_resolver=principal_resolver,
-                )
-            elif oidc_settings.enabled:
+            application.state.allow_anonymous_identity = (
+                not oidc_settings.enabled
+                and configured_profile == "local-dev"
+            )
+            if not oidc_settings.enabled and configured_profile != "local-dev":
                 application.state.readiness_error = "identity_unavailable"
-            configure_token_verifier(token_verifier)
             engine = create_database_engine(configured_database_url)
             check_schema_revision(engine, PROJECT_ROOT / "alembic.ini")
             uow_factory = UnitOfWorkFactory(create_session_factory(engine))
+            effective_principal_resolver = principal_resolver or UowPrincipalResolver(
+                uow_factory
+            )
+            token_verifier = (
+                OidcTokenVerifier(
+                    oidc_settings,
+                    principal_resolver=effective_principal_resolver,
+                )
+                if oidc_settings.enabled
+                else None
+            )
+            configure_token_verifier(token_verifier)
             audit_log = PersistentAuditEventLog(uow_factory)
             evidence_provider = UowEvidenceProvider(uow_factory)
             run_lock = FileSessionRunLock(
@@ -335,6 +368,17 @@ def _install_exception_handlers(application: FastAPI) -> None:
             status_code=401,
             content={"code": "invalid_token", "retryable": False},
             headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    @application.exception_handler(PrincipalDisabledError)
+    async def principal_disabled_handler(
+        request: Request,
+        exc: PrincipalDisabledError,
+    ) -> JSONResponse:
+        del request, exc
+        return JSONResponse(
+            status_code=403,
+            content={"code": "principal_disabled", "retryable": False},
         )
 
     @application.exception_handler(SessionBusyError)
@@ -733,6 +777,17 @@ def _require_ready(request: Request) -> None:
 def _database_url_from_environment() -> str:
     return os.environ.get("DATABASE_URL") or (
         "sqlite+pysqlite:///./var/focusproof.db"
+    )
+
+
+def _isolated_counterpart_storage(data_dir: Path) -> IdentityStoragePaths:
+    counterpart_root = data_dir.parent / f"{data_dir.name}-identity-isolated"
+    return IdentityStoragePaths(
+        database_url=(
+            "sqlite+pysqlite:///"
+            f"{counterpart_root / 'focusproof-identity-isolated.sqlite3'}"
+        ),
+        conversation_root=counterpart_root,
     )
 
 

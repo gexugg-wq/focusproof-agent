@@ -4,6 +4,7 @@ import os
 import re
 from collections.abc import Callable, Collection
 from pathlib import Path
+from typing import Protocol, cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from openhands.sdk import Agent, Conversation, LLM
@@ -38,6 +39,14 @@ from focusproof.runtime.evidence import LearningGoal
 LLMFactory = Callable[[str], LLM]
 CallbackFactory = Callable[[str, UUID], ConversationCallbackType]
 
+
+class ScopedRepositoryProvider(Protocol):
+    def scope(
+        self,
+        session_id: str,
+        principal_id: str,
+    ) -> SessionEvidenceRepository: ...
+
 _SAFE_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -53,7 +62,7 @@ class ConversationFactory:
     def __init__(
         self,
         *,
-        repository: SessionEvidenceRepository,
+        repository: SessionEvidenceRepository | ScopedRepositoryProvider,
         project_root: Path | None = None,
         data_dir: Path | None = None,
         llm_factory: LLMFactory | None = None,
@@ -63,9 +72,12 @@ class ConversationFactory:
         url_fetcher: UrlFetcher | None = None,
         url_execution_pool: BoundedUrlExecutionPool | None = None,
         runtime_settings: RuntimeSettings | None = None,
+        compatibility_mode: bool = False,
     ) -> None:
         self._repository = repository
-        configure_repository_provider(repository)
+        self._compatibility_mode = compatibility_mode
+        if compatibility_mode:
+            configure_repository_provider(cast(SessionEvidenceRepository, repository))
         registry = capability_registry or VerificationCapabilityRegistry(
             build_builtin_capabilities()
         )
@@ -110,11 +122,23 @@ class ConversationFactory:
         goal: LearningGoal,
         *,
         conversation_id: UUID | None = None,
+        principal_id: str | None = None,
         user_id: str | None = None,
         evidence_types: Collection[str] | None = None,
     ) -> ConversationHandle:
         if not _SAFE_SESSION_ID_RE.fullmatch(session_id):
             raise ValueError("session_id contains unsafe path characters")
+        scoped_repository: SessionEvidenceRepository | None = None
+        if not self._compatibility_mode:
+            if principal_id is None:
+                raise RuntimeError("verified principal runtime binding is required")
+            scope_repository = getattr(self._repository, "scope", None)
+            if scope_repository is None:
+                raise RuntimeError("scoped repository provider is required")
+            scoped_repository = cast(
+                SessionEvidenceRepository,
+                scope_repository(session_id, principal_id),
+            )
         conversation_id = conversation_id or uuid5(
             NAMESPACE_URL, f"focusproof:{session_id}"
         )
@@ -157,6 +181,7 @@ class ConversationFactory:
                 goal.domain,
                 evidence_types,
                 compatibility_restore=compatibility_restore,
+                repository=scoped_repository,
             ),
             include_default_tools=[],
             system_prompt=FOCUSPROOF_SYSTEM_PROMPT,
@@ -207,6 +232,11 @@ class ConversationFactory:
         if not isinstance(conversation, LocalConversation):
             conversation.close()
             raise RuntimeCreationError("SDK did not create a LocalConversation")
+        if conversation.agent is not agent or conversation.state.agent is not agent:
+            conversation.close()
+            raise RuntimeCreationError(
+                "SDK did not install the server-bound runtime Agent"
+            )
         persisted_toolset_version = conversation.state.tags.get("toolsetversion")
         return ConversationHandle(
             session_id=session_id,
@@ -257,6 +287,7 @@ class ConversationFactory:
         evidence_types: Collection[str] | None,
         *,
         compatibility_restore: bool,
+        repository: SessionEvidenceRepository | None,
     ) -> list[Tool]:
         ensure_focusproof_tools_registered()
         return self._tool_assembler.assemble(
@@ -264,4 +295,6 @@ class ConversationFactory:
             domain,
             evidence_types,
             compatibility_restore=compatibility_restore,
+            repository=repository,
+            compatibility_mode=self._compatibility_mode,
         )

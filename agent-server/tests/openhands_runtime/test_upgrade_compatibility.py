@@ -233,6 +233,7 @@ def test_base_conversation_restores_into_ai4a_without_rewriting_history(
     factory = ConversationFactory(
         project_root=tmp_path,
         repository=UpgradeRepository(),
+        compatibility_mode=True,
         llm_factory=_restored_llm,
         callback_factory=pause_after_new_verification,
     )
@@ -280,6 +281,7 @@ def test_base_conversation_restores_into_ai4a_without_rewriting_history(
     reopened = ConversationFactory(
         project_root=tmp_path,
         repository=UpgradeRepository(),
+        compatibility_mode=True,
         llm_factory=_restored_llm,
     ).create(
         session_id,
@@ -341,6 +343,7 @@ def test_restored_compatibility_tool_never_emits_raw_url_secrets(
     restored = ConversationFactory(
         project_root=tmp_path,
         repository=UpgradeUrlRepository(source_url),
+        compatibility_mode=True,
         llm_factory=_restored_legacy_url_llm,
         callback_factory=pause_after_legacy_url,
     ).create(

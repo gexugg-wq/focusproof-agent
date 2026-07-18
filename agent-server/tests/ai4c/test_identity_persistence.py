@@ -22,10 +22,15 @@ from focusproof.persistence.providers import (
     IdentityStoragePaths,
     InvalidPrincipalIdentityError,
     PrincipalDisabledError,
+    UowEvidenceProvider,
     UowPrincipalResolver,
     select_identity_storage_paths,
 )
-from focusproof.persistence.repositories import SqlPrincipalRepository
+from focusproof.persistence.repositories import (
+    SqlPrincipalRepository,
+    StoredEvidence,
+    StoredSession,
+)
 from focusproof.persistence.unit_of_work import UnitOfWorkFactory
 
 
@@ -322,6 +327,67 @@ def test_database_unavailable_is_not_mapped(tmp_path: Path) -> None:
     try:
         with pytest.raises(OperationalError):
             resolver.resolve(issuer="https://issuer.example", subject="subject-a")
+    finally:
+        engine.dispose()
+
+
+def test_scoped_evidence_provider_requires_exact_session_owner_and_runtime_binding(
+    tmp_path: Path,
+) -> None:
+    engine, factory = _factory(tmp_path, "scoped-evidence.sqlite3")
+    now = datetime.now(UTC)
+    session = StoredSession(
+        session_id="sess_scoped",
+        owner_user_id="principal_owner_a",
+        status="running",
+        adapter_mode="openhands-local-scripted-test",
+        domain="general",
+        title="Scoped evidence",
+        goal="Keep evidence owner-bound.",
+        expected_output=None,
+        planned_minutes=None,
+        conversation_id="44444444-4444-4444-4444-444444444444",
+        runtime_mode="openhands-local-scripted-test",
+        review_result=None,
+        goal_conversation_synced_at=None,
+        version=1,
+        created_at=now,
+        updated_at=now,
+    )
+    evidence = StoredEvidence(
+        evidence_id="ev_scoped",
+        session_id=session.session_id,
+        evidence_type="text",
+        content_hash="hash-scoped",
+        text_content="Only the owner may read this.",
+        source_url=None,
+        metadata={},
+        conversation_synced_at=None,
+        created_at=now,
+    )
+    try:
+        with factory() as uow:
+            uow.sessions.create(session)
+            uow.evidence.add(evidence)
+            uow.commit()
+        provider = UowEvidenceProvider(factory)
+        owner_scope = provider.scope(session.session_id, "principal_owner_a")
+        attacker_scope = provider.scope(session.session_id, "principal_owner_b")
+
+        assert owner_scope.get_evidence(session.session_id, evidence.evidence_id).evidenceId == (
+            evidence.evidence_id
+        )
+        with pytest.raises(KeyError):
+            owner_scope.get_evidence("sess_spoofed", evidence.evidence_id)
+        with pytest.raises(KeyError):
+            attacker_scope.get_evidence(session.session_id, evidence.evidence_id)
+        assert owner_scope.model_dump(mode="python") == {}
+        assert owner_scope.model_dump_json() == "{}"
+        assert "principal_owner_a" not in repr(owner_scope)
+
+        restored_empty = type(owner_scope).model_validate({})
+        with pytest.raises(RuntimeError, match="runtime binding"):
+            restored_empty.get_evidence(session.session_id, evidence.evidence_id)
     finally:
         engine.dispose()
 

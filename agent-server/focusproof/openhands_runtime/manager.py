@@ -32,6 +32,7 @@ from focusproof.openhands_runtime.tools import SessionEvidenceRepository
 from focusproof.openhands_runtime.tools.learner_input import LearnerInputObservation
 from focusproof.openhands_runtime.tools.review_draft import ReviewDraftObservation
 from focusproof.persistence.repositories import StoredSession
+from focusproof.persistence.providers import UowEvidenceProvider
 from focusproof.persistence.unit_of_work import UnitOfWorkFactoryLike
 from focusproof.runtime.evidence import Evidence, LearningGoal
 
@@ -88,13 +89,19 @@ class ConversationManager:
         )
         self._result_extractor = RuntimeResultExtractor(audit_log, uow_factory)
         self._review_timeout_seconds = review_timeout_seconds
+        factory_repository = (
+            UowEvidenceProvider(uow_factory)
+            if uow_factory is not None
+            else repository
+        )
         self._factory = ConversationFactory(
-            repository=repository,
+            repository=factory_repository,
             project_root=project_root,
             data_dir=data_dir,
             llm_factory=llm_factory,
             callback_factory=self._create_projector_callback,
             runtime_settings=runtime_settings,
+            compatibility_mode=uow_factory is None,
         )
         self._accepting_reviews = True
 
@@ -283,8 +290,16 @@ class ConversationManager:
                 answers=answers,
             )
 
-    def close(self, session_id: str) -> None:
+    def close(
+        self,
+        session_id: str,
+        verified_user_id: str | None = None,
+    ) -> None:
         with self._run_lock.acquire(session_id):
+            if self._uow_factory is not None:
+                if verified_user_id is None:
+                    raise ValueError("verified_user_id is required")
+                self._assert_owner(session_id, verified_user_id)
             self._close_unlocked(session_id)
 
     def interrupt(self, session_id: str, review_call_id: str | None = None) -> None:
@@ -365,6 +380,7 @@ class ConversationManager:
             session_id,
             goal,
             conversation_id=UUID(session.conversation_id),
+            principal_id=verified_user_id,
             user_id=verified_user_id,
         )
         self._handles[session_id] = handle

@@ -6,6 +6,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from openhands.sdk.event import MessageEvent
 from openhands.sdk.testing import TestLLM
+import pytest
 from sqlalchemy import Engine, update
 
 from agent_server_test_support import PersistentEvidenceProvider
@@ -87,6 +88,51 @@ def _message_keys(manager: ConversationManager, session_id: str) -> list[str | N
         for event in manager.get(session_id).conversation.state.events
         if isinstance(event, MessageEvent)
     ]
+
+
+def test_cache_and_cold_restore_reject_non_owner_before_native_event_append(
+    tmp_path: Path,
+) -> None:
+    session_id = "sess_restore_owner_guard"
+    engine, uow_factory = _database(tmp_path, "restore-owner-guard.sqlite3")
+    _seed(uow_factory, session_id)
+    first = _manager(tmp_path, uow_factory)
+    handle = first.get_or_restore(session_id, OWNER)
+    before_native = [event.model_dump_json() for event in handle.conversation.state.events]
+    with uow_factory() as uow:
+        before_audit = [event.model_dump_json() for event in uow.audit_events.list(session_id)]
+
+    with pytest.raises(PermissionError):
+        first.get_or_restore(session_id, "verified-attacker")
+    assert [event.model_dump_json() for event in handle.conversation.state.events] == (
+        before_native
+    )
+    with uow_factory() as uow:
+        assert [event.model_dump_json() for event in uow.audit_events.list(session_id)] == (
+            before_audit
+        )
+    first.close_all()
+    persisted_before = {
+        path.relative_to(handle.persistence_path): path.read_bytes()
+        for path in handle.persistence_path.rglob("*")
+        if path.is_file()
+    }
+
+    restored = _manager(tmp_path, uow_factory)
+    try:
+        with pytest.raises(PermissionError):
+            restored.get_or_restore(session_id, "verified-attacker")
+        persisted_after = {
+            path.relative_to(handle.persistence_path): path.read_bytes()
+            for path in handle.persistence_path.rglob("*")
+            if path.is_file()
+        }
+        assert persisted_after == persisted_before
+        with pytest.raises(KeyError):
+            restored.get(session_id)
+    finally:
+        restored.close_all()
+        engine.dispose()
 
 
 def test_restore_reconciles_old_native_events_before_pending_messages(

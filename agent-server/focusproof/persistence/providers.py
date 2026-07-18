@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
+from pydantic import BaseModel, ConfigDict, PrivateAttr, model_serializer
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
@@ -153,6 +155,74 @@ class UowEvidenceProvider:
     def get_evidence(self, session_id: str, evidence_id: str) -> Evidence:
         with self._uow_factory() as uow:
             stored = uow.evidence.get(session_id, evidence_id)
+        if stored is None:
+            raise KeyError(f"Evidence {evidence_id} does not exist")
+        return Evidence(
+            evidenceId=stored.evidence_id,
+            evidenceType=stored.evidence_type,
+            contentHash=stored.content_hash,
+            textContent=stored.text_content,
+            sourceUrl=stored.source_url,
+            metadata=stored.metadata,
+        )
+
+    def scope(
+        self,
+        session_id: str,
+        principal_id: str,
+    ) -> ScopedSessionEvidenceRepository:
+        return ScopedSessionEvidenceRepository.bind(
+            self._uow_factory,
+            session_id=session_id,
+            principal_id=principal_id,
+        )
+
+
+class ScopedSessionEvidenceRepository(BaseModel):
+    """Runtime-only Evidence access bound to one verified owner and Session."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    _uow_factory: UnitOfWorkFactoryLike = PrivateAttr()
+    _session_id: str = PrivateAttr()
+    _principal_id: str = PrivateAttr()
+
+    @classmethod
+    def bind(
+        cls,
+        uow_factory: UnitOfWorkFactoryLike,
+        *,
+        session_id: str,
+        principal_id: str,
+    ) -> ScopedSessionEvidenceRepository:
+        repository = cls()
+        repository._uow_factory = uow_factory
+        repository._session_id = session_id
+        repository._principal_id = principal_id
+        return repository
+
+    @model_serializer
+    def _serialize_without_runtime_binding(self) -> dict[str, Any]:
+        return {}
+
+    def get_evidence(self, session_id: str, evidence_id: str) -> Evidence:
+        if not all(
+            hasattr(self, attribute)
+            for attribute in ("_uow_factory", "_session_id", "_principal_id")
+        ):
+            raise RuntimeError("scoped repository has no runtime binding")
+        if session_id != self._session_id:
+            raise KeyError(f"Evidence {evidence_id} does not exist")
+        with self._uow_factory() as uow:
+            owner_session = uow.sessions.get_owned(
+                self._session_id,
+                self._principal_id,
+            )
+            stored = (
+                uow.evidence.get(self._session_id, evidence_id)
+                if owner_session is not None
+                else None
+            )
         if stored is None:
             raise KeyError(f"Evidence {evidence_id} does not exist")
         return Evidence(

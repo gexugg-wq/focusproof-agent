@@ -53,6 +53,7 @@ def _services(tmp_path: Path) -> tuple[UnitOfWorkFactory, ConversationFactory]:
     factory = ConversationFactory(
         project_root=tmp_path,
         repository=PersistentEvidenceProvider(uow_factory),
+        compatibility_mode=True,
         llm_factory=completed_review_llm,
     )
     return uow_factory, factory

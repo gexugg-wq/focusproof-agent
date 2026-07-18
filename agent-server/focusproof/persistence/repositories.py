@@ -98,6 +98,9 @@ class StoredPrincipal(StoredModel):
 class SessionRepository(Protocol):
     def create(self, record: StoredSession) -> StoredSession: ...
     def get(self, session_id: str) -> StoredSession | None: ...
+    def get_owned(
+        self, session_id: str, owner_user_id: str
+    ) -> StoredSession | None: ...
     def update_status(
         self, session_id: str, status: str, *, expected_version: int
     ) -> bool: ...
@@ -229,6 +232,19 @@ class SqlSessionRepository:
 
     def get(self, session_id: str) -> StoredSession | None:
         model = self._session.get(LearningSessionModel, session_id)
+        return _stored_session(model) if model is not None else None
+
+    def get_owned(
+        self,
+        session_id: str,
+        owner_user_id: str,
+    ) -> StoredSession | None:
+        model = self._session.scalar(
+            select(LearningSessionModel).where(
+                LearningSessionModel.session_id == session_id,
+                LearningSessionModel.owner_user_id == owner_user_id,
+            )
+        )
         return _stored_session(model) if model is not None else None
 
     def update_status(

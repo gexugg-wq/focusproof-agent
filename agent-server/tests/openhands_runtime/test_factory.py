@@ -1,4 +1,5 @@
 from dataclasses import replace
+import json
 from pathlib import Path
 from typing import Any, cast
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -6,6 +7,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from openhands.sdk.conversation.impl.local_conversation import LocalConversation
 from openhands.sdk.llm import Message, TextContent
 from openhands.sdk.testing import TestLLM
+from pydantic import BaseModel, PrivateAttr, model_serializer
 import pytest
 
 from focusproof.runtime.evidence import Evidence, LearningGoal
@@ -14,6 +16,37 @@ from focusproof.runtime.evidence import Evidence, LearningGoal
 class EmptyRepository:
     def get_evidence(self, session_id: str, evidence_id: str) -> Evidence:
         raise KeyError((session_id, evidence_id))
+
+
+class RuntimeBoundRepository(BaseModel):
+    _principal_id: str = PrivateAttr()
+    _session_id: str = PrivateAttr()
+
+    @classmethod
+    def bind(cls, session_id: str, principal_id: str) -> "RuntimeBoundRepository":
+        repository = cls()
+        repository._session_id = session_id
+        repository._principal_id = principal_id
+        return repository
+
+    @model_serializer
+    def serialize_without_runtime_binding(self) -> dict[str, object]:
+        return {}
+
+    def get_evidence(self, session_id: str, evidence_id: str) -> Evidence:
+        if session_id != self._session_id:
+            raise KeyError((session_id, evidence_id))
+        raise KeyError((session_id, evidence_id))
+
+
+class ScopedProvider:
+    def __init__(self) -> None:
+        self.bindings: list[RuntimeBoundRepository] = []
+
+    def scope(self, session_id: str, principal_id: str) -> RuntimeBoundRepository:
+        repository = RuntimeBoundRepository.bind(session_id, principal_id)
+        self.bindings.append(repository)
+        return repository
 
 
 def _goal() -> LearningGoal:
@@ -45,6 +78,7 @@ def test_factory_creates_sdk_local_conversation_with_stable_uuid(
     factory = ConversationFactory(
         project_root=tmp_path,
         repository=EmptyRepository(),
+        compatibility_mode=True,
         llm_factory=_test_llm,
     )
 
@@ -59,12 +93,91 @@ def test_factory_creates_sdk_local_conversation_with_stable_uuid(
         handle.conversation.close()
 
 
+def test_server_bound_factory_serializes_no_repository_binding_and_rebinds_restore(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from focusproof.openhands_runtime import factory as factory_module
+    from focusproof.openhands_runtime import tool_registry
+    from focusproof.openhands_runtime.factory import ConversationFactory
+
+    def forbidden_global_provider(_: object) -> None:
+        raise AssertionError("production must not configure global repository fallback")
+
+    monkeypatch.setattr(
+        factory_module,
+        "configure_repository_provider",
+        forbidden_global_provider,
+    )
+    monkeypatch.setattr(
+        tool_registry,
+        "get_repository_provider",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("production tool execution used global fallback")
+        ),
+    )
+    provider = ScopedProvider()
+    factory = ConversationFactory(
+        project_root=tmp_path,
+        repository=provider,
+        llm_factory=_test_llm,
+        compatibility_mode=False,
+    )
+    initial = factory.create(
+        "sess_server_bound",
+        _goal(),
+        principal_id="principal_server_bound_secret",
+        user_id="principal_server_bound_secret",
+    )
+    conversation_id = initial.conversation_id
+    initial.conversation.close()
+
+    base_state_path = (
+        initial.persistence_path / conversation_id.hex / "base_state.json"
+    )
+    serialized = base_state_path.read_text(encoding="utf-8")
+    agent_dump = initial.conversation.agent.model_dump_json()
+    state = json.loads(serialized)
+    assert "principal_server_bound_secret" not in serialized
+    assert "_principal_id" not in serialized
+    assert "_session_id" not in serialized
+    assert "principal_server_bound_secret" not in agent_dump
+    verifier_params = [
+        tool["params"]
+        for tool in state["agent"]["tools"]
+        if "EvidenceVerificationTool" in tool["name"]
+    ]
+    assert verifier_params
+    assert all(params["repository"] == {} for params in verifier_params)
+
+    restored = factory.create(
+        "sess_server_bound",
+        _goal(),
+        conversation_id=conversation_id,
+        principal_id="principal_server_bound_secret",
+        user_id="principal_server_bound_secret",
+    )
+    try:
+        cast(Any, restored.conversation).send_message("initialize rebound tools")
+        assert restored.compatibility_restore is True
+        assert len(provider.bindings) == 2
+        assert provider.bindings[0] is not provider.bindings[1]
+        assert restored.conversation.agent is restored.conversation.state.agent
+        text_tool = restored.conversation.agent.tools_map[
+            "focusproof_text_evidence_verification"
+        ]
+        assert cast(Any, text_tool.executor)._repository is provider.bindings[1]
+    finally:
+        restored.conversation.close()
+
+
 def test_initialized_agent_contains_only_focusproof_tools(tmp_path: Path) -> None:
     from focusproof.openhands_runtime.factory import ConversationFactory
 
     factory = ConversationFactory(
         project_root=tmp_path,
         repository=EmptyRepository(),
+        compatibility_mode=True,
         llm_factory=_test_llm,
     )
     handle = factory.create("sess_tools", _goal())
@@ -96,6 +209,7 @@ def test_factory_narrows_verifiers_for_known_evidence_types(tmp_path: Path) -> N
     factory = ConversationFactory(
         project_root=tmp_path,
         repository=EmptyRepository(),
+        compatibility_mode=True,
         llm_factory=_test_llm,
     )
     handle = factory.create("sess_text_tools", _goal(), evidence_types={"text"})
@@ -125,6 +239,7 @@ def test_empty_conversation_persistence_directory_is_not_a_restore(
     factory = ConversationFactory(
         project_root=tmp_path,
         repository=EmptyRepository(),
+        compatibility_mode=True,
         llm_factory=_test_llm,
     )
 
@@ -149,6 +264,7 @@ def test_ai4a_restore_uses_legacy_compatibility_superset(tmp_path: Path) -> None
     factory = ConversationFactory(
         project_root=tmp_path,
         repository=EmptyRepository(),
+        compatibility_mode=True,
         llm_factory=_test_llm,
     )
     initial = factory.create("sess_ai4a_restore", _goal())
@@ -183,6 +299,7 @@ def test_restore_does_not_narrow_tools_from_persisted_default_set(
     factory = ConversationFactory(
         project_root=tmp_path,
         repository=EmptyRepository(),
+        compatibility_mode=True,
         llm_factory=_test_llm,
     )
     initial = factory.create("sess_restore_narrow", _goal())
@@ -223,6 +340,7 @@ def test_factory_rejects_runtime_path_resolving_outside_data_dir(
         project_root=tmp_path,
         data_dir=data_dir,
         repository=EmptyRepository(),
+        compatibility_mode=True,
         llm_factory=_test_llm,
     )
 
@@ -236,6 +354,7 @@ def test_factory_records_toolset_version_on_fresh_conversation(tmp_path: Path) -
     factory = ConversationFactory(
         project_root=tmp_path,
         repository=EmptyRepository(),
+        compatibility_mode=True,
         llm_factory=_test_llm,
     )
     handle = factory.create("sess_version", _goal(), evidence_types={"text"})
@@ -256,6 +375,7 @@ def test_factory_reports_persisted_toolset_version_mismatch(tmp_path: Path) -> N
     factory = ConversationFactory(
         project_root=tmp_path,
         repository=EmptyRepository(),
+        compatibility_mode=True,
         llm_factory=_test_llm,
     )
     initial = factory.create(
@@ -283,6 +403,7 @@ def test_factory_uses_explicit_validated_data_directory(tmp_path: Path) -> None:
         project_root=tmp_path,
         data_dir=data_dir,
         repository=EmptyRepository(),
+        compatibility_mode=True,
         llm_factory=_test_llm,
     )
     handle = factory.create("sess_data_dir", _goal())
@@ -311,6 +432,7 @@ def test_factory_propagates_verified_user_id_to_sdk(
     factory = factory_module.ConversationFactory(
         project_root=tmp_path,
         repository=EmptyRepository(),
+        compatibility_mode=True,
         llm_factory=_test_llm,
     )
     handle = factory.create(
@@ -347,7 +469,8 @@ def test_factory_passes_url_capability_timeout_to_default_fetcher(
     try:
         ConversationFactory(
             project_root=tmp_path,
-            repository=EmptyRepository(),
+        repository=EmptyRepository(),
+        compatibility_mode=True,
             llm_factory=_test_llm,
             capability_registry=VerificationCapabilityRegistry(capabilities),
         )

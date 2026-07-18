@@ -11,6 +11,7 @@ import jwt
 from jwt import PyJWKSet
 from pydantic import ValidationError
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from focusproof.api.auth import DEVELOPMENT_USER_ID, VerifiedIdentity, get_verified_identity
 from focusproof.api.oidc import (
@@ -21,6 +22,7 @@ from focusproof.api.oidc import (
     require_verified_identity,
 )
 from focusproof.config.identity import OidcSettings, load_oidc_settings
+from focusproof.persistence.providers import PrincipalDisabledError
 
 from .oidc_fixture import (
     LocalOidcFixture,
@@ -360,7 +362,7 @@ def test_verifier_uses_cached_jwks_then_fails_closed_after_rotation_and_outage(
     assert second_token not in caplog.text
 
 
-def test_configured_staging_without_principal_resolver_fails_closed(
+def test_configured_staging_uses_database_principal_resolver_when_not_injected(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -377,8 +379,66 @@ def test_configured_staging_without_principal_resolver_fails_closed(
             headers={"Authorization": f"Bearer {fixture.token()}"},
         )
 
+    assert response.status_code == 200
+    session_id = str(response.json()["sessionId"])
+    with TestClient(app) as client:
+        state = client.get(
+            f"/sessions/{session_id}",
+            headers={"Authorization": f"Bearer {fixture.token()}"},
+        )
+    assert state.status_code == 200
+    assert state.json()["state"]["ownerUserId"].startswith("principal_")
+
+
+def test_disabled_principal_is_forbidden_before_resource_lookup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = local_oidc_fixture()
+    for key, value in _oidc_env(fixture).items():
+        monkeypatch.setenv(key, value)
+    _install_jwks_fetch(monkeypatch, {"keys": [fixture.public_jwk]})
+
+    class DisabledResolver:
+        def resolve(self, *, issuer: str, subject: str) -> str:
+            del issuer, subject
+            raise PrincipalDisabledError()
+
+    app = oidc_test_app(tmp_path, fixture, principal_resolver=DisabledResolver())
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(
+            "/sessions/sess_does_not_exist",
+            headers={"Authorization": f"Bearer {fixture.token()}"},
+        )
+
+    assert response.status_code == 403
+    assert response.json() == {"code": "principal_disabled", "retryable": False}
+
+
+def test_principal_database_outage_remains_database_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = local_oidc_fixture()
+    for key, value in _oidc_env(fixture).items():
+        monkeypatch.setenv(key, value)
+    _install_jwks_fetch(monkeypatch, {"keys": [fixture.public_jwk]})
+
+    class UnavailableResolver:
+        def resolve(self, *, issuer: str, subject: str) -> str:
+            del issuer, subject
+            raise OperationalError("resolve principal", {}, RuntimeError("db down"))
+
+    app = oidc_test_app(tmp_path, fixture, principal_resolver=UnavailableResolver())
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/sessions",
+            json=_session_payload(),
+            headers={"Authorization": f"Bearer {fixture.token()}"},
+        )
+
     assert response.status_code == 503
-    assert response.json() == {"code": "identity_unavailable", "retryable": False}
+    assert response.json() == {"code": "database_unavailable", "retryable": True}
 
 
 def test_verifier_uses_cached_signing_key_until_ttl_then_fails_closed_on_outage(
@@ -486,6 +546,23 @@ def test_identity_dependency_is_async_and_only_allows_local_dev_anonymous() -> N
                 None,
             )
         )
+
+
+def test_explicit_deterministic_profile_does_not_enable_anonymous_business_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = local_oidc_fixture()
+    monkeypatch.setenv("FOCUSPROOF_PROFILE", "deterministic-test")
+    app = oidc_test_app(tmp_path, fixture)
+
+    with TestClient(app) as client:
+        response = client.post("/sessions", json=_session_payload())
+        health = client.get("/health")
+
+    assert response.status_code == 503
+    assert response.json() == {"code": "identity_unavailable", "retryable": False}
+    assert health.json()["readiness"] == "identity_unavailable"
 
 
 def test_staging_app_without_oidc_config_fails_closed_but_health_stays_secret_free(

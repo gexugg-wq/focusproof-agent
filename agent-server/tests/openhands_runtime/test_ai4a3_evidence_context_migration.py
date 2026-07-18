@@ -88,6 +88,7 @@ def test_old_bodyless_evidence_gets_one_append_only_context_upgrade(
     try:
         first_factory = ConversationFactory(
             repository=PersistentEvidenceProvider(uow_factory),
+            compatibility_mode=True,
             project_root=tmp_path,
             data_dir=tmp_path / "var",
             llm_factory=lambda current_session_id: TestLLM.from_messages([]),
@@ -143,6 +144,7 @@ def test_old_bodyless_evidence_gets_one_append_only_context_upgrade(
 
         restored_factory = ConversationFactory(
             repository=PersistentEvidenceProvider(uow_factory),
+            compatibility_mode=True,
             project_root=tmp_path,
             data_dir=tmp_path / "var",
             llm_factory=lambda current_session_id: TestLLM.from_messages([]),

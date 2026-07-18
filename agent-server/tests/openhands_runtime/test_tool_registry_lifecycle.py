@@ -37,6 +37,7 @@ def test_registry_growth_is_bounded_across_one_hundred_conversations(
     factory = ConversationFactory(
         project_root=tmp_path,
         repository=repository,
+        compatibility_mode=True,
         llm_factory=completed_review_llm,
     )
     handles = []

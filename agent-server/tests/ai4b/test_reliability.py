@@ -521,7 +521,7 @@ def test_shutdown_waits_for_admitted_restore_before_returning(
     with ai4b_app_factory(_empty_llm) as running:
         session_id = _create_session(running.client)
         manager = running.app.state.conversation_manager
-        manager.close(session_id)
+        manager.close(session_id, "dev-anonymous-user")
         factory = cast(Any, manager)._factory
         original_create = factory.create
         create_entered = Event()
@@ -558,7 +558,7 @@ def test_cancellation_before_restore_is_not_lost_or_run_after_cancel(
     with ai4b_app_factory(_draft_llm) as running:
         session_id = _create_session(running.client)
         manager = running.app.state.conversation_manager
-        manager.close(session_id)
+        manager.close(session_id, "dev-anonymous-user")
         factory = cast(Any, manager)._factory
         original_create = factory.create
         create_entered = Event()

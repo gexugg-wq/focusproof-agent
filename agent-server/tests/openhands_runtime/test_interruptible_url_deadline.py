@@ -329,6 +329,7 @@ def test_cancelled_arun_emits_native_interrupt_and_orphan_completion(
     )
     factory = ConversationFactory(
         repository=repository,
+        compatibility_mode=True,
         project_root=tmp_path,
         url_fetcher=_BlockingFetcher(),
         llm_factory=lambda session_id: TestLLM.from_messages(

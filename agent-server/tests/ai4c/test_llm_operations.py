@@ -76,6 +76,7 @@ def create_real_mode_handle_with_fake_sdk_llm(
     settings = load_runtime_settings(values)
     return ConversationFactory(
         repository=EmptyRepository(),
+        compatibility_mode=True,
         project_root=tmp_path,
         runtime_settings=settings,
     ).create(
@@ -185,6 +186,7 @@ def test_factory_uses_validated_runtime_settings_without_dotenv(
     settings = load_runtime_settings(complete_fake_dashscope_environment())
     factory = ConversationFactory(
         repository=EmptyRepository(),
+        compatibility_mode=True,
         project_root=tmp_path,
         runtime_settings=settings,
     )

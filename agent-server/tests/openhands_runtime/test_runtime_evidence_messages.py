@@ -92,6 +92,7 @@ def _factory(
 ) -> ConversationFactory:
     return ConversationFactory(
         repository=PersistentEvidenceProvider(uow_factory),
+        compatibility_mode=True,
         project_root=tmp_path,
         llm_factory=lambda session_id: TestLLM.from_messages([]),
     )

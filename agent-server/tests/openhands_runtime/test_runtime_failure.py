@@ -40,6 +40,7 @@ def test_sdk_conversation_creation_failure_is_explicit(
     )
     factory = ConversationFactory(
         repository=EmptyRepository(),
+        compatibility_mode=True,
         project_root=tmp_path,
         llm_factory=_test_llm,
     )
