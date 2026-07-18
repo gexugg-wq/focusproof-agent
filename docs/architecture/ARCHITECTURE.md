@@ -53,6 +53,13 @@ or malicious values fail closed before any pricing-map network path. Local-dev
 and deterministic-test set the bundled-map invariant only when entering the
 OpenHands package boundary; ordinary FocusProof imports do not mutate it.
 
+The official OpenHands SDK `Conversation` and native EventLog are the sole
+runtime loop and runtime fact source. FocusProof does not implement a fallback
+Agent loop, Conversation or EventLog. Its in-memory and persistent
+`AuditProjectionStore` implementations retain only product-approved query
+projections and cannot schedule Agent steps, execute tools or replace native
+OpenHands restoration.
+
 ## 2. What Changes From v0.1
 
 The previous plan used a TypeScript-first runtime. The v0.2 plan changes the runtime to Python so the project can directly use OpenHands SDK agent-runtime abstractions.

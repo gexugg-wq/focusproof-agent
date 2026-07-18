@@ -8,7 +8,9 @@ from focusproof.persistence.unit_of_work import UnitOfWorkFactoryLike
 from focusproof.runtime.events import Actor, Event, EventType
 
 
-class PersistentAuditEventLog:
+class PersistentAuditProjectionStore:
+    """Durable FocusProof query projection of official OpenHands events."""
+
     def __init__(self, uow_factory: UnitOfWorkFactoryLike) -> None:
         self._uow_factory = uow_factory
 
@@ -48,7 +50,9 @@ class PersistentAuditEventLog:
                 event_type,
                 actor,
                 dict(payload),
-                source_openhands_event_id=(source_id if isinstance(source_id, str) else None),
+                source_openhands_event_id=(
+                    source_id if isinstance(source_id, str) else None
+                ),
                 event_id=event_id,
             )
             uow.commit()
@@ -68,7 +72,9 @@ class PersistentAuditEventLog:
             return uow.audit_events.has_source_event(session_id, source_event_id)
 
     def get_by_type(
-        self, session_id: str, event_type: EventType
+        self,
+        session_id: str,
+        event_type: EventType,
     ) -> builtins.list[Event]:
         return [event for event in self.list(session_id) if event.type == event_type]
 

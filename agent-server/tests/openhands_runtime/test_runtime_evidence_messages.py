@@ -19,12 +19,12 @@ from focusproof.openhands_runtime.synchronizer import (
 )
 from focusproof.openhands_runtime.tools.verification import EvidenceReferenceAction
 from focusproof.persistence.database import create_database_engine, create_session_factory
-from focusproof.persistence.event_log import PersistentAuditEventLog
+from focusproof.persistence.audit_projection import PersistentAuditProjectionStore
 from focusproof.persistence.models import Base
 from focusproof.persistence.repositories import StoredEvidence, StoredSession
 from focusproof.persistence.unit_of_work import UnitOfWorkFactory
 from focusproof.runtime.evidence import Evidence, LearningGoal
-from focusproof.runtime.event_log import InMemoryEventLog
+from focusproof.runtime.audit_projection import InMemoryAuditProjectionStore
 
 from .conftest import SessionRepository
 
@@ -255,7 +255,7 @@ def test_legacy_text_message_exposes_bounded_semantics_but_audit_omits_body(
 ) -> None:
     sentence = "Legacy ingestion must expose this conceptual replay sentence."
     repository = SessionRepository()
-    audit_log = InMemoryEventLog()
+    audit_log = InMemoryAuditProjectionStore()
     manager = ConversationManager(
         repository=repository,
         audit_log=audit_log,
@@ -297,7 +297,7 @@ def test_restore_does_not_duplicate_text_evidence_message(tmp_path: Path) -> Non
     def manager() -> ConversationManager:
         return ConversationManager(
             repository=PersistentEvidenceProvider(uow_factory),
-            audit_log=PersistentAuditEventLog(uow_factory),
+            audit_log=PersistentAuditProjectionStore(uow_factory),
             project_root=tmp_path,
             llm_factory=lambda current_session_id: TestLLM.from_messages([]),
             uow_factory=uow_factory,

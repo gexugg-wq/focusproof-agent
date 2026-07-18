@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from typing import Any, Protocol
+from typing import Any
 from uuid import UUID
 
 from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
@@ -29,18 +29,7 @@ from focusproof.openhands_runtime.url_redaction import (
     sanitize_verification_facts,
 )
 from focusproof.runtime.events import Actor, Event, EventType
-
-
-class AuditProjection(Protocol):
-    def append(
-        self,
-        session_id: str,
-        event_type: EventType,
-        actor: Actor,
-        payload: dict[str, object],
-    ) -> Event: ...
-
-    def has_source_event(self, session_id: str, source_event_id: str) -> bool: ...
+from focusproof.runtime.audit_projection import AuditProjection
 
 
 class OpenHandsEventProjector:

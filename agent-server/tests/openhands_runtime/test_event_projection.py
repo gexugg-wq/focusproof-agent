@@ -15,7 +15,7 @@ from focusproof.openhands_runtime.tools.evidence_verification import (
     EvidenceVerificationAction,
     EvidenceVerificationObservation,
 )
-from focusproof.runtime.event_log import InMemoryEventLog
+from focusproof.runtime.audit_projection import InMemoryAuditProjectionStore
 from focusproof.runtime.events import Actor, Event, EventType
 
 
@@ -61,7 +61,7 @@ def _native_observation(action: ActionEvent) -> ObservationEvent:
 def test_message_projection_preserves_native_identity() -> None:
     from focusproof.openhands_runtime.projector import OpenHandsEventProjector
 
-    log = InMemoryEventLog()
+    log = InMemoryAuditProjectionStore()
     conversation_id = uuid4()
     projector = OpenHandsEventProjector("sess_1", conversation_id, log)
     envelope = {
@@ -91,7 +91,7 @@ def test_message_projection_preserves_native_identity() -> None:
 def test_legacy_message_projection_redacts_url_and_metadata_secrets() -> None:
     from focusproof.openhands_runtime.projector import OpenHandsEventProjector
 
-    log = InMemoryEventLog()
+    log = InMemoryAuditProjectionStore()
     projector = OpenHandsEventProjector("sess_1", uuid4(), log)
     envelope = {
         "kind": "evidence",
@@ -140,7 +140,7 @@ def test_legacy_message_projection_redacts_url_and_metadata_secrets() -> None:
 def test_current_message_projection_preserves_only_safe_url_diagnostics() -> None:
     from focusproof.openhands_runtime.projector import OpenHandsEventProjector
 
-    log = InMemoryEventLog()
+    log = InMemoryAuditProjectionStore()
     projector = OpenHandsEventProjector("sess_1", uuid4(), log)
     digest = "a" * 64
     envelope = {
@@ -221,7 +221,9 @@ def test_preclosure_url_observation_projection_redacts_legacy_facts_read_only() 
         action_id="action_old_url",
     )
     before = native.model_dump_json()
-    projector = OpenHandsEventProjector("sess_1", uuid4(), InMemoryEventLog())
+    projector = OpenHandsEventProjector(
+        "sess_1", uuid4(), InMemoryAuditProjectionStore()
+    )
 
     projected = projector.on_event(native)
 
@@ -236,7 +238,7 @@ def test_preclosure_url_observation_projection_redacts_legacy_facts_read_only() 
 def test_action_and_observation_projection_preserves_order_and_tool_call_id() -> None:
     from focusproof.openhands_runtime.projector import OpenHandsEventProjector
 
-    log = InMemoryEventLog()
+    log = InMemoryAuditProjectionStore()
     projector = OpenHandsEventProjector("sess_1", uuid4(), log)
     action = _native_action()
     observation = _native_observation(action)
@@ -257,7 +259,7 @@ def test_action_and_observation_projection_preserves_order_and_tool_call_id() ->
 def test_reconcile_does_not_duplicate_projected_native_event() -> None:
     from focusproof.openhands_runtime.projector import OpenHandsEventProjector
 
-    log = InMemoryEventLog()
+    log = InMemoryAuditProjectionStore()
     projector = OpenHandsEventProjector("sess_1", uuid4(), log)
     action = _native_action()
 
@@ -271,7 +273,7 @@ def test_reconcile_does_not_duplicate_projected_native_event() -> None:
 def test_legacy_verification_events_are_projected_read_only_and_idempotently() -> None:
     from focusproof.openhands_runtime.projector import OpenHandsEventProjector
 
-    log = InMemoryEventLog()
+    log = InMemoryAuditProjectionStore()
     projector = OpenHandsEventProjector("sess_1", uuid4(), log)
     tool_call = MessageToolCall(
         id="call_legacy_1",
@@ -326,7 +328,7 @@ def test_legacy_verification_events_are_projected_read_only_and_idempotently() -
 def test_finish_action_is_recognized_as_native_terminal_event() -> None:
     from focusproof.openhands_runtime.projector import OpenHandsEventProjector
 
-    log = InMemoryEventLog()
+    log = InMemoryAuditProjectionStore()
     projector = OpenHandsEventProjector("sess_1", uuid4(), log)
     tool_call = MessageToolCall(
         id="call_finish_1",
@@ -354,7 +356,7 @@ def test_finish_action_is_recognized_as_native_terminal_event() -> None:
 def test_reconcile_recovers_after_projection_commit_failure() -> None:
     from focusproof.openhands_runtime.projector import OpenHandsEventProjector
 
-    class FlakyAuditLog(InMemoryEventLog):
+    class FlakyAuditProjectionStore(InMemoryAuditProjectionStore):
         def __init__(self) -> None:
             super().__init__()
             self.fail_once = True
@@ -371,7 +373,7 @@ def test_reconcile_recovers_after_projection_commit_failure() -> None:
                 raise RuntimeError("audit commit failed")
             return super().append(session_id, event_type, actor, payload)
 
-    log = FlakyAuditLog()
+    log = FlakyAuditProjectionStore()
     projector = OpenHandsEventProjector("sess_1", uuid4(), log)
     action = _native_action()
     with pytest.raises(RuntimeError, match="audit commit failed"):

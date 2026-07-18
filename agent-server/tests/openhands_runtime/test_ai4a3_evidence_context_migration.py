@@ -24,7 +24,7 @@ from focusproof.persistence.models import Base
 from focusproof.persistence.repositories import StoredEvidence, StoredSession
 from focusproof.persistence.unit_of_work import UnitOfWorkFactory
 from focusproof.runtime.evidence import LearningGoal
-from focusproof.runtime.event_log import InMemoryEventLog
+from focusproof.runtime.audit_projection import InMemoryAuditProjectionStore
 
 
 OWNER = "verified-user-1"
@@ -82,7 +82,7 @@ def test_old_bodyless_evidence_gets_one_append_only_context_upgrade(
 
     conversation_id = uuid5(NAMESPACE_URL, f"focusproof:{session_id}")
     goal = LearningGoal(domain="general", title="M", goal="G")
-    audit_log = InMemoryEventLog()
+    audit_log = InMemoryAuditProjectionStore()
     first_handle = None
     restored_handle = None
     try:

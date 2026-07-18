@@ -70,6 +70,11 @@ production contract: the exact explicit value is validated both as runtime
 configuration and by a standard-library preflight before OpenHands/LiteLLM
 imports. Local and deterministic profiles establish the same bundled-map
 invariant only at that package boundary, not during benign FocusProof imports.
+Repair 3 also removed the executable deterministic Agent/Conversation fallback
+and renamed FocusProof audit storage as projection stores. The official
+OpenHands `Conversation` and native EventLog remain the sole runtime loop and
+runtime fact source; FocusProof persistence contains only approved product
+projections for queries and reporting.
 
 ```bash
 .venv/bin/python -m pytest agent-server/tests/ai4c/test_llm_operations.py \

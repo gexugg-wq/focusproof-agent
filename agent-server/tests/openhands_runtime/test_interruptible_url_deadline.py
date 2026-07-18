@@ -30,7 +30,7 @@ from focusproof.openhands_runtime.tools.url_fetcher import (
 from focusproof.openhands_runtime.tools.url_safety import Address, UrlSafetyPolicy
 from focusproof.openhands_runtime.tools.verification import EvidenceReferenceAction
 from focusproof.runtime.evidence import Evidence, LearningGoal
-from focusproof.runtime.event_log import InMemoryEventLog
+from focusproof.runtime.audit_projection import InMemoryAuditProjectionStore
 
 from .conftest import SessionRepository
 
@@ -246,7 +246,7 @@ def test_timeout_observation_never_contains_raw_url_secrets() -> None:
     projected = OpenHandsEventProjector(
         "sess_private",
         uuid4(),
-        InMemoryEventLog(),
+        InMemoryAuditProjectionStore(),
     ).on_event(native)
     assert projected is not None
     serialized = result.model_dump_json() + json.dumps(projected.payload)
@@ -270,7 +270,7 @@ def test_manager_runs_local_conversation_through_native_arun(
     repository = SessionRepository()
     manager = ConversationManager(
         repository=repository,
-        audit_log=InMemoryEventLog(),
+        audit_log=InMemoryAuditProjectionStore(),
         project_root=tmp_path,
         llm_factory=lambda session_id: TestLLM.from_messages([]),
     )

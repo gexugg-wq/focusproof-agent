@@ -20,7 +20,7 @@ from focusproof.openhands_runtime.tool_registry import (
     ensure_focusproof_tools_registered,
 )
 from focusproof.runtime.evidence import Evidence, LearningGoal
-from focusproof.runtime.event_log import InMemoryEventLog
+from focusproof.runtime.audit_projection import InMemoryAuditProjectionStore
 
 
 LEGACY_TOOL_CLASSES = (
@@ -243,7 +243,7 @@ def test_base_conversation_restores_into_ai4a_without_rewriting_history(
         conversation_id=conversation_id,
     )
     handle_box["handle"] = restored
-    audit_log = InMemoryEventLog()
+    audit_log = InMemoryAuditProjectionStore()
     first_projector = OpenHandsEventProjector(
         session_id,
         conversation_id,

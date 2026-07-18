@@ -54,7 +54,7 @@ def test_sdk_conversation_creation_failure_is_explicit(
 
 def test_run_failure_never_reports_openhands_usage(tmp_path: Path) -> None:
     from focusproof.openhands_runtime.manager import ConversationManager
-    from focusproof.runtime.event_log import InMemoryEventLog
+    from focusproof.runtime.audit_projection import InMemoryAuditProjectionStore
 
     def exhausted_llm(session_id: str) -> TestLLM:
         del session_id
@@ -62,7 +62,7 @@ def test_run_failure_never_reports_openhands_usage(tmp_path: Path) -> None:
 
     manager = ConversationManager(
         repository=EmptyRepository(),
-        audit_log=InMemoryEventLog(),
+        audit_log=InMemoryAuditProjectionStore(),
         project_root=tmp_path,
         llm_factory=exhausted_llm,
     )

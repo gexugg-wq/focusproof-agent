@@ -22,12 +22,12 @@ from focusproof.openhands_runtime.factory import (
 )
 from focusproof.openhands_runtime.handle import ConversationHandle, RuntimeReviewResult
 from focusproof.openhands_runtime.locks import SessionRunLock
-from focusproof.openhands_runtime.projector import AuditProjection, OpenHandsEventProjector
+from focusproof.openhands_runtime.projector import OpenHandsEventProjector
 from focusproof.openhands_runtime.provider_admission import (
     ProviderAdmission,
     ProviderAdmissionUnavailableError,
 )
-from focusproof.openhands_runtime.result_extractor import AuditQuery, RuntimeResultExtractor
+from focusproof.openhands_runtime.result_extractor import RuntimeResultExtractor
 from focusproof.openhands_runtime.synchronizer import ConversationSynchronizer
 from focusproof.openhands_runtime.tools import SessionEvidenceRepository
 from focusproof.openhands_runtime.tools.learner_input import LearnerInputObservation
@@ -36,6 +36,7 @@ from focusproof.persistence.repositories import StoredSession
 from focusproof.persistence.providers import UowEvidenceProvider
 from focusproof.persistence.unit_of_work import UnitOfWorkFactoryLike
 from focusproof.runtime.evidence import Evidence, LearningGoal
+from focusproof.runtime.audit_projection import AuditProjectionStore
 
 
 DEFAULT_REVIEW_TIMEOUT_SECONDS = 60.0
@@ -49,10 +50,6 @@ class _NoopSessionRunLock:
         return nullcontext()
 
 
-class _AuditStore(AuditProjection, AuditQuery, Protocol):
-    pass
-
-
 class _AsyncRunnableConversation(Protocol):
     def arun(self) -> Awaitable[None]: ...
 
@@ -62,7 +59,7 @@ class ConversationManager:
         self,
         *,
         repository: SessionEvidenceRepository,
-        audit_log: _AuditStore,
+        audit_log: AuditProjectionStore,
         project_root: Path | None = None,
         data_dir: Path | None = None,
         llm_factory: LLMFactory | None = None,

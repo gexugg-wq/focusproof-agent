@@ -149,9 +149,9 @@ def test_manager_run_uses_native_action_tool_and_observation_flow(
     evidence: Evidence,
 ) -> None:
     from focusproof.openhands_runtime.manager import ConversationManager
-    from focusproof.runtime.event_log import InMemoryEventLog
+    from focusproof.runtime.audit_projection import InMemoryAuditProjectionStore
 
-    audit_log = InMemoryEventLog()
+    audit_log = InMemoryAuditProjectionStore()
     manager = ConversationManager(
         repository=repository,
         audit_log=audit_log,

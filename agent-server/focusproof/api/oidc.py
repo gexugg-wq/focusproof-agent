@@ -149,7 +149,11 @@ class OidcTokenVerifier:
         subject = claims.get("sub")
         if not isinstance(issuer, str) or not issuer:
             raise InvalidTokenError("token verification failed")
-        if not isinstance(subject, str) or not subject.strip():
+        if (
+            not isinstance(subject, str)
+            or not subject.strip()
+            or subject != subject.strip()
+        ):
             raise InvalidTokenError("token verification failed")
 
         return VerifiedIdentity(

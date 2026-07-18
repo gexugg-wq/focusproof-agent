@@ -18,7 +18,7 @@ from focusproof.openhands_runtime.provider_admission import (
     BoundedProviderAdmission,
     ProviderAdmissionUnavailableError,
 )
-from focusproof.runtime.event_log import InMemoryEventLog
+from focusproof.runtime.audit_projection import InMemoryAuditProjectionStore
 from focusproof.runtime.evidence import LearningGoal
 
 from .conftest import SessionRepository
@@ -80,7 +80,7 @@ def test_two_concurrent_reviews_enter_conversation_run_once(
     run_lock = FileSessionRunLock(tmp_path / "var", timeout_seconds=0.05)
     manager = ConversationManager(
         repository=repository,
-        audit_log=InMemoryEventLog(),
+        audit_log=InMemoryAuditProjectionStore(),
         project_root=tmp_path,
         llm_factory=lambda session_id: TestLLM.from_messages([]),
         run_lock=run_lock,
@@ -123,7 +123,7 @@ def test_reviews_for_different_sessions_enter_native_runs_concurrently(
     run_lock = FileSessionRunLock(tmp_path / "var", timeout_seconds=0.2)
     manager = ConversationManager(
         repository=repository,
-        audit_log=InMemoryEventLog(),
+        audit_log=InMemoryAuditProjectionStore(),
         project_root=tmp_path,
         llm_factory=lambda session_id: TestLLM.from_messages([]),
         run_lock=run_lock,
@@ -175,7 +175,7 @@ def test_global_provider_admission_rejects_second_session_before_native_run(
     )
     manager = ConversationManager(
         repository=repository,
-        audit_log=InMemoryEventLog(),
+        audit_log=InMemoryAuditProjectionStore(),
         project_root=tmp_path,
         llm_factory=lambda session_id: TestLLM.from_messages([]),
         run_lock=FileSessionRunLock(tmp_path / "var", timeout_seconds=0.2),
@@ -217,7 +217,7 @@ def test_cancelling_waiting_review_does_not_interrupt_current_review(
 ) -> None:
     manager = ConversationManager(
         repository=repository,
-        audit_log=InMemoryEventLog(),
+        audit_log=InMemoryAuditProjectionStore(),
         project_root=tmp_path,
         llm_factory=lambda session_id: TestLLM.from_messages([]),
         run_lock=FileSessionRunLock(tmp_path / "var", timeout_seconds=1),

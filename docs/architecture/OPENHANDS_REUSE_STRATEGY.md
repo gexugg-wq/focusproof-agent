@@ -23,6 +23,13 @@ Each local addition must remain minimal, use public SDK types and lifecycle,
 and include a removal condition. It must not schedule Agent steps, own
 Conversation state or create another runtime.
 
+AI4C Repair 3 removed the earlier deterministic learning Agent and Conversation
+fallback. The only executable review loop and native runtime fact ledger are
+the official OpenHands SDK `Conversation` and its native EventLog. FocusProof
+stores only a read/query audit projection through `AuditProjection` and
+`AuditQuery`; neither the in-memory nor persistent projection store can run an
+Agent, execute a tool or restore native runtime state.
+
 ## 1. Why This Changes the Plan
 
 The original v0.1 plan treated OpenHands mainly as an architecture reference and planned a TypeScript-first runtime. That is still viable for a quick web demo, but it wastes the main advantage of OpenHands SDK: its existing Python agent runtime concepts and tool protocol.
@@ -136,7 +143,8 @@ Implementation order:
 
 1. Add OpenHands SDK as a local path dependency from the existing local SDK source.
 2. Import and inspect the actual SDK classes used for Agent, Conversation, Tool, Action, Observation and Event.
-3. Build a FocusProof adapter layer around OpenHands Conversation, ConversationState, EventLog, Agent, Tool and event objects.
+3. Bind FocusProof product policy to the public OpenHands Conversation, Agent,
+   Tool and event APIs without mirroring their runtime types.
 4. Promote OpenHands Conversation from debug spike into the official `/sessions/{id}/review` orchestration path.
 5. Keep FocusProof-owned learning models at the product boundary: Evidence, ReviewResult, scoring dimensions and proof payload.
 6. Do not reimplement a local mirror runtime. If a required public capability is absent, follow the SDK gap process in section 2.1 and add only the smallest product-owned extension.
@@ -154,11 +162,12 @@ The expected pattern is not "raw OpenHands everywhere". The expected pattern is:
 ```text
 FocusProof API
   -> FocusProof learning models
-  -> FocusProof OpenHands Conversation adapters
+  -> FocusProof factory/manager policy
   -> OpenHands SDK Conversation / ConversationState / EventLog / View
   -> OpenHands SDK Agent.step
   -> OpenHands SDK ActionEvent / ToolDefinition / ToolExecutor / ObservationEvent
   -> FocusProof evidence tools and scoring
+  -> FocusProof read/query audit projection
 ```
 
 The debug-only real LLM path is not enough. It proves connectivity, but it does not satisfy the architecture until official session review is driven by a Conversation-backed runtime.
@@ -177,11 +186,13 @@ The FocusProof-owned boundary is:
 
 OpenHands should provide runtime mechanics, but it must not define what counts as learning.
 
-FocusProof may translate OpenHands events into FocusProof learning events, but it must not keep two unrelated ledgers forever. The desired state is:
+FocusProof translates approved OpenHands events into product learning/audit
+events for API queries and durable reporting. That store is a projection, not a
+second runtime ledger:
 
 ```text
 OpenHands EventLog is the runtime ledger.
-FocusProof EventLog is the product/audit projection of that runtime ledger.
+FocusProof AuditProjectionStore is a read/query projection of that ledger.
 ```
 
 ## 6. General Learning Requirement

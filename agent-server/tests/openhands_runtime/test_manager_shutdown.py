@@ -16,7 +16,7 @@ from openhands.sdk.testing import TestLLM
 from focusproof.openhands_runtime.factory import RuntimeUnavailableError
 from focusproof.openhands_runtime.locks import FileSessionRunLock, SessionBusyError
 from focusproof.openhands_runtime.manager import ConversationManager
-from focusproof.runtime.event_log import InMemoryEventLog
+from focusproof.runtime.audit_projection import InMemoryAuditProjectionStore
 from focusproof.runtime.evidence import LearningGoal
 
 from .conftest import SessionRepository
@@ -40,7 +40,7 @@ def test_close_all_closes_handles_and_rejects_new_review(
 ) -> None:
     manager = ConversationManager(
         repository=repository,
-        audit_log=InMemoryEventLog(),
+        audit_log=InMemoryAuditProjectionStore(),
         project_root=tmp_path,
         llm_factory=lambda session_id: TestLLM.from_messages([]),
     )
@@ -60,7 +60,7 @@ def test_shutdown_rejects_new_review_then_interrupts_and_closes_inflight_run(
 ) -> None:
     manager = ConversationManager(
         repository=repository,
-        audit_log=InMemoryEventLog(),
+        audit_log=InMemoryAuditProjectionStore(),
         project_root=tmp_path,
         llm_factory=lambda session_id: TestLLM.from_messages([]),
         run_lock=FileSessionRunLock(tmp_path / "var", timeout_seconds=0.05),
@@ -129,7 +129,7 @@ def test_shutdown_waits_past_lock_timeout_for_interrupted_review_to_exit(
 ) -> None:
     manager = ConversationManager(
         repository=repository,
-        audit_log=InMemoryEventLog(),
+        audit_log=InMemoryAuditProjectionStore(),
         project_root=tmp_path,
         llm_factory=lambda session_id: TestLLM.from_messages([]),
         run_lock=FileSessionRunLock(tmp_path / "var", timeout_seconds=0.02),

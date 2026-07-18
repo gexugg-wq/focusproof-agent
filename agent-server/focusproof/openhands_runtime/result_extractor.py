@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any
 from uuid import uuid4
 
 from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
@@ -33,21 +33,8 @@ from focusproof.openhands_runtime.tools.evidence_verification import (
 from focusproof.persistence.repositories import StoredReview
 from focusproof.persistence.unit_of_work import UnitOfWorkFactoryLike
 from focusproof.runtime.evidence import Evidence, LearningGoal
-from focusproof.runtime.events import Actor, Event, EventType
 from focusproof.runtime.observations import Observation
-
-
-class AuditQuery(Protocol):
-    def list(self, session_id: str) -> list[Any]: ...
-    def append_final(
-        self,
-        session_id: str,
-        event_type: EventType,
-        actor: Actor,
-        payload: dict[str, object],
-        *,
-        event_id: str,
-    ) -> Event: ...
+from focusproof.runtime.audit_projection import AuditQuery
 
 
 class RuntimeResultExtractor:

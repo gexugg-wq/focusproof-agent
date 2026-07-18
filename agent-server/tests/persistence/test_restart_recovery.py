@@ -17,7 +17,7 @@ from focusproof.openhands_runtime.factory import RuntimeCreationError
 from focusproof.openhands_runtime.manager import ConversationManager
 from focusproof.openhands_runtime.synchronizer import message_key_from_event
 from focusproof.persistence.database import create_database_engine, create_session_factory
-from focusproof.persistence.event_log import PersistentAuditEventLog
+from focusproof.persistence.audit_projection import PersistentAuditProjectionStore
 from focusproof.persistence.models import Base
 from focusproof.persistence.repositories import (
     SqlReviewRepository,
@@ -138,7 +138,7 @@ def _manager(
 ) -> ConversationManager:
     return ConversationManager(
         repository=PersistentEvidenceProvider(uow_factory),
-        audit_log=PersistentAuditEventLog(uow_factory),
+        audit_log=PersistentAuditProjectionStore(uow_factory),
         project_root=tmp_path,
         llm_factory=llm_factory,
         uow_factory=uow_factory,

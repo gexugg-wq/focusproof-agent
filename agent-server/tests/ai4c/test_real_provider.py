@@ -9,7 +9,7 @@ import pytest
 from focusproof.config.profiles import RuntimeSettings, load_runtime_settings
 from focusproof.openhands_runtime.manager import ConversationManager
 from focusproof.openhands_runtime.provider_admission import BoundedProviderAdmission
-from focusproof.runtime.event_log import InMemoryEventLog
+from focusproof.runtime.audit_projection import InMemoryAuditProjectionStore
 from focusproof.runtime.evidence import Evidence, LearningGoal
 
 from .test_llm_operations import complete_fake_dashscope_environment
@@ -115,7 +115,7 @@ def test_dashscope_smoke_uses_native_bounded_conversation(
     )
     manager = ConversationManager(
         repository=RealLLMEvidenceRepository(evidence),
-        audit_log=InMemoryEventLog(),
+        audit_log=InMemoryAuditProjectionStore(),
         project_root=Path(__file__).resolve().parents[3],
         data_dir=tmp_path / "real-provider-runtime",
         review_timeout_seconds=policy.max_review_seconds,

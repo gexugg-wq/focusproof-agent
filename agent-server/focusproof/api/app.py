@@ -59,7 +59,7 @@ from focusproof.persistence.database import (
     create_database_engine,
     create_session_factory,
 )
-from focusproof.persistence.event_log import PersistentAuditEventLog
+from focusproof.persistence.audit_projection import PersistentAuditProjectionStore
 from focusproof.persistence.providers import (
     IdentityStoragePaths,
     PrincipalDisabledError,
@@ -242,7 +242,7 @@ def create_app(
                 else None
             )
             configure_token_verifier(token_verifier)
-            audit_log = PersistentAuditEventLog(uow_factory)
+            audit_projection_store = PersistentAuditProjectionStore(uow_factory)
             evidence_provider = UowEvidenceProvider(uow_factory)
             run_lock = FileSessionRunLock(
                 resolved_data_dir,
@@ -266,7 +266,7 @@ def create_app(
             )
             manager = ConversationManager(
                 repository=evidence_provider,
-                audit_log=audit_log,
+                audit_log=audit_projection_store,
                 project_root=PROJECT_ROOT,
                 data_dir=resolved_data_dir,
                 llm_factory=llm_factory,
@@ -282,7 +282,7 @@ def create_app(
             )
             application.state.engine = engine
             application.state.uow_factory = uow_factory
-            application.state.audit_log = audit_log
+            application.state.audit_projection_store = audit_projection_store
             application.state.evidence_provider = evidence_provider
             application.state.run_lock = run_lock
             application.state.conversation_manager = manager
@@ -735,9 +735,12 @@ def get_session_run_lock(request: Request) -> SessionRunLock:
     return cast(SessionRunLock, request.app.state.run_lock)
 
 
-def get_event_log(request: Request) -> PersistentAuditEventLog:
+def get_audit_projection_store(request: Request) -> PersistentAuditProjectionStore:
     _require_ready(request)
-    return cast(PersistentAuditEventLog, request.app.state.audit_log)
+    return cast(
+        PersistentAuditProjectionStore,
+        request.app.state.audit_projection_store,
+    )
 
 
 def get_session_repository(request: Request) -> UowEvidenceProvider:

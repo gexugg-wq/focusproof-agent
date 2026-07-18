@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from pathlib import Path
+import sqlite3
 from types import SimpleNamespace
 
 from fastapi import Request
@@ -39,6 +40,30 @@ def _session_payload() -> dict[str, object]:
         "goal": "Explain why a verified principal owns one session.",
         "expectedOutput": "A short explanation",
         "plannedMinutes": 20,
+    }
+
+
+def _identity_fact_counts(database_path: Path) -> dict[str, int]:
+    tables = (
+        "verified_principals",
+        "learning_sessions",
+        "evidence",
+        "learner_answers",
+        "audit_events",
+        "reviews",
+    )
+    with sqlite3.connect(database_path) as connection:
+        return {
+            table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            for table in tables
+        }
+
+
+def _runtime_artifacts(root: Path, database_path: Path) -> set[str]:
+    return {
+        str(path.relative_to(root))
+        for path in root.rglob("*")
+        if path.is_file() and path != database_path
     }
 
 
@@ -322,6 +347,37 @@ def test_verifier_rejects_expired_future_nbf_wrong_issuer_wrong_audience_and_mis
         assert response.json() == {"code": "invalid_token", "retryable": False}
     assert expired not in caplog.text
     assert wrong_issuer not in caplog.text
+
+
+@pytest.mark.parametrize("subject", [" subject", "subject "])
+def test_signed_subject_with_boundary_whitespace_is_invalid_before_any_side_effect(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    subject: str,
+) -> None:
+    fixture = local_oidc_fixture()
+    for key, value in _oidc_env(fixture).items():
+        monkeypatch.setenv(key, value)
+    _install_jwks_fetch(monkeypatch, {"keys": [fixture.public_jwk]})
+    app = oidc_test_app(tmp_path, fixture)
+    database_path = tmp_path / "ai4c-identity.sqlite3"
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        facts_before = _identity_fact_counts(database_path)
+        runtime_before = _runtime_artifacts(tmp_path, database_path)
+        response = client.post(
+            "/sessions",
+            json=_session_payload(),
+            headers={"Authorization": f"Bearer {fixture.token(subject=subject)}"},
+        )
+        facts_after = _identity_fact_counts(database_path)
+        runtime_after = _runtime_artifacts(tmp_path, database_path)
+
+    assert response.status_code == 401
+    assert response.headers["WWW-Authenticate"] == "Bearer"
+    assert response.json() == {"code": "invalid_token", "retryable": False}
+    assert facts_before == facts_after == {table: 0 for table in facts_before}
+    assert runtime_before == runtime_after
 
 
 def test_verifier_rejects_wrong_kid_bad_signature_and_disallowed_algorithm(
