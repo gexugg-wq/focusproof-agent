@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Awaitable
 from pathlib import Path
 from threading import Condition, RLock
 from typing import Any, ContextManager, Protocol, cast
@@ -50,6 +51,10 @@ class _NoopSessionRunLock:
 
 class _AuditStore(AuditProjection, AuditQuery, Protocol):
     pass
+
+
+class _AsyncRunnableConversation(Protocol):
+    def arun(self) -> Awaitable[None]: ...
 
 
 class ConversationManager:
@@ -254,7 +259,7 @@ class ConversationManager:
                 if self._provider_admission is None:
                     asyncio.run(
                         asyncio.wait_for(
-                            handle.conversation.arun(),
+                            cast(_AsyncRunnableConversation, handle.conversation).arun(),
                             timeout=self._review_timeout_seconds,
                         )
                     )
@@ -262,7 +267,9 @@ class ConversationManager:
                     with self._provider_admission.acquire():
                         asyncio.run(
                             asyncio.wait_for(
-                                handle.conversation.arun(),
+                                cast(
+                                    _AsyncRunnableConversation, handle.conversation
+                                ).arun(),
                                 timeout=self._review_timeout_seconds,
                             )
                         )

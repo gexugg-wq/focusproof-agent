@@ -52,7 +52,6 @@ def complete_fake_dashscope_environment() -> dict[str, str]:
         "FOCUSPROOF_LLM_MAX_COST_USD": "0.10",
         "FOCUSPROOF_LLM_INPUT_COST_PER_TOKEN": "0.000001",
         "FOCUSPROOF_LLM_OUTPUT_COST_PER_TOKEN": "0.000002",
-        "LITELLM_LOCAL_MODEL_COST_MAP": "true",
     }
 
 
@@ -142,6 +141,17 @@ def test_staging_profile_builds_provider_neutral_policy() -> None:
     assert settings.real_llm.provider == "openai-compatible"
     assert settings.real_llm.api_key.get_secret_value() == "placeholder"
     assert "placeholder" not in settings.model_dump_json()
+
+
+def test_local_cost_map_is_an_application_invariant_not_user_configuration() -> None:
+    values = complete_fake_dashscope_environment()
+    values["LITELLM_LOCAL_MODEL_COST_MAP"] = "false"
+
+    settings = load_runtime_settings(values)
+
+    assert settings.real_llm is not None
+    assert "local_model_cost_map" not in type(settings.real_llm).model_fields
+    assert "LITELLM_LOCAL_MODEL_COST_MAP" not in settings.model_dump_json()
 
 
 def test_short_context_window_override_is_rejected() -> None:

@@ -64,8 +64,11 @@ Model text alone still cannot manufacture tool success or completion facts.
 ## Exact Commands and Results
 
 All commands ran from `/home/holy/web3/focusproof-agent` in WSL. Provider-key
-variables and `ALLOW_SHORT_CONTEXT_WINDOWS` were removed; deterministic runs set
-`LITELLM_LOCAL_MODEL_COST_MAP=true`.
+variables and `ALLOW_SHORT_CONTEXT_WINDOWS` were removed. Repair 1 subsequently
+moved `LITELLM_LOCAL_MODEL_COST_MAP=true` from user configuration into an
+application bootstrap invariant that executes before OpenHands/LiteLLM imports;
+missing, false, or malicious external values cannot enable a remote cost-map
+fetch and are not reported as validated runtime configuration.
 
 ```bash
 .venv/bin/python -m pytest agent-server/tests/ai4c/test_llm_operations.py \

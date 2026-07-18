@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Iterator
+from collections.abc import Awaitable, Iterator
 from ipaddress import ip_address
 from pathlib import Path
 from threading import Event
 from time import monotonic, sleep
-from typing import Any, cast
+from typing import Any, Protocol, cast
 from uuid import uuid4
 
 import httpx
 import pytest
-from openhands.sdk.conversation.impl.local_conversation import LocalConversation
+from openhands.sdk.conversation import LocalConversation
 from openhands.sdk.event import AgentErrorEvent, InterruptEvent, ObservationEvent
 from openhands.sdk.llm import Message, MessageToolCall, TextContent
 from openhands.sdk.testing import TestLLM
@@ -36,6 +36,10 @@ from .conftest import SessionRepository
 
 
 PUBLIC_ADDRESS = ip_address("93.184.216.34")
+
+
+class _AsyncRunnableConversation(Protocol):
+    def arun(self) -> Awaitable[None]: ...
 
 
 def _client(transport: httpx.BaseTransport) -> httpx.Client:
@@ -350,7 +354,9 @@ def test_cancelled_arun_emits_native_interrupt_and_orphan_completion(
     cast(Any, handle.conversation).send_message("Begin review")
 
     async def scenario() -> None:
-        task: asyncio.Task[None] = asyncio.create_task(handle.conversation.arun())
+        task = asyncio.ensure_future(
+            cast(_AsyncRunnableConversation, handle.conversation).arun()
+        )
         assert await asyncio.to_thread(started.wait, 1.0)
         handle.conversation.interrupt()
         await asyncio.wait_for(task, timeout=1.0)

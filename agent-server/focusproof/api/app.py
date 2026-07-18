@@ -31,17 +31,13 @@ from focusproof.api.oidc import (
 )
 from focusproof.api.models import (
     CreateSessionRequest,
-    DebugConversationTestRequest,
     SubmitAnswerRequest,
     SubmitEvidenceRequest,
 )
 from focusproof.config.identity import load_oidc_settings
-from focusproof.config.env import get_env_status
 from focusproof.config.profiles import load_runtime_settings
 from focusproof.domain.review import ReviewResult
-from focusproof.openhands_adapter import real_conversation
 from focusproof.openhands_adapter.capabilities import get_openhands_capabilities
-from focusproof.openhands_adapter.llm_config import get_llm_config_status
 from focusproof.openhands_runtime.factory import (
     LLMFactory,
     RuntimeCreationError,
@@ -378,7 +374,7 @@ def _install_exception_handlers(application: FastAPI) -> None:
         del request, exc
         return JSONResponse(
             status_code=403,
-            content={"code": "principal_disabled", "retryable": False},
+            content={"code": "forbidden", "retryable": False},
         )
 
     @application.exception_handler(SessionBusyError)
@@ -723,25 +719,6 @@ def _install_routes(
                 for review in reviews
             ]
         }
-
-    @application.get("/debug/openhands/env-status")
-    def debug_openhands_env_status() -> dict[str, Any]:
-        return get_env_status()
-
-    @application.get("/debug/openhands/llm-status")
-    def debug_openhands_llm_status() -> dict[str, Any]:
-        return get_llm_config_status()
-
-    @application.post("/debug/openhands/conversation-test")
-    def debug_openhands_conversation_test(
-        request: DebugConversationTestRequest,
-    ) -> dict[str, Any]:
-        return real_conversation.run_real_learning_review_spike(
-            goal=request.goal,
-            evidence=request.evidence,
-            domain=request.domain,
-        )
-
 
 def get_uow_factory(request: Request) -> UnitOfWorkFactory:
     _require_ready(request)

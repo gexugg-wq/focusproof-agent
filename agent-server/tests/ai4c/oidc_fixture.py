@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -36,6 +37,7 @@ class LocalOidcFixture:
         audience: str | None = None,
         algorithm: str = "RS256",
         kid: str | None = None,
+        additional_claims: dict[str, object] | None = None,
     ) -> str:
         import time
 
@@ -48,6 +50,8 @@ class LocalOidcFixture:
             "nbf": now + not_before_delta_seconds,
             "exp": now + expires_delta_seconds,
         }
+        if additional_claims is not None:
+            payload.update(additional_claims)
         key: bytes | str = self.private_key_pem
         headers = {"kid": kid or self.kid}
         if algorithm.startswith("HS"):
@@ -93,6 +97,7 @@ def oidc_test_app(
     fixture: LocalOidcFixture,
     *,
     principal_resolver: PrincipalResolver | None = None,
+    llm_factory: Callable[[str], TestLLM] | None = None,
 ) -> FastAPI:
     project_root = Path(__file__).resolve().parents[3]
     database_url = f"sqlite+pysqlite:///{tmp_path / 'ai4c-identity.sqlite3'}"
@@ -106,7 +111,7 @@ def oidc_test_app(
     app = app_module.create_app(
         database_url=database_url,
         data_dir=tmp_path,
-        llm_factory=lambda session_id: TestLLM.from_messages([]),
+        llm_factory=llm_factory or (lambda session_id: TestLLM.from_messages([])),
         principal_resolver=principal_resolver,
     )
 
@@ -118,7 +123,7 @@ def oidc_test_app(
     def test_issuer() -> dict[str, Any]:
         return {
             "issuer": fixture.issuer,
-            "jwks_uri": "http://testserver/__test__/oidc/jwks",
+            "jwks_uri": "https://testserver/__test__/oidc/jwks",
         }
 
     return app

@@ -80,11 +80,16 @@ class _OidcEnvironment(BaseModel):
     def validate_http_url(cls, value: object) -> str:
         if not isinstance(value, str):
             raise TypeError("OIDC URL values must be strings")
-        normalized = value.strip()
-        if not normalized:
+        if not value or value != value.strip():
             raise ValueError("OIDC URL values must not be empty")
-        TypeAdapter(AnyHttpUrl).validate_python(normalized)
-        return normalized
+        parsed = TypeAdapter(AnyHttpUrl).validate_python(value)
+        if parsed.scheme != "https":
+            raise ValueError("OIDC URL values must use HTTPS")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("OIDC URL values must not contain userinfo")
+        if parsed.query is not None or parsed.fragment is not None:
+            raise ValueError("OIDC URL values must not contain query or fragment")
+        return value
 
 
 def load_oidc_settings(

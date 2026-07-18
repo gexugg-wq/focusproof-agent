@@ -212,7 +212,7 @@ def test_every_session_derived_endpoint_denies_non_owner_without_state_change(
         (
             PrincipalDisabledError(),
             403,
-            {"code": "principal_disabled", "retryable": False},
+            {"code": "forbidden", "retryable": False},
         ),
     ],
 )

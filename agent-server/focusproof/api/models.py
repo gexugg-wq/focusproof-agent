@@ -116,12 +116,6 @@ class SubmitAnswerRequest(BaseModel):
         return value
 
 
-class DebugConversationTestRequest(BaseModel):
-    domain: DomainText
-    goal: GoalText
-    evidence: str = Field(min_length=1, max_length=MAX_EVIDENCE_TEXT_CHARS)
-
-
 class SessionRecord(BaseModel):
     sessionId: str
     status: str

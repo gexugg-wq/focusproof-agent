@@ -46,6 +46,11 @@ AI4C is not a public-deployment authorization. If only a local OIDC test issuer
 or isolated staging substitutes are exercised, the strongest result is
 `staging-ready with blockers`.
 
+FocusProof sets `LITELLM_LOCAL_MODEL_COST_MAP=true` as an application-owned
+bootstrap invariant before importing OpenHands or LiteLLM. It is deliberately
+not a deployment setting: external values cannot enable remote pricing-map
+fetches, and runtime configuration must not report the value as user-validated.
+
 ## 2. What Changes From v0.1
 
 The previous plan used a TypeScript-first runtime. The v0.2 plan changes the runtime to Python so the project can directly use OpenHands SDK agent-runtime abstractions.

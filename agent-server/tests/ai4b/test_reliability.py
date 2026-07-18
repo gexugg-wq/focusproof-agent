@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import suppress
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import time
 from threading import Barrier, Event
@@ -12,7 +12,7 @@ from typing import Any, cast
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from openhands.sdk.conversation.impl.local_conversation import LocalConversation
+from openhands.sdk.conversation import LocalConversation
 from openhands.sdk.event import MessageEvent, ObservationEvent
 from focusproof.openhands_runtime.factory import RuntimeUnavailableError
 from openhands.sdk.llm import Message, MessageToolCall, TextContent
@@ -306,7 +306,10 @@ def test_review_timeout_fails_without_completed_facts_and_releases_run_lock(
 ) -> None:
     entered = Event()
     release = Event()
-    original_arun = LocalConversation.arun
+    original_arun = cast(
+        Callable[[LocalConversation], Awaitable[None]],
+        LocalConversation.arun,
+    )
 
     async def blocking_arun(conversation: LocalConversation) -> None:
         del conversation
@@ -356,7 +359,10 @@ def test_cancelled_review_request_interrupts_the_native_conversation(
     release = Event()
     interrupted = Event()
     exited = Event()
-    original_arun = LocalConversation.arun
+    original_arun = cast(
+        Callable[[LocalConversation], Awaitable[None]],
+        LocalConversation.arun,
+    )
     original_interrupt = LocalConversation.interrupt
 
     async def blocking_arun(conversation: LocalConversation) -> None:

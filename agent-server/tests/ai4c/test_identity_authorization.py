@@ -51,7 +51,7 @@ def _oidc_env(
         "FOCUSPROOF_PROFILE": profile,
         "FOCUSPROOF_OIDC_ISSUER": fixture.issuer,
         "FOCUSPROOF_OIDC_AUDIENCE": fixture.audience,
-        "FOCUSPROOF_OIDC_JWKS_URI": "http://testserver/__test__/oidc/jwks",
+        "FOCUSPROOF_OIDC_JWKS_URI": "https://testserver/__test__/oidc/jwks",
         "FOCUSPROOF_OIDC_ALLOWED_ALGORITHMS": "RS256",
         "FOCUSPROOF_OIDC_FINGERPRINT_KEY": "placeholder",
     }
@@ -161,6 +161,52 @@ def test_local_dev_can_explicitly_keep_anonymous_identity(
 def test_non_local_profiles_require_complete_oidc_configuration(profile: str) -> None:
     with pytest.raises(ValidationError):
         load_oidc_settings({}, profile=profile)
+
+
+@pytest.mark.parametrize("profile", ["staging", "production"])
+@pytest.mark.parametrize(
+    ("field", "unsafe_value"),
+    [
+        ("FOCUSPROOF_OIDC_ISSUER", "http://issuer.example.test/realm"),
+        ("FOCUSPROOF_OIDC_JWKS_URI", "http://jwks.example.test/keys"),
+        ("FOCUSPROOF_OIDC_ISSUER", "https://user@issuer.example.test/realm"),
+        ("FOCUSPROOF_OIDC_JWKS_URI", "https://user:pass@jwks.example.test/keys"),
+        ("FOCUSPROOF_OIDC_ISSUER", "https://issuer.example.test/realm#fragment"),
+        ("FOCUSPROOF_OIDC_JWKS_URI", "https://jwks.example.test/keys#fragment"),
+        ("FOCUSPROOF_OIDC_ISSUER", "https://issuer.example.test/realm?tenant=a"),
+        ("FOCUSPROOF_OIDC_JWKS_URI", "https://jwks.example.test/keys?version=1"),
+        ("FOCUSPROOF_OIDC_ISSUER", " https://issuer.example.test/realm"),
+        ("FOCUSPROOF_OIDC_JWKS_URI", "https://jwks.example.test/keys "),
+    ],
+)
+def test_non_local_profiles_reject_unsafe_or_non_exact_oidc_urls(
+    profile: str,
+    field: str,
+    unsafe_value: str,
+) -> None:
+    fixture = local_oidc_fixture()
+    environ = _oidc_env(fixture, profile=profile)
+    environ[field] = unsafe_value
+
+    with pytest.raises(ValidationError):
+        load_oidc_settings(environ, profile=profile)
+
+
+@pytest.mark.parametrize("profile", ["staging", "production"])
+def test_non_local_profiles_preserve_fixed_https_oidc_urls_exactly(
+    profile: str,
+) -> None:
+    fixture = local_oidc_fixture()
+    environ = _oidc_env(fixture, profile=profile)
+    issuer = "https://Issuer.Example.test:8443/Realm/"
+    jwks_uri = "https://JWKS.Example.test:9443/keys/v1"
+    environ["FOCUSPROOF_OIDC_ISSUER"] = issuer
+    environ["FOCUSPROOF_OIDC_JWKS_URI"] = jwks_uri
+
+    settings = load_oidc_settings(environ, profile=profile)
+
+    assert settings.issuer == issuer
+    assert settings.jwks_uri == jwks_uri
 
 
 def test_valid_bearer_token_creates_a_session(
@@ -412,7 +458,7 @@ def test_disabled_principal_is_forbidden_before_resource_lookup(
         )
 
     assert response.status_code == 403
-    assert response.json() == {"code": "principal_disabled", "retryable": False}
+    assert response.json() == {"code": "forbidden", "retryable": False}
 
 
 def test_principal_database_outage_remains_database_unavailable(
