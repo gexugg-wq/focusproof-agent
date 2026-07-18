@@ -66,6 +66,9 @@ class RuntimeSettings(BaseModel):
 
 
 class _RealLlmEnvironment(RealLlmPolicy):
+    local_model_cost_map: Literal["true"] = Field(
+        alias="LITELLM_LOCAL_MODEL_COST_MAP"
+    )
     short_context_override: None = Field(
         default=None,
         alias="ALLOW_SHORT_CONTEXT_WINDOWS",
@@ -93,7 +96,7 @@ def load_runtime_settings(environ: Mapping[str, str]) -> RuntimeSettings:
     validated = _RealLlmEnvironment.model_validate(dict(environ))
     policy = RealLlmPolicy.model_validate(
         validated.model_dump(
-            exclude={"short_context_override"}
+            exclude={"local_model_cost_map", "short_context_override"}
         )
     )
     return RuntimeSettings(profile=profile, real_llm=policy)

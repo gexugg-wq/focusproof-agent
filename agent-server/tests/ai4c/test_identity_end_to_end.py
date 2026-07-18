@@ -6,15 +6,20 @@ import hmac
 import json
 from pathlib import Path
 import sqlite3
+from typing import Any, cast
 
 from fastapi.testclient import TestClient
 import jwt
 from jwt import PyJWKSet
+from openhands.sdk.event import ObservationEvent
 from openhands.sdk.llm import Message, MessageToolCall, TextContent
 from openhands.sdk.testing import TestLLM
 import pytest
 
+from focusproof.api.app import _evidence_id_for_request
+from focusproof.api.models import SubmitEvidenceRequest
 from focusproof.openhands_runtime.manager import ConversationManager
+from focusproof.openhands_runtime.tools.verification import VerificationObservation
 
 from .oidc_fixture import local_oidc_fixture, oidc_test_app
 
@@ -24,9 +29,34 @@ _ISSUER = "https://issuer-sentinel.example.test:8443/tenant/Exact/"
 _SUBJECT_A = "subject-A-sentinel"
 _SUBJECT_B = "subject-B-sentinel"
 _CLAIM_SENTINEL = "private-claim-sentinel"
+_EVIDENCE_PAYLOAD = {
+    "evidenceType": "text",
+    "textContent": (
+        "A concrete example shows that the server resolves ownership before "
+        "repository access and keeps the verified binding outside model arguments."
+    ),
+}
 
 
-def _review_llm(_: str) -> TestLLM:
+def _verification_message(
+    *,
+    call_id: str,
+    evidence_id: str,
+) -> Message:
+    verification = MessageToolCall(
+        id=call_id,
+        name="focusproof_text_evidence_verification",
+        arguments=json.dumps({"evidence_id": evidence_id}),
+        origin="completion",
+    )
+    return Message(
+        role="assistant",
+        content=[TextContent(text="Verify repository-backed evidence")],
+        tool_calls=[verification],
+    )
+
+
+def _draft_message() -> Message:
     draft = MessageToolCall(
         id="call_repair1_review_draft",
         name="focusproof_review_draft",
@@ -41,15 +71,56 @@ def _review_llm(_: str) -> TestLLM:
         ),
         origin="completion",
     )
-    return TestLLM.from_messages(
-        [
-            Message(
-                role="assistant",
-                content=[TextContent(text="Submit bounded review draft")],
-                tool_calls=[draft],
-            )
-        ]
+    return Message(
+        role="assistant",
+        content=[TextContent(text="Submit bounded review draft")],
+        tool_calls=[draft],
     )
+
+
+def _expected_evidence_id(session_id: str) -> str:
+    return _evidence_id_for_request(
+        session_id,
+        SubmitEvidenceRequest.model_validate(_EVIDENCE_PAYLOAD),
+    )
+
+
+class RepositoryToolTestLlmFactory:
+    def __init__(self) -> None:
+        self.primary_session_id: str | None = None
+        self.primary_evidence_id: str | None = None
+        self._creation_counts: dict[str, int] = {}
+
+    def __call__(self, session_id: str) -> TestLLM:
+        creation = self._creation_counts.get(session_id, 0) + 1
+        self._creation_counts[session_id] = creation
+        if self.primary_session_id is None:
+            self.primary_session_id = session_id
+        if session_id == self.primary_session_id:
+            evidence_id = _expected_evidence_id(session_id)
+            messages: list[Message | Exception] = [
+                _verification_message(
+                    call_id=f"call_owner_a_verify_{creation}",
+                    evidence_id=evidence_id,
+                )
+            ]
+            if creation > 1:
+                messages.append(_draft_message())
+            return TestLLM.from_messages(messages)
+
+        assert self.primary_evidence_id is not None
+        return TestLLM.from_messages(
+            [
+                _verification_message(
+                    call_id="call_owner_b_foreign_evidence",
+                    evidence_id=self.primary_evidence_id,
+                ),
+                _verification_message(
+                    call_id="call_owner_b_missing_evidence",
+                    evidence_id="ev_does_not_exist",
+                ),
+            ]
+        )
 
 
 def _install_jwks_fetch(
@@ -133,6 +204,22 @@ def _request_matrix() -> tuple[tuple[str, str, dict[str, object] | None], ...]:
     )
 
 
+def _verification_observations(handle: Any) -> list[VerificationObservation]:
+    return [
+        event.observation
+        for event in handle.conversation.state.events
+        if isinstance(event, ObservationEvent)
+        and isinstance(event.observation, VerificationObservation)
+    ]
+
+
+def _scoped_repository(handle: Any) -> object:
+    tool = handle.conversation.agent.tools_map[
+        "focusproof_text_evidence_verification"
+    ]
+    return cast(Any, tool.executor)._repository
+
+
 def test_real_signed_identity_chain_is_owner_isolated_and_identity_material_free(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -150,7 +237,8 @@ def test_real_signed_identity_chain_is_owner_isolated_and_identity_material_free
     monkeypatch.setenv("FOCUSPROOF_OIDC_ALLOWED_ALGORITHMS", "RS256")
     monkeypatch.setenv("FOCUSPROOF_OIDC_FINGERPRINT_KEY", _FINGERPRINT_KEY)
     _install_jwks_fetch(monkeypatch, {"keys": [fixture.public_jwk]})
-    app = oidc_test_app(tmp_path, fixture, llm_factory=_review_llm)
+    llm_factory = RepositoryToolTestLlmFactory()
+    app = oidc_test_app(tmp_path, fixture, llm_factory=llm_factory)
     token_a = fixture.token(
         subject=_SUBJECT_A,
         additional_claims={"private_claim": _CLAIM_SENTINEL},
@@ -173,14 +261,12 @@ def test_real_signed_identity_chain_is_owner_isolated_and_identity_material_free
         assert created.status_code == 200
         responses.append(created.text)
         session_id = str(created.json()["sessionId"])
+        assert llm_factory.primary_session_id == session_id
 
         evidence = client.post(
             f"/sessions/{session_id}/evidence",
             headers=_authorization(token_a),
-            json={
-                "evidenceType": "text",
-                "textContent": "The server resolves ownership before any mutation.",
-            },
+            json=_EVIDENCE_PAYLOAD,
         )
         answer = client.post(
             f"/sessions/{session_id}/answer",
@@ -192,6 +278,9 @@ def test_real_signed_identity_chain_is_owner_isolated_and_identity_material_free
         )
         assert evidence.status_code == 200
         assert answer.status_code == 200
+        evidence_id = str(evidence.json()["evidenceId"])
+        assert evidence_id == _expected_evidence_id(session_id)
+        llm_factory.primary_evidence_id = evidence_id
         responses.extend((evidence.text, answer.text))
 
         with app.state.uow_factory() as uow:
@@ -201,7 +290,87 @@ def test_real_signed_identity_chain_is_owner_isolated_and_identity_material_free
             )
         assert principal is not None
         manager: ConversationManager = app.state.conversation_manager
+
+        warm_review = client.post(
+            f"/sessions/{session_id}/review",
+            headers=_authorization(token_a),
+        )
+        assert warm_review.status_code == 503
+        responses.append(warm_review.text)
+        warm_handle = manager.get(session_id)
+        warm_observations = _verification_observations(warm_handle)
+        assert len(warm_observations) == 1
+        warm_observation = warm_observations[0]
+        assert warm_observation.status == "success"
+        assert warm_observation.evidence_id == evidence_id
+        assert set(warm_observation.facts) == {
+            "has_text",
+            "character_count",
+            "word_count",
+            "has_concrete_example",
+            "has_structured_output",
+            "content_hash",
+        }
+        assert warm_observation.source_refs == [
+            evidence_id,
+            warm_observation.facts["content_hash"],
+        ]
+        assert _EVIDENCE_PAYLOAD["textContent"] not in warm_observation.model_dump_json()
+        warm_repository = _scoped_repository(warm_handle)
+
+        before_principal_b = _database_counts(database_path)
+        establish_principal_b = client.get(
+            "/sessions/sess_does_not_exist",
+            headers=_authorization(token_b),
+        )
+        assert establish_principal_b.status_code == 404
+        with app.state.uow_factory() as uow:
+            principal_b = uow.principals.get_exact(
+                issuer=_ISSUER,
+                subject=_SUBJECT_B,
+            )
+        assert principal_b is not None
+        after_principal_b = _database_counts(database_path)
+        assert after_principal_b["verified_principals"] == 2
+        assert {
+            key: value
+            for key, value in after_principal_b.items()
+            if key != "verified_principals"
+        } == {
+            key: value
+            for key, value in before_principal_b.items()
+            if key != "verified_principals"
+        }
+        responses.append(establish_principal_b.text)
+
+        native_before_denied_restore = len(warm_handle.conversation.state.events)
+        denial_baseline = _database_counts(database_path)
+        with pytest.raises(PermissionError):
+            manager.get_or_restore(session_id, principal_b.principal_id)
+        assert _database_counts(database_path) == denial_baseline
+        assert len(warm_handle.conversation.state.events) == native_before_denied_restore
+
         manager.close(session_id, principal.principal_id)
+        base_state_path = (
+            warm_handle.persistence_path
+            / warm_handle.conversation_id.hex
+            / "base_state.json"
+        )
+        base_state_text = base_state_path.read_text(encoding="utf-8")
+        base_state = json.loads(base_state_text)
+        verifier_params = [
+            tool["params"]
+            for tool in base_state["agent"]["tools"]
+            if tool["name"] == "FocusProofTextEvidenceVerificationTool"
+        ]
+        assert verifier_params
+        assert all(params["session_id"] == session_id for params in verifier_params)
+        assert all(params["repository"] == {} for params in verifier_params)
+
+        cold_denial_baseline = _database_counts(database_path)
+        with pytest.raises(PermissionError):
+            manager.get_or_restore(session_id, principal_b.principal_id)
+        assert _database_counts(database_path) == cold_denial_baseline
 
         reviewed = client.post(
             f"/sessions/{session_id}/review",
@@ -210,6 +379,14 @@ def test_real_signed_identity_chain_is_owner_isolated_and_identity_material_free
         assert reviewed.status_code == 200
         assert reviewed.json()["reviewStatus"] == "completed"
         responses.append(reviewed.text)
+        restored_handle = manager.get(session_id)
+        assert restored_handle.compatibility_restore is True
+        assert restored_handle.conversation.agent is restored_handle.conversation.state.agent
+        assert _scoped_repository(restored_handle) is not warm_repository
+        restored_observations = _verification_observations(restored_handle)
+        assert len(restored_observations) >= 2
+        assert restored_observations[-1].status == "success"
+        assert restored_observations[-1].evidence_id == evidence_id
 
         state = client.get(
             f"/sessions/{session_id}", headers=_authorization(token_a)
@@ -226,25 +403,7 @@ def test_real_signed_identity_chain_is_owner_isolated_and_identity_material_free
         assert len(reviews.json()["reviews"]) == 1
         responses.extend((state.text, events.text, reviews.text))
 
-        before_principal_b = _database_counts(database_path)
-        establish_principal_b = client.get(
-            "/sessions/sess_does_not_exist",
-            headers=_authorization(token_b),
-        )
-        assert establish_principal_b.status_code == 404
-        after_principal_b = _database_counts(database_path)
-        assert after_principal_b["verified_principals"] == 2
-        assert {
-            key: value
-            for key, value in after_principal_b.items()
-            if key != "verified_principals"
-        } == {
-            key: value
-            for key, value in before_principal_b.items()
-            if key != "verified_principals"
-        }
-        responses.append(establish_principal_b.text)
-        baseline = after_principal_b
+        baseline = _database_counts(database_path)
         assert all(value > 0 for value in baseline.values())
         for method, suffix, payload in _request_matrix():
             denied = client.request(
@@ -272,6 +431,45 @@ def test_real_signed_identity_chain_is_owner_isolated_and_identity_material_free
         assert _database_counts(database_path) == baseline
         responses.extend((missing.text, invalid.text))
 
+        owner_b_session = client.post(
+            "/sessions",
+            headers=_authorization(token_b),
+            json={
+                "domain": "general",
+                "title": "Foreign evidence boundary",
+                "goal": "Prove model actions cannot cross the owner boundary.",
+                "expectedOutput": "Two safe not-found observations",
+                "plannedMinutes": 10,
+            },
+        )
+        assert owner_b_session.status_code == 200
+        owner_b_session_id = str(owner_b_session.json()["sessionId"])
+        owner_b_review = client.post(
+            f"/sessions/{owner_b_session_id}/review",
+            headers=_authorization(token_b),
+        )
+        assert owner_b_review.status_code == 503
+        owner_b_handle = manager.get(owner_b_session_id)
+        owner_b_observations = _verification_observations(owner_b_handle)
+        assert len(owner_b_observations) == 2
+        assert [item.status for item in owner_b_observations] == ["failed", "failed"]
+        assert [item.error_code for item in owner_b_observations] == [
+            "evidence_not_found",
+            "evidence_not_found",
+        ]
+        assert owner_b_observations[0].facts == owner_b_observations[1].facts == {}
+        assert (
+            owner_b_observations[0].safe_error_message
+            == owner_b_observations[1].safe_error_message
+            == "Evidence was not found."
+        )
+        owner_b_observation_dump = "\n".join(
+            item.model_dump_json() for item in owner_b_observations
+        )
+        assert _EVIDENCE_PAYLOAD["textContent"] not in owner_b_observation_dump
+        assert warm_observation.facts["content_hash"] not in owner_b_observation_dump
+        responses.extend((owner_b_session.text, owner_b_review.text))
+
         with app.state.uow_factory() as uow:
             assert uow.principals.set_active(principal.principal_id, active=False)
             uow.commit()
@@ -289,8 +487,13 @@ def test_real_signed_identity_chain_is_owner_isolated_and_identity_material_free
             (
                 handle.conversation.agent.model_dump_json(),
                 handle.conversation.state.model_dump_json(),
+                base_state_text,
             )
         )
+        for private_binding in ("_principal_id", "_uow_factory", "_repository"):
+            assert private_binding not in runtime_dump
+        assert principal.principal_id not in runtime_dump
+        assert principal_b.principal_id not in runtime_dump
 
     fingerprint = "hmac-sha256:" + hmac.new(
         _FINGERPRINT_KEY.encode(), token_a.encode(), hashlib.sha256

@@ -52,6 +52,7 @@ def complete_fake_dashscope_environment() -> dict[str, str]:
         "FOCUSPROOF_LLM_MAX_COST_USD": "0.10",
         "FOCUSPROOF_LLM_INPUT_COST_PER_TOKEN": "0.000001",
         "FOCUSPROOF_LLM_OUTPUT_COST_PER_TOKEN": "0.000002",
+        "LITELLM_LOCAL_MODEL_COST_MAP": "true",
     }
 
 
@@ -143,15 +144,21 @@ def test_staging_profile_builds_provider_neutral_policy() -> None:
     assert "placeholder" not in settings.model_dump_json()
 
 
-def test_local_cost_map_is_an_application_invariant_not_user_configuration() -> None:
+@pytest.mark.parametrize(
+    "invalid_value",
+    [None, "false", "True", " true ", "malicious-remote-value"],
+)
+def test_staging_requires_explicit_exact_local_cost_map_configuration(
+    invalid_value: str | None,
+) -> None:
     values = complete_fake_dashscope_environment()
-    values["LITELLM_LOCAL_MODEL_COST_MAP"] = "false"
+    if invalid_value is None:
+        values.pop("LITELLM_LOCAL_MODEL_COST_MAP")
+    else:
+        values["LITELLM_LOCAL_MODEL_COST_MAP"] = invalid_value
 
-    settings = load_runtime_settings(values)
-
-    assert settings.real_llm is not None
-    assert "local_model_cost_map" not in type(settings.real_llm).model_fields
-    assert "LITELLM_LOCAL_MODEL_COST_MAP" not in settings.model_dump_json()
+    with pytest.raises(ValidationError, match="LITELLM_LOCAL_MODEL_COST_MAP"):
+        load_runtime_settings(values)
 
 
 def test_short_context_window_override_is_rejected() -> None:

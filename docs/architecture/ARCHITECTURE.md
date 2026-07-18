@@ -46,10 +46,12 @@ AI4C is not a public-deployment authorization. If only a local OIDC test issuer
 or isolated staging substitutes are exercised, the strongest result is
 `staging-ready with blockers`.
 
-FocusProof sets `LITELLM_LOCAL_MODEL_COST_MAP=true` as an application-owned
-bootstrap invariant before importing OpenHands or LiteLLM. It is deliberately
-not a deployment setting: external values cannot enable remote pricing-map
-fetches, and runtime configuration must not report the value as user-validated.
+Staging and production require the explicit deployment setting
+`LITELLM_LOCAL_MODEL_COST_MAP=true`. A standard-library preflight validates the
+exact value before importing OpenHands or LiteLLM, so missing, false, whitespace,
+or malicious values fail closed before any pricing-map network path. Local-dev
+and deterministic-test set the bundled-map invariant only when entering the
+OpenHands package boundary; ordinary FocusProof imports do not mutate it.
 
 ## 2. What Changes From v0.1
 
