@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import os
 import platform
@@ -67,7 +67,39 @@ def _minimal_environment() -> dict[str, str]:
     }
 
 
-def _run_probe(args: Sequence[str], *, reason_tool: str, capability: str) -> _Probe:
+def _captured_output(completed: subprocess.CompletedProcess[str]) -> str:
+    parts = tuple(part for part in (completed.stdout, completed.stderr) if part)
+    return "\n".join(parts)[:4096]
+
+
+def _has_docker_version(output: str) -> bool:
+    return re.search(
+        r"(?im)^\s*Docker\s+version\s+v?\d+(?:\.\d+){1,3}(?:[,\s]|$)",
+        output,
+    ) is not None
+
+
+def _has_podman_version(output: str) -> bool:
+    return re.search(
+        r"(?im)^\s*podman\s+version\s+v?\d+(?:\.\d+){1,3}(?:[,\s]|$)",
+        output,
+    ) is not None
+
+
+def _has_psql_version(output: str) -> bool:
+    return re.search(
+        r"(?im)^\s*psql\s+\(PostgreSQL\)\s+\d+(?:\.\d+){0,2}(?:[\s,]|$)",
+        output,
+    ) is not None
+
+
+def _run_probe(
+    args: Sequence[str],
+    *,
+    reason_tool: str,
+    capability: str,
+    validator: Callable[[str], bool],
+) -> _Probe:
     try:
         completed = subprocess.run(
             list(args),
@@ -89,7 +121,7 @@ def _run_probe(args: Sequence[str], *, reason_tool: str, capability: str) -> _Pr
             command=reason_tool,
             reason=f"{capability}:blocked:version_probe_failed:{reason_tool}",
         )
-    if completed.stdout.strip():
+    if validator(_captured_output(completed)):
         return _Probe(state="available", command=reason_tool, reason=None)
     return _Probe(
         state="blocked",
@@ -98,68 +130,91 @@ def _run_probe(args: Sequence[str], *, reason_tool: str, capability: str) -> _Pr
     )
 
 
-def _detect_container_cli() -> _Probe:
-    candidate_reasons: list[str] = []
-    for executable in ("docker", "podman"):
-        if shutil.which(executable) is None:
-            continue
-        probe = _run_probe(
-            [executable, "--version"],
-            reason_tool=executable,
-            capability="container_cli",
-        )
-        if probe.state == "available":
-            return probe
-        if probe.reason is not None:
-            candidate_reasons.append(probe.reason)
-    if candidate_reasons:
-        return _Probe(state="blocked", command=None, reason=candidate_reasons[0])
-    return _Probe(state="blocked", command=None, reason="container_cli:blocked:not_found")
-
-
 def _compose_is_v2(output: str) -> bool:
-    for token in re.split(r"[\s,()]+", output):
-        version = token.lower().removeprefix("v")
-        if re.match(r"^2(?:\.|$)", version) is not None:
+    patterns = (
+        r"(?im)^\s*Docker\s+Compose\s+version\s+v?(?P<version>\d+(?:\.\d+){0,3})\b",
+        r"(?im)^\s*podman[-\s]+compose\s+version\s+v?(?P<version>\d+(?:\.\d+){0,3})\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, output)
+        if match is not None and match.group("version").split(".", maxsplit=1)[0] == "2":
             return True
     return False
 
 
-def _detect_compose(container: _Probe) -> _Probe:
-    if container.state != "available" or container.command is None:
-        return _Probe(
-            state="blocked",
-            command=None,
-            reason="compose:blocked:container_cli_unavailable",
+def _detect_candidate_compose(command: str) -> _Probe:
+    reason_tool = f"{command}-compose"
+    return _run_probe(
+        [command, "compose", "version"],
+        reason_tool=reason_tool,
+        capability="compose",
+        validator=_compose_is_v2,
+    )
+
+
+def _container_validator(executable: str) -> Callable[[str], bool]:
+    if executable == "docker":
+        return _has_docker_version
+    return _has_podman_version
+
+
+def _detect_container_pair() -> tuple[_Probe, _Probe, tuple[str, ...]]:
+    saw_candidate = False
+    selected_container: _Probe | None = None
+    reasons: list[str] = []
+    for executable in ("docker", "podman"):
+        if shutil.which(executable) is None:
+            continue
+        saw_candidate = True
+        container = _run_probe(
+            [executable, "--version"],
+            reason_tool=executable,
+            capability="container_cli",
+            validator=_container_validator(executable),
         )
-    reason_tool = f"{container.command}-compose"
-    try:
-        completed = subprocess.run(
-            [container.command, "compose", "version"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=PROBE_TIMEOUT_SECONDS,
-            env=_minimal_environment(),
+        if container.state == "blocked":
+            if container.reason is not None:
+                reasons.append(container.reason)
+            continue
+        if selected_container is None:
+            selected_container = container
+        compose = _detect_candidate_compose(executable)
+        if compose.state == "available":
+            return container, compose, ()
+        if compose.reason is not None:
+            reasons.append(compose.reason)
+
+    if not saw_candidate:
+        return (
+            _Probe(state="blocked", command=None, reason="container_cli:blocked:not_found"),
+            _Probe(
+                state="blocked",
+                command=None,
+                reason="compose:blocked:container_cli_unavailable",
+            ),
+            (
+                "container_cli:blocked:not_found",
+                "compose:blocked:container_cli_unavailable",
+            ),
         )
-    except subprocess.TimeoutExpired:
-        return _Probe(
-            state="blocked",
-            command=reason_tool,
-            reason=f"compose:blocked:version_probe_timeout:{reason_tool}",
+
+    if selected_container is None:
+        if "compose:blocked:container_cli_unavailable" not in reasons:
+            reasons.append("compose:blocked:container_cli_unavailable")
+        return (
+            _Probe(state="blocked", command=None, reason=None),
+            _Probe(
+                state="blocked",
+                command=None,
+                reason="compose:blocked:container_cli_unavailable",
+            ),
+            tuple(reasons),
         )
-    except (OSError, subprocess.CalledProcessError):
-        return _Probe(
-            state="blocked",
-            command=reason_tool,
-            reason=f"compose:blocked:version_probe_failed:{reason_tool}",
-        )
-    if _compose_is_v2(completed.stdout):
-        return _Probe(state="available", command=reason_tool, reason=None)
-    return _Probe(
-        state="blocked",
-        command=reason_tool,
-        reason=f"compose:blocked:unsupported_version:{reason_tool}",
+
+    return (
+        selected_container,
+        _Probe(state="blocked", command=None, reason=None),
+        tuple(reasons),
     )
 
 
@@ -170,6 +225,7 @@ def _detect_postgres_client() -> _Probe:
         ["psql", "--version"],
         reason_tool="psql",
         capability="postgres_client",
+        validator=_has_psql_version,
     )
 
 
@@ -183,12 +239,11 @@ def detect_capabilities() -> CapabilityReport:
             reasons=("linux_arch:blocked:unsupported_os",),
         )
 
-    container = _detect_container_cli()
-    compose = _detect_compose(container)
+    container, compose, container_reasons = _detect_container_pair()
     postgres_client = _detect_postgres_client()
     reasons = tuple(
         reason
-        for reason in (container.reason, compose.reason, postgres_client.reason)
+        for reason in (*container_reasons, postgres_client.reason)
         if reason is not None
     )
     return CapabilityReport(

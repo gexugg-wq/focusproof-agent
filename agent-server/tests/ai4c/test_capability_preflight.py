@@ -6,14 +6,17 @@ import importlib
 import os
 from pathlib import Path
 import subprocess
+import sys
 from typing import Any, Final
 
 import pytest
 
-from scripts import check_ai4c_capabilities as capabilities
-
 
 PROJECT_ROOT: Final = Path(__file__).resolve().parents[3]
+SCRIPTS_ROOT: Final = PROJECT_ROOT / "scripts"
+if str(SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_ROOT))
+capabilities: Any = importlib.import_module("check_ai4c_capabilities")
 PROVIDER_KEYS: Final = (
     "DASHSCOPE_API_KEY",
     "OPENAI_API_KEY",
@@ -21,6 +24,7 @@ PROVIDER_KEYS: Final = (
     "ANTHROPIC_API_KEY",
 )
 MINIMAL_ENV_KEYS: Final = {"PATH", "LANG", "LC_ALL"}
+ProbeOutcome = str | tuple[str, str] | BaseException
 
 
 class ProbeHarness:
@@ -28,7 +32,7 @@ class ProbeHarness:
         self,
         *,
         available: Sequence[str],
-        results: Mapping[tuple[str, ...], str | BaseException],
+        results: Mapping[tuple[str, ...], ProbeOutcome],
     ) -> None:
         self._available = frozenset(available)
         self._results = results
@@ -74,11 +78,16 @@ class ProbeHarness:
             raise AssertionError(f"unexpected probe: {args!r}")
         if isinstance(outcome, BaseException):
             raise outcome
+        if isinstance(outcome, tuple):
+            stdout, stderr = outcome
+        else:
+            stdout = outcome
+            stderr = "/tmp/leaked/path OPENAI_API_KEY=raw-secret"
         return subprocess.CompletedProcess(
             list(args),
             0,
-            stdout=outcome,
-            stderr="/tmp/leaked/path OPENAI_API_KEY=raw-secret",
+            stdout=stdout,
+            stderr=stderr,
         )
 
 
@@ -88,7 +97,7 @@ def _configure(
     system: str = "Linux",
     machine: str = "x86_64",
     available: Sequence[str] = ("docker", "psql"),
-    results: Mapping[tuple[str, ...], str | BaseException] | None = None,
+    results: Mapping[tuple[str, ...], ProbeOutcome] | None = None,
 ) -> ProbeHarness:
     for key in PROVIDER_KEYS:
         monkeypatch.setenv(key, f"secret-{key.lower()}")
@@ -171,6 +180,96 @@ def test_docker_missing_uses_podman_compatible_fallback(monkeypatch: pytest.Monk
     assert ("podman", "--version") in [call["args"] for call in harness.calls]
 
 
+def test_linux_blocks_when_docker_and_podman_are_both_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure(
+        monkeypatch,
+        available=("psql",),
+        results={("psql", "--version"): "psql (PostgreSQL) 16.3"},
+    )
+
+    report = capabilities.detect_capabilities()
+
+    assert report.container_cli == "blocked"
+    assert report.compose == "blocked"
+    assert report.postgres_client == "available"
+    assert report.linux_arch == "x86_64"
+    assert "container_cli:blocked:not_found" in report.reasons
+    assert "compose:blocked:container_cli_unavailable" in report.reasons
+
+
+@pytest.mark.parametrize(
+    ("executable", "output"),
+    [
+        ("docker", "hello from not docker 26.1.4"),
+        ("podman", "hello from not podman 5.2.1"),
+    ],
+)
+def test_container_cli_rejects_arbitrary_version_output(
+    monkeypatch: pytest.MonkeyPatch,
+    executable: str,
+    output: str,
+) -> None:
+    _configure(
+        monkeypatch,
+        available=(executable, "psql"),
+        results={
+            (executable, "--version"): output,
+            ("psql", "--version"): "psql (PostgreSQL) 16.3",
+        },
+    )
+
+    report = capabilities.detect_capabilities()
+
+    assert report.container_cli == "blocked"
+    assert report.compose == "blocked"
+    assert report.postgres_client == "available"
+    assert f"container_cli:blocked:unsupported_version:{executable}" in report.reasons
+    _assert_sanitized(" ".join(report.reasons))
+
+
+def test_postgres_client_rejects_arbitrary_version_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure(
+        monkeypatch,
+        results={
+            ("docker", "--version"): "Docker version 26.1.4, build test",
+            ("docker", "compose", "version"): "Docker Compose version v2.29.1",
+            ("psql", "--version"): "hello from not postgres 16.3",
+        },
+    )
+
+    report = capabilities.detect_capabilities()
+
+    assert report.container_cli == "available"
+    assert report.compose == "available"
+    assert report.postgres_client == "blocked"
+    assert "postgres_client:blocked:unsupported_version:psql" in report.reasons
+    _assert_sanitized(" ".join(report.reasons))
+
+
+def test_version_output_on_stderr_is_parsed_without_leaking_raw_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure(
+        monkeypatch,
+        results={
+            ("docker", "--version"): ("", "Docker version 26.1.4, build test"),
+            ("docker", "compose", "version"): ("", "Docker Compose version v2.29.1"),
+            ("psql", "--version"): ("", "psql (PostgreSQL) 16.3"),
+        },
+    )
+
+    report = capabilities.detect_capabilities()
+
+    assert report.container_cli == "available"
+    assert report.compose == "available"
+    assert report.postgres_client == "available"
+    assert report.reasons == ()
+
+
 @pytest.mark.parametrize(
     ("failure", "reason"),
     [
@@ -230,6 +329,14 @@ def test_container_cli_present_but_version_probe_failure_blocks_safely(
             "docker-compose version 1.29.2, build test",
             "compose:blocked:unsupported_version:docker-compose",
         ),
+        (
+            "Docker Compose version v1.29.2, build 2",
+            "compose:blocked:unsupported_version:docker-compose",
+        ),
+        (
+            "hello from compose build 2",
+            "compose:blocked:unsupported_version:docker-compose",
+        ),
     ],
 )
 def test_compose_v1_absent_failure_or_timeout_blocks(
@@ -282,7 +389,7 @@ def test_postgres_client_absent_failure_or_timeout_blocks(
     psql_result: str | BaseException | None,
     reason: str,
 ) -> None:
-    results: dict[tuple[str, ...], str | BaseException] = {
+    results: dict[tuple[str, ...], ProbeOutcome] = {
         ("docker", "--version"): "Docker version 26.1.4, build test",
         ("docker", "compose", "version"): "Docker Compose version v2.29.1",
     }
@@ -296,6 +403,127 @@ def test_postgres_client_absent_failure_or_timeout_blocks(
     assert report.compose == "available"
     assert report.postgres_client == "blocked"
     assert reason in report.reasons
+    _assert_sanitized(" ".join(report.reasons))
+
+
+@pytest.mark.parametrize(
+    "compose_output",
+    [
+        "Docker Compose version v2.29.1",
+        "podman-compose version 2.1.0",
+        "Podman Compose version v2.1.0",
+    ],
+)
+def test_compose_v2_output_accepts_only_compose_version_field(
+    monkeypatch: pytest.MonkeyPatch,
+    compose_output: str,
+) -> None:
+    _configure(
+        monkeypatch,
+        available=("podman", "psql"),
+        results={
+            ("podman", "--version"): "podman version 5.2.1",
+            ("podman", "compose", "version"): compose_output,
+            ("psql", "--version"): "psql (PostgreSQL) 16.3",
+        },
+    )
+
+    report = capabilities.detect_capabilities()
+
+    assert report.container_cli == "available"
+    assert report.compose == "available"
+    assert report.postgres_client == "available"
+    assert report.reasons == ()
+
+
+def test_docker_compose_failure_continues_to_complete_podman_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _configure(
+        monkeypatch,
+        available=("docker", "podman", "psql"),
+        results={
+            ("docker", "--version"): "Docker version 26.1.4, build test",
+            ("docker", "compose", "version"): subprocess.CalledProcessError(
+                1,
+                ["docker", "compose", "version"],
+                stderr="/tmp/docker-compose OPENAI_API_KEY=raw-secret",
+            ),
+            ("podman", "--version"): "podman version 5.2.1",
+            ("podman", "compose", "version"): "podman-compose version 2.1.0",
+            ("psql", "--version"): "psql (PostgreSQL) 16.3",
+        },
+    )
+
+    report = capabilities.detect_capabilities()
+
+    assert report.container_cli == "available"
+    assert report.compose == "available"
+    assert report.postgres_client == "available"
+    assert report.reasons == ()
+    assert [call["args"] for call in harness.calls[:4]] == [
+        ("docker", "--version"),
+        ("docker", "compose", "version"),
+        ("podman", "--version"),
+        ("podman", "compose", "version"),
+    ]
+
+
+def test_does_not_mix_valid_docker_cli_with_invalid_podman_cli_compose(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _configure(
+        monkeypatch,
+        available=("docker", "podman", "psql"),
+        results={
+            ("docker", "--version"): "Docker version 26.1.4, build test",
+            ("docker", "compose", "version"): subprocess.CalledProcessError(
+                1,
+                ["docker", "compose", "version"],
+            ),
+            ("podman", "--version"): "not actually podman 5.2.1",
+            ("psql", "--version"): "psql (PostgreSQL) 16.3",
+        },
+    )
+
+    report = capabilities.detect_capabilities()
+
+    assert report.container_cli == "available"
+    assert report.compose == "blocked"
+    assert report.postgres_client == "available"
+    assert "compose:blocked:version_probe_failed:docker-compose" in report.reasons
+    assert "container_cli:blocked:unsupported_version:podman" in report.reasons
+    assert ("podman", "compose", "version") not in [call["args"] for call in harness.calls]
+
+
+def test_both_candidate_compose_failures_are_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure(
+        monkeypatch,
+        available=("docker", "podman", "psql"),
+        results={
+            ("docker", "--version"): "Docker version 26.1.4, build test",
+            ("docker", "compose", "version"): "Docker Compose version v1.29.2, build 2",
+            ("podman", "--version"): "podman version 5.2.1",
+            ("podman", "compose", "version"): subprocess.CalledProcessError(
+                1,
+                ["podman", "compose", "version"],
+                stderr="/tmp/podman-compose OPENAI_API_KEY=raw-secret",
+            ),
+            ("psql", "--version"): "psql (PostgreSQL) 16.3",
+        },
+    )
+
+    report = capabilities.detect_capabilities()
+
+    assert report.container_cli == "available"
+    assert report.compose == "blocked"
+    assert report.postgres_client == "available"
+    assert report.reasons == (
+        "compose:blocked:unsupported_version:docker-compose",
+        "compose:blocked:version_probe_failed:podman-compose",
+    )
     _assert_sanitized(" ".join(report.reasons))
 
 
@@ -321,6 +549,40 @@ def test_require_capabilities_supports_subsets_and_stable_exception_shape() -> N
         "postgres_client:blocked:not_found",
     )
     assert str(exc_info.value) == "missing required capabilities: container_cli, postgres_client"
+
+
+def test_require_capabilities_all_path_preserves_order_and_reasons() -> None:
+    report = capabilities.CapabilityReport(
+        container_cli="blocked",
+        compose="blocked",
+        postgres_client="blocked",
+        linux_arch="blocked",
+        reasons=(
+            "linux_arch:blocked:unsupported_os",
+            "container_cli:blocked:not_found",
+            "compose:blocked:container_cli_unavailable",
+            "postgres_client:blocked:not_found",
+        ),
+    )
+
+    with pytest.raises(capabilities.CapabilityUnavailableError) as exc_info:
+        capabilities.require_capabilities(report, capabilities.CAPABILITY_NAMES)
+
+    assert exc_info.value.names == (
+        "container_cli",
+        "compose",
+        "postgres_client",
+        "linux_arch",
+    )
+    assert exc_info.value.reasons == (
+        "linux_arch:blocked:unsupported_os",
+        "container_cli:blocked:not_found",
+        "compose:blocked:container_cli_unavailable",
+        "postgres_client:blocked:not_found",
+    )
+    assert str(exc_info.value) == (
+        "missing required capabilities: container_cli, compose, postgres_client, linux_arch"
+    )
 
 
 def test_subprocess_probes_use_arrays_check_timeout_and_minimum_environment(
