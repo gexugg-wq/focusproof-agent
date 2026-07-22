@@ -17,7 +17,7 @@ dependencies = [
     "sqlalchemy>=2.0,<3",
     "uvicorn",
     "python-dotenv",
-    "openhands-sdk @ file:///mnt/d/%E7%A0%94%E4%B8%80/code_study/OpenHands/software-agent-sdk-main/openhands-sdk",
+    "openhands-sdk==1.31.0",
 ]
 
 [project.optional-dependencies]
