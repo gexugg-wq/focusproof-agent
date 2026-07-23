@@ -385,6 +385,7 @@ class FakeLocalConversation:
     arun_calls: ClassVar[int] = 0
     close_calls: ClassVar[int] = 0
     events_accesses: ClassVar[int] = 0
+    scenario: ClassVar[str] = "happy"
 
     def __init__(self, **kwargs: object) -> None:
         self.kwargs = kwargs
@@ -396,16 +397,27 @@ class FakeLocalConversation:
 
     async def arun(self) -> None:
         type(self).arun_calls += 1
+        action_id = (
+            "" if type(self).scenario == "empty_ids" else "event_action_ai4c"
+        )
+        action_tool_call_id = (
+            "" if type(self).scenario == "empty_ids" else "call_ai4c_finish"
+        )
+        tool_call_id = (
+            "call_ai4c_wrong"
+            if type(self).scenario == "tool_call_id_mismatch"
+            else action_tool_call_id
+        )
         self._events.extend(
             [
                 FakeActionEvent(
-                    id="event_action_ai4c",
+                    id=action_id,
                     thought=[FakeTextContent(text="finish deterministically")],
                     action=FakeFinishAction(message="done"),
                     tool_name="finish",
-                    tool_call_id="call_ai4c_finish",
+                    tool_call_id=action_tool_call_id,
                     tool_call=FakeMessageToolCall(
-                        id="call_ai4c_finish",
+                        id=tool_call_id,
                         name="finish",
                         arguments=json.dumps({"message": "done"}),
                         origin="completion",
@@ -416,9 +428,9 @@ class FakeLocalConversation:
                 FakeObservationEvent(
                     id="event_observation_ai4c",
                     tool_name="finish",
-                    tool_call_id="call_ai4c_finish",
+                    tool_call_id=action_tool_call_id,
                     observation=FakeFinishObservation(text="done"),
-                    action_id="event_action_ai4c",
+                    action_id=action_id,
                     _native=True,
                 ),
             ]
@@ -465,6 +477,8 @@ def _install_fake_openhands_modules(monkeypatch: pytest.MonkeyPatch) -> None:
 def _execute_probe_source_with_fake_sdk(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    *,
+    scenario: str = "happy",
 ) -> dict[str, object]:
     _install_fake_openhands_modules(monkeypatch)
     monkeypatch.setattr(
@@ -476,6 +490,7 @@ def _execute_probe_source_with_fake_sdk(
     FakeLocalConversation.arun_calls = 0
     FakeLocalConversation.close_calls = 0
     FakeLocalConversation.events_accesses = 0
+    FakeLocalConversation.scenario = scenario
     FakeActionEvent.constructor_calls = 0
     FakeObservationEvent.constructor_calls = 0
 
@@ -505,8 +520,140 @@ def test_probe_source_executes_native_arun_and_serializes_state_events(
 
 
 @pytest.mark.parametrize(
+    ("scenario", "expected_reason"),
+    [
+        ("empty_ids", "event_identity_missing"),
+        ("tool_call_id_mismatch", "event_tool_call_mismatch"),
+    ],
+)
+def test_probe_source_blocks_invalid_event_linkage_from_state_events(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    scenario: str,
+    expected_reason: str,
+) -> None:
+    payload = _execute_probe_source_with_fake_sdk(
+        monkeypatch,
+        capsys,
+        scenario=scenario,
+    )
+
+    assert payload["result"] == "BLOCKED"
+    assert payload["reason_codes"] == [expected_reason]
+    assert FakeLocalConversation.arun_calls == 1
+    assert FakeLocalConversation.events_accesses >= 1
+
+
+def test_probe_source_blocks_empty_ids_from_official_native_events(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import openhands.sdk.conversation as sdk_conversation
+    from openhands.sdk.event import ActionEvent as SDKActionEvent
+    from openhands.sdk.event import ObservationEvent as SDKObservationEvent
+    from openhands.sdk.llm import MessageToolCall as SDKMessageToolCall
+    from openhands.sdk.llm import TextContent as SDKTextContent
+    from openhands.sdk.tool.builtins.finish import FinishAction as SDKFinishAction
+    from openhands.sdk.tool.builtins.finish import (
+        FinishObservation as SDKFinishObservation,
+    )
+
+    class NativeState:
+        def __init__(self) -> None:
+            self.events: list[object] = []
+
+    class NativeEmptyIdConversation:
+        def __init__(self, **kwargs: object) -> None:
+            max_iteration_per_run = kwargs["max_iteration_per_run"]
+            assert isinstance(max_iteration_per_run, int)
+            self.max_iteration_per_run = max_iteration_per_run
+            self.state = NativeState()
+
+        async def arun(self) -> None:
+            self.state.events.extend(
+                [
+                    SDKActionEvent(
+                        id="",
+                        thought=[SDKTextContent(text="finish deterministically")],
+                        action=SDKFinishAction(message="done"),
+                        tool_name="finish",
+                        tool_call_id="",
+                        tool_call=SDKMessageToolCall(
+                            id="",
+                            name="finish",
+                            arguments=json.dumps({"message": "done"}),
+                            origin="completion",
+                        ),
+                        llm_response_id="response_ai4c",
+                    ),
+                    SDKObservationEvent(
+                        id="event_observation_ai4c",
+                        tool_name="finish",
+                        tool_call_id="",
+                        observation=SDKFinishObservation.from_text(text="done"),
+                        action_id="",
+                    ),
+                ]
+            )
+
+        def interrupt(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(sdk_conversation, "LocalConversation", NativeEmptyIdConversation)
+    monkeypatch.setattr(
+        importlib.metadata,
+        "version",
+        lambda distribution: "1.31.0" if distribution == "openhands-sdk" else "0",
+    )
+    monkeypatch.setattr(sys, "argv", ["probe", "1.31.0"])
+
+    try:
+        exec(equivalence.PROBE_SOURCE, {"__name__": "__main__"})
+    except SystemExit as exc:
+        assert exc.code in (0, None)
+    payload = _last_probe_json(capsys.readouterr().out)
+
+    assert payload["result"] == "BLOCKED"
+    assert payload["reason_codes"] == ["event_identity_missing"]
+
+
+@pytest.mark.parametrize(
     "payload",
     [
+        {
+            "result": "PASS",
+            "signature_digest": "a" * 64,
+            "lifecycle_digest": "b" * 64,
+            "event_digest": "c" * 64,
+            "reason_codes": [],
+        },
+        {
+            "version": None,
+            "result": "PASS",
+            "signature_digest": "a" * 64,
+            "lifecycle_digest": "b" * 64,
+            "event_digest": "c" * 64,
+            "reason_codes": [],
+        },
+        {
+            "version": 1,
+            "result": "PASS",
+            "signature_digest": "a" * 64,
+            "lifecycle_digest": "b" * 64,
+            "event_digest": "c" * 64,
+            "reason_codes": [],
+        },
+        {
+            "version": True,
+            "result": "PASS",
+            "signature_digest": "a" * 64,
+            "lifecycle_digest": "b" * 64,
+            "event_digest": "c" * 64,
+            "reason_codes": [],
+        },
         {
             "version": "1.31.1",
             "result": "PASS",

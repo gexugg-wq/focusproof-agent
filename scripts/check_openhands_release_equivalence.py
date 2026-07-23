@@ -115,6 +115,10 @@ try:
         "TestLLM.from_messages": str(inspect.signature(TestLLM.from_messages)),
     }
 
+    def _is_non_empty_string(value: object) -> bool:
+        return isinstance(value, str) and value != ""
+
+
     def _stable_serialized_event(event: object) -> dict[str, object]:
         raw = json.loads(event.model_dump_json(exclude_none=True))
         stable: dict[str, object] = {
@@ -220,10 +224,34 @@ try:
             if action_index >= observation_index:
                 _blocked(version, "event_order_failed")
                 raise SystemExit(0)
-            if action.tool_call_id != observation.tool_call_id:
+            action_id = getattr(action, "id", None)
+            action_tool_call_id = getattr(action, "tool_call_id", None)
+            observation_action_id = getattr(observation, "action_id", None)
+            observation_tool_call_id = getattr(observation, "tool_call_id", None)
+            action_tool_call = getattr(action, "tool_call", None)
+            action_tool_call_id_from_payload = getattr(action_tool_call, "id", None)
+            if not all(
+                _is_non_empty_string(value)
+                for value in (
+                    action_id,
+                    action_tool_call_id,
+                    observation_action_id,
+                    observation_tool_call_id,
+                    action_tool_call_id_from_payload,
+                )
+            ):
+                _blocked(version, "event_identity_missing")
+                raise SystemExit(0)
+            if (
+                action_tool_call_id != "call_ai4c_finish"
+                or observation_tool_call_id != "call_ai4c_finish"
+                or action_tool_call_id_from_payload != "call_ai4c_finish"
+                or action_tool_call_id != observation_tool_call_id
+                or action_tool_call_id_from_payload != action_tool_call_id
+            ):
                 _blocked(version, "event_tool_call_mismatch")
                 raise SystemExit(0)
-            if observation.action_id != action.id:
+            if observation_action_id != action_id:
                 _blocked(version, "event_action_id_mismatch")
                 raise SystemExit(0)
             if not isinstance(action.action, FinishAction):
@@ -261,8 +289,8 @@ try:
             ]
             event_payload = {
                 "sequence": event_sequence,
-                "tool_call_id_matches": action.tool_call_id == observation.tool_call_id,
-                "observation_action_id_matches": observation.action_id == action.id,
+                "tool_call_id_matches": action_tool_call_id == observation_tool_call_id,
+                "observation_action_id_matches": observation_action_id == action_id,
                 "action_before_observation": action_index < observation_index,
                 "terminal": {
                     "action_type": type(action.action).__name__,
@@ -404,6 +432,7 @@ def _parse_probe_payload(payload: Mapping[str, object] | None) -> EquivalenceRep
         )
     version_value = payload.get("version")
     version = version_value if isinstance(version_value, str) else OFFICIAL_VERSION
+    version_is_exact = isinstance(version_value, str) and version_value == OFFICIAL_VERSION
     result = _result_value(payload)
     if result is None:
         result = "BLOCKED"
@@ -423,7 +452,7 @@ def _parse_probe_payload(payload: Mapping[str, object] | None) -> EquivalenceRep
     if (
         result == "PASS"
         and (
-            version != OFFICIAL_VERSION
+            not version_is_exact
             or not reasons_are_valid
             or reasons
             or signature_digest is None
