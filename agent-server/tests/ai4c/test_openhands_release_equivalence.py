@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import importlib
+import importlib.metadata
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
-from typing import Any, Final
+from types import ModuleType
+from typing import Any, ClassVar, Final
 
 import pytest
 
@@ -202,6 +204,353 @@ def _assert_sanitized(text: str) -> None:
     assert "pip raw" not in text
     assert "uv raw" not in text
     assert "probe raw" not in text
+
+def _last_probe_json(output: str) -> dict[str, object]:
+    for line in reversed(output.splitlines()):
+        candidate = line.strip()
+        if not candidate.startswith("{"):
+            continue
+        payload = json.loads(candidate)
+        assert isinstance(payload, dict)
+        return payload
+    raise AssertionError("probe did not emit JSON")
+
+
+class FakeTextContent:
+    def __init__(self, *, text: str) -> None:
+        self.text = text
+
+
+class FakeMessageToolCall:
+    def __init__(self, *, id: str, name: str, arguments: str, origin: str) -> None:
+        self.id = id
+        self.name = name
+        self.arguments = arguments
+        self.origin = origin
+
+
+class FakeMessage:
+    def __init__(
+        self,
+        *,
+        role: str,
+        content: Sequence[FakeTextContent],
+        tool_calls: Sequence[FakeMessageToolCall] | None = None,
+    ) -> None:
+        self.role = role
+        self.content = list(content)
+        self.tool_calls = list(tool_calls or [])
+
+
+class FakeLLM:
+    pass
+
+
+class FakeTestLLM(FakeLLM):
+    def __init__(self, messages: Sequence[FakeMessage], *, usage_id: str) -> None:
+        self.messages = list(messages)
+        self.usage_id = usage_id
+
+    @classmethod
+    def from_messages(
+        cls,
+        messages: list[FakeMessage | Exception],
+        *,
+        usage_id: str = "test-llm",
+        **_: object,
+    ) -> "FakeTestLLM":
+        fake_messages = [message for message in messages if isinstance(message, FakeMessage)]
+        return cls(fake_messages, usage_id=usage_id)
+
+
+class FakeAgent:
+    def __init__(self, **kwargs: object) -> None:
+        self.kwargs = kwargs
+
+
+class FakeEventLog:
+    pass
+
+
+class FakeToolDefinition:
+    pass
+
+
+class FakeToolExecutor:
+    pass
+
+
+class FakeFinishAction:
+    def __init__(self, *, message: str) -> None:
+        self.message = message
+
+
+class FakeFinishObservation:
+    def __init__(self, *, text: str = "done") -> None:
+        self.text = text
+
+    @classmethod
+    def from_text(cls, *, text: str) -> "FakeFinishObservation":
+        return cls(text=text)
+
+
+class FakeActionEvent:
+    constructor_calls: ClassVar[int] = 0
+
+    def __init__(
+        self,
+        *,
+        id: str,
+        thought: Sequence[FakeTextContent],
+        action: FakeFinishAction,
+        tool_name: str,
+        tool_call_id: str,
+        tool_call: FakeMessageToolCall,
+        llm_response_id: str,
+        _native: bool = False,
+        **_: object,
+    ) -> None:
+        if not _native:
+            type(self).constructor_calls += 1
+        self.id = id
+        self.thought = list(thought)
+        self.action = action
+        self.tool_name = tool_name
+        self.tool_call_id = tool_call_id
+        self.tool_call = tool_call
+        self.llm_response_id = llm_response_id
+
+    def model_dump_json(self, *, exclude_none: bool = True) -> str:
+        del exclude_none
+        return json.dumps(
+            {
+                "id": self.id,
+                "kind": type(self).__name__,
+                "llm_response_id": self.llm_response_id,
+                "tool_call_id": self.tool_call_id,
+                "tool_name": self.tool_name,
+            },
+            sort_keys=True,
+        )
+
+
+class FakeObservationEvent:
+    constructor_calls: ClassVar[int] = 0
+
+    def __init__(
+        self,
+        *,
+        id: str,
+        tool_name: str,
+        tool_call_id: str,
+        observation: object,
+        action_id: str,
+        _native: bool = False,
+        **_: object,
+    ) -> None:
+        if not _native:
+            type(self).constructor_calls += 1
+        self.id = id
+        self.tool_name = tool_name
+        self.tool_call_id = tool_call_id
+        self.observation = observation
+        self.action_id = action_id
+
+    def model_dump_json(self, *, exclude_none: bool = True) -> str:
+        del exclude_none
+        return json.dumps(
+            {
+                "action_id": self.action_id,
+                "id": self.id,
+                "kind": type(self).__name__,
+                "observation": type(self.observation).__name__,
+                "tool_call_id": self.tool_call_id,
+                "tool_name": self.tool_name,
+            },
+            sort_keys=True,
+        )
+
+
+class FakeState:
+    def __init__(self, events: list[object]) -> None:
+        self._events = events
+
+    @property
+    def events(self) -> list[object]:
+        FakeLocalConversation.events_accesses += 1
+        return self._events
+
+
+class FakeLocalConversation:
+    arun_calls: ClassVar[int] = 0
+    close_calls: ClassVar[int] = 0
+    events_accesses: ClassVar[int] = 0
+
+    def __init__(self, **kwargs: object) -> None:
+        self.kwargs = kwargs
+        max_iteration_per_run = kwargs["max_iteration_per_run"]
+        assert isinstance(max_iteration_per_run, int)
+        self.max_iteration_per_run = max_iteration_per_run
+        self._events: list[object] = []
+        self.state = FakeState(self._events)
+
+    async def arun(self) -> None:
+        type(self).arun_calls += 1
+        self._events.extend(
+            [
+                FakeActionEvent(
+                    id="event_action_ai4c",
+                    thought=[FakeTextContent(text="finish deterministically")],
+                    action=FakeFinishAction(message="done"),
+                    tool_name="finish",
+                    tool_call_id="call_ai4c_finish",
+                    tool_call=FakeMessageToolCall(
+                        id="call_ai4c_finish",
+                        name="finish",
+                        arguments=json.dumps({"message": "done"}),
+                        origin="completion",
+                    ),
+                    llm_response_id="response_ai4c",
+                    _native=True,
+                ),
+                FakeObservationEvent(
+                    id="event_observation_ai4c",
+                    tool_name="finish",
+                    tool_call_id="call_ai4c_finish",
+                    observation=FakeFinishObservation(text="done"),
+                    action_id="event_action_ai4c",
+                    _native=True,
+                ),
+            ]
+        )
+
+    def interrupt(self) -> None:
+        pass
+
+    def close(self) -> None:
+        type(self).close_calls += 1
+
+
+def _install_fake_openhands_modules(monkeypatch: pytest.MonkeyPatch) -> None:
+    module_names = (
+        "openhands",
+        "openhands.sdk",
+        "openhands.sdk.conversation",
+        "openhands.sdk.event",
+        "openhands.sdk.llm",
+        "openhands.sdk.testing",
+        "openhands.sdk.tool",
+        "openhands.sdk.tool.builtins",
+        "openhands.sdk.tool.builtins.finish",
+    )
+    modules = {name: ModuleType(name) for name in module_names}
+    setattr(modules["openhands.sdk"], "Agent", FakeAgent)
+    setattr(modules["openhands.sdk"], "LLM", FakeLLM)
+    setattr(modules["openhands.sdk.conversation"], "EventLog", FakeEventLog)
+    setattr(modules["openhands.sdk.conversation"], "LocalConversation", FakeLocalConversation)
+    setattr(modules["openhands.sdk.event"], "ActionEvent", FakeActionEvent)
+    setattr(modules["openhands.sdk.event"], "ObservationEvent", FakeObservationEvent)
+    setattr(modules["openhands.sdk.llm"], "Message", FakeMessage)
+    setattr(modules["openhands.sdk.llm"], "MessageToolCall", FakeMessageToolCall)
+    setattr(modules["openhands.sdk.llm"], "TextContent", FakeTextContent)
+    setattr(modules["openhands.sdk.testing"], "TestLLM", FakeTestLLM)
+    setattr(modules["openhands.sdk.tool"], "ToolDefinition", FakeToolDefinition)
+    setattr(modules["openhands.sdk.tool"], "ToolExecutor", FakeToolExecutor)
+    setattr(modules["openhands.sdk.tool.builtins.finish"], "FinishAction", FakeFinishAction)
+    setattr(modules["openhands.sdk.tool.builtins.finish"], "FinishObservation", FakeFinishObservation)
+    for name, module in modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
+
+
+def _execute_probe_source_with_fake_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> dict[str, object]:
+    _install_fake_openhands_modules(monkeypatch)
+    monkeypatch.setattr(
+        importlib.metadata,
+        "version",
+        lambda distribution: "1.31.0" if distribution == "openhands-sdk" else "0",
+    )
+    monkeypatch.setattr(sys, "argv", ["probe", "1.31.0"])
+    FakeLocalConversation.arun_calls = 0
+    FakeLocalConversation.close_calls = 0
+    FakeLocalConversation.events_accesses = 0
+    FakeActionEvent.constructor_calls = 0
+    FakeObservationEvent.constructor_calls = 0
+
+    try:
+        exec(equivalence.PROBE_SOURCE, {"__name__": "__main__"})
+    except SystemExit as exc:
+        assert exc.code in (0, None)
+    return _last_probe_json(capsys.readouterr().out)
+
+
+
+def test_probe_source_executes_native_arun_and_serializes_state_events(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    payload = _execute_probe_source_with_fake_sdk(monkeypatch, capsys)
+
+    assert payload["result"] == "PASS"
+    assert FakeLocalConversation.arun_calls == 1
+    assert FakeLocalConversation.events_accesses >= 1
+    assert FakeLocalConversation.close_calls == 1
+    assert FakeActionEvent.constructor_calls == 0
+    assert FakeObservationEvent.constructor_calls == 0
+    assert isinstance(payload["signature_digest"], str)
+    assert isinstance(payload["lifecycle_digest"], str)
+    assert isinstance(payload["event_digest"], str)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "version": "1.31.1",
+            "result": "PASS",
+            "signature_digest": "a" * 64,
+            "lifecycle_digest": "b" * 64,
+            "event_digest": "c" * 64,
+            "reason_codes": [],
+        },
+        {
+            "version": "1.31.0",
+            "result": "PASS",
+            "signature_digest": None,
+            "lifecycle_digest": "b" * 64,
+            "event_digest": "c" * 64,
+            "reason_codes": [],
+        },
+        {
+            "version": "1.31.0",
+            "result": "PASS",
+            "signature_digest": "not-a-digest",
+            "lifecycle_digest": "b" * 64,
+            "event_digest": "c" * 64,
+            "reason_codes": [],
+        },
+        {
+            "version": "1.31.0",
+            "result": "PASS",
+            "signature_digest": "a" * 64,
+            "lifecycle_digest": "b" * 64,
+            "event_digest": "c" * 64,
+            "reason_codes": ["unexpected_reason"],
+        },
+    ],
+)
+def test_parse_probe_payload_fail_closed_for_invalid_pass_payload(
+    payload: Mapping[str, object],
+) -> None:
+    report = equivalence._parse_probe_payload(payload)
+
+    assert report.result == "BLOCKED"
+    assert report.signature_digest is None
+    assert report.lifecycle_digest is None
+    assert report.event_digest is None
+    assert report.reasons == ("probe_invalid_pass_payload",)
 
 
 def test_cli_rejects_any_version_except_exact_official_release(

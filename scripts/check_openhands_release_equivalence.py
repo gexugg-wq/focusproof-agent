@@ -39,6 +39,7 @@ MINIMAL_ENV_KEYS = ("PATH", "LANG", "LC_ALL", "TMPDIR")
 PROBE_SOURCE = r"""
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import importlib.metadata
@@ -114,16 +115,61 @@ try:
         "TestLLM.from_messages": str(inspect.signature(TestLLM.from_messages)),
     }
 
+    def _stable_serialized_event(event: object) -> dict[str, object]:
+        raw = json.loads(event.model_dump_json(exclude_none=True))
+        stable: dict[str, object] = {
+            "event_type": type(event).__name__,
+            "source": raw.get("source"),
+            "tool_name": raw.get("tool_name"),
+            "tool_call_id": raw.get("tool_call_id"),
+        }
+        tool_call = raw.get("tool_call")
+        if isinstance(tool_call, dict):
+            arguments = tool_call.get("arguments")
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    pass
+            stable["tool_call"] = {
+                "arguments": arguments,
+                "name": tool_call.get("name"),
+                "origin": tool_call.get("origin"),
+            }
+        if isinstance(event, ActionEvent):
+            stable["action"] = raw.get("action")
+            stable["thought"] = raw.get("thought")
+            stable["llm_response_id_present"] = "llm_response_id" in raw
+        if isinstance(event, ObservationEvent):
+            stable["action_id_present"] = "action_id" in raw
+            stable["observation"] = raw.get("observation")
+        return stable
+
     with tempfile.TemporaryDirectory() as root:
         root_path = Path(root)
+        finish_call = MessageToolCall(
+            id="call_ai4c_finish",
+            name="finish",
+            arguments=json.dumps(
+                {"message": "done"},
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            origin="completion",
+        )
         llm = TestLLM.from_messages(
-            [Message(role="assistant", content=[TextContent(text="deterministic")])],
+            [
+                Message(
+                    role="assistant",
+                    content=[TextContent(text="finish deterministically")],
+                    tool_calls=[finish_call],
+                )
+            ],
             usage_id="ai4c-release-probe",
         )
         agent = Agent(
             llm=llm,
             tools=[],
-            include_default_tools=[],
             system_prompt="AI4C release equivalence deterministic probe.",
         )
         conversation = LocalConversation(
@@ -136,10 +182,70 @@ try:
             user_id="ai4c-release-probe",
         )
         try:
+            try:
+                asyncio.run(asyncio.wait_for(conversation.arun(), timeout=10.0))
+            except (TimeoutError, asyncio.TimeoutError):
+                if callable(getattr(conversation, "interrupt", None)):
+                    conversation.interrupt()
+                _blocked(version, "arun_timeout")
+                raise SystemExit(0)
+            except Exception:
+                if callable(getattr(conversation, "interrupt", None)):
+                    conversation.interrupt()
+                _blocked(version, "arun_failed")
+                raise SystemExit(0)
+
+            events = list(conversation.state.events)
+            action_events = [
+                (index, event)
+                for index, event in enumerate(events)
+                if isinstance(event, ActionEvent)
+                and getattr(event, "tool_name", None) == "finish"
+            ]
+            observation_events = [
+                (index, event)
+                for index, event in enumerate(events)
+                if isinstance(event, ObservationEvent)
+                and getattr(event, "tool_name", None) == "finish"
+            ]
+            if not action_events:
+                _blocked(version, "native_action_missing")
+                raise SystemExit(0)
+            if not observation_events:
+                _blocked(version, "native_observation_missing")
+                raise SystemExit(0)
+
+            action_index, action = action_events[0]
+            observation_index, observation = observation_events[0]
+            if action_index >= observation_index:
+                _blocked(version, "event_order_failed")
+                raise SystemExit(0)
+            if action.tool_call_id != observation.tool_call_id:
+                _blocked(version, "event_tool_call_mismatch")
+                raise SystemExit(0)
+            if observation.action_id != action.id:
+                _blocked(version, "event_action_id_mismatch")
+                raise SystemExit(0)
+            if not isinstance(action.action, FinishAction):
+                _blocked(version, "finish_action_missing")
+                raise SystemExit(0)
+            if action.action.message != "done":
+                _blocked(version, "finish_action_mismatch")
+                raise SystemExit(0)
+            if not isinstance(observation.observation, FinishObservation):
+                _blocked(version, "finish_observation_missing")
+                raise SystemExit(0)
+            if getattr(observation.observation, "is_error", False):
+                _blocked(version, "finish_observation_error")
+                raise SystemExit(0)
+
             lifecycle = {
                 "agent_type": type(agent).__name__,
                 "conversation_type": type(conversation).__name__,
                 "events_type": type(conversation.state.events).__name__,
+                "arun_executed": True,
+                "native_action_event_count": len(action_events),
+                "native_observation_event_count": len(observation_events),
                 "llm_is_sdk_llm": isinstance(llm, LLM),
                 "test_llm_type": type(llm).__name__,
                 "has_arun": callable(getattr(conversation, "arun")),
@@ -147,47 +253,43 @@ try:
                 "has_close": callable(getattr(conversation, "close")),
                 "max_iteration_per_run": conversation.max_iteration_per_run,
             }
+            event_sequence = [
+                "ActionEvent" if isinstance(action, ActionEvent) else type(action).__name__,
+                "ObservationEvent"
+                if isinstance(observation, ObservationEvent)
+                else type(observation).__name__,
+            ]
+            event_payload = {
+                "sequence": event_sequence,
+                "tool_call_id_matches": action.tool_call_id == observation.tool_call_id,
+                "observation_action_id_matches": observation.action_id == action.id,
+                "action_before_observation": action_index < observation_index,
+                "terminal": {
+                    "action_type": type(action.action).__name__,
+                    "finish_message": action.action.message,
+                    "observation_type": type(observation.observation).__name__,
+                    "observation_is_error": getattr(
+                        observation.observation,
+                        "is_error",
+                        False,
+                    ),
+                },
+                "serialized": [
+                    _stable_serialized_event(action),
+                    _stable_serialized_event(observation),
+                ],
+            }
         finally:
             conversation.close()
 
-    tool_call = MessageToolCall(
-        id="call_ai4c_finish",
-        name="FinishTool",
-        arguments='{"message":"done"}',
-        origin="completion",
-    )
-    action = ActionEvent(
-        id="event_action_ai4c",
-        timestamp="2026-07-22T00:00:00",
-        thought=[TextContent(text="finish deterministically")],
-        action=FinishAction(message="done"),
-        tool_name="FinishTool",
-        tool_call_id="call_ai4c_finish",
-        tool_call=tool_call,
-        llm_response_id="response_ai4c",
-    )
-    observation = ObservationEvent(
-        id="event_observation_ai4c",
-        timestamp="2026-07-22T00:00:01",
-        tool_name="FinishTool",
-        tool_call_id="call_ai4c_finish",
-        observation=FinishObservation.from_text(text="done"),
-        action_id=action.id,
-    )
-    events = [action, observation]
-    event_payload = {
-        "sequence": [type(event).__name__ for event in events],
-        "tool_call_ids": [action.tool_call_id, observation.tool_call_id],
-        "action_before_observation": events.index(action) < events.index(observation),
-        "serialized": [
-            json.loads(event.model_dump_json(exclude_none=True)) for event in events
-        ],
-    }
     if event_payload["sequence"] != ["ActionEvent", "ObservationEvent"]:
         _blocked(version, "event_order_failed")
         raise SystemExit(0)
-    if action.tool_call_id != observation.tool_call_id:
+    if not event_payload["tool_call_id_matches"]:
         _blocked(version, "event_tool_call_mismatch")
+        raise SystemExit(0)
+    if not event_payload["observation_action_id_matches"]:
+        _blocked(version, "event_action_id_mismatch")
         raise SystemExit(0)
 
     print(
@@ -307,17 +409,42 @@ def _parse_probe_payload(payload: Mapping[str, object] | None) -> EquivalenceRep
         result = "BLOCKED"
     reasons_value = payload.get("reason_codes")
     reasons: list[str] = []
+    reasons_are_valid = isinstance(reasons_value, list)
     if isinstance(reasons_value, list):
         for reason in reasons_value:
             safe_reason = _sanitize_reason(reason)
-            if safe_reason is not None:
+            if safe_reason is None:
+                reasons_are_valid = False
+            else:
                 reasons.append(safe_reason)
+    signature_digest = _digest_value(payload, "signature_digest")
+    lifecycle_digest = _digest_value(payload, "lifecycle_digest")
+    event_digest = _digest_value(payload, "event_digest")
+    if (
+        result == "PASS"
+        and (
+            version != OFFICIAL_VERSION
+            or not reasons_are_valid
+            or reasons
+            or signature_digest is None
+            or lifecycle_digest is None
+            or event_digest is None
+        )
+    ):
+        return EquivalenceReport(
+            version=version,
+            result="BLOCKED",
+            signature_digest=None,
+            lifecycle_digest=None,
+            event_digest=None,
+            reasons=("probe_invalid_pass_payload",),
+        )
     return EquivalenceReport(
         version=version,
         result=result,
-        signature_digest=_digest_value(payload, "signature_digest"),
-        lifecycle_digest=_digest_value(payload, "lifecycle_digest"),
-        event_digest=_digest_value(payload, "event_digest"),
+        signature_digest=signature_digest,
+        lifecycle_digest=lifecycle_digest,
+        event_digest=event_digest,
         reasons=tuple(reasons),
     )
 
