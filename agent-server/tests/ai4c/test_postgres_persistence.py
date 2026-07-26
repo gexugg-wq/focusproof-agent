@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import os
 from pathlib import Path
 from threading import Barrier
+from time import monotonic, sleep
 from typing import Any, cast
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
@@ -14,10 +15,17 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, create_engine, inspect, text
 from sqlalchemy.engine import URL
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
 from focusproof.persistence.database import create_database_engine, create_session_factory
-from focusproof.persistence.repositories import StoredEvidence, StoredReview, StoredSession
+from focusproof.persistence.repositories import (
+    SqlAuditEventRepository,
+    StoredAuditEvent,
+    StoredEvidence,
+    StoredReview,
+    StoredSession,
+)
 from focusproof.persistence.unit_of_work import UnitOfWorkFactory
 
 pytestmark = pytest.mark.postgres
@@ -281,10 +289,118 @@ def test_postgres_native_reference_ids_survive_engine_restart(
         restarted_engine.dispose()
 
 
-def test_postgres_native_event_idempotency_survives_concurrent_replay(
+def test_postgres_replayed_audit_source_waits_for_uncommitted_canonical_event(
+    migrated_postgres_engine: Engine,
+) -> None:
+    session = _session("sess_audit_wait", owner_user_id="owner_audit_wait")
+    uow_factory = UnitOfWorkFactory(create_session_factory(migrated_postgres_engine))
+    with uow_factory() as uow:
+        uow.sessions.create(session)
+        uow.commit()
+
+    session_factory = create_session_factory(migrated_postgres_engine)
+    main_session = session_factory()
+    try:
+        main_session.execute(
+            text(
+                "select 1 from learning_sessions "
+                "where session_id = :session_id for update"
+            ),
+            {"session_id": "sess_audit_wait"},
+        )
+        canonical = SqlAuditEventRepository(main_session).append(
+            "sess_audit_wait",
+            "verification.completed",
+            "tool",
+            {"verified": True},
+            source_openhands_event_id="native_audit_wait",
+            event_id="evt_audit_wait_canonical",
+        )
+        worker_application_name = "ai4c_audit_wait_worker"
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                _replay_audit_source_with_application_name,
+                session_factory,
+                worker_application_name,
+            )
+            _wait_for_worker_lock(migrated_postgres_engine, worker_application_name)
+            main_session.commit()
+            replay = future.result(timeout=5)
+    finally:
+        main_session.close()
+
+    assert replay == canonical
+    with uow_factory() as uow:
+        audit_events = uow.audit_events.list("sess_audit_wait")
+    assert [event.event_id for event in audit_events] == ["evt_audit_wait_canonical"]
+    assert [event.sequence for event in audit_events] == [1]
+
+
+def test_postgres_distinct_late_review_is_history_only_after_reviewed_projection(
     postgres_uow_factory: UnitOfWorkFactory,
 ) -> None:
-    session = _session("sess_concurrent", owner_user_id="owner_concurrent")
+    session = _session("sess_review_terminal", owner_user_id="owner_review_terminal")
+    first_review = _review(
+        "rev_terminal_first",
+        session,
+        review_status="completed",
+        source_openhands_event_id="native_review_terminal_first",
+    )
+    later_review = _review(
+        "rev_terminal_later",
+        session,
+        review_status="completed",
+        source_openhands_event_id="native_review_terminal_later",
+    ).model_copy(update={"score": 11, "result": {"score": 11, "status": "late"}})
+
+    with postgres_uow_factory() as uow:
+        uow.sessions.create(session)
+        uow.reviews.add_from_native_event(first_review)
+        uow.commit()
+
+    with postgres_uow_factory() as uow:
+        terminal_session = uow.sessions.get("sess_review_terminal")
+    assert terminal_session is not None
+    assert terminal_session.status == "reviewed"
+    assert terminal_session.review_result == {"score": 92, "status": "completed"}
+    terminal_version = terminal_session.version
+
+    with postgres_uow_factory() as uow:
+        stored_later_review = uow.reviews.add_from_native_event(later_review)
+        uow.commit()
+
+    assert stored_later_review.review_id == "rev_terminal_later"
+    with postgres_uow_factory() as uow:
+        stored_session = uow.sessions.get("sess_review_terminal")
+        reviews = uow.reviews.list_for_session("sess_review_terminal")
+
+    assert stored_session is not None
+    assert stored_session.status == "reviewed"
+    assert stored_session.review_result == {"score": 92, "status": "completed"}
+    assert stored_session.version == terminal_version
+    assert [review.review_id for review in reviews] == [
+        "rev_terminal_first",
+        "rev_terminal_later",
+    ]
+
+    with postgres_uow_factory() as uow:
+        duplicate = uow.reviews.add_from_native_event(
+            later_review.model_copy(update={"review_id": "rev_terminal_duplicate"})
+        )
+        uow.commit()
+
+    assert duplicate.review_id == "rev_terminal_later"
+
+
+@pytest.mark.parametrize("attempt", range(5))
+def test_postgres_native_event_idempotency_survives_concurrent_replay(
+    postgres_uow_factory: UnitOfWorkFactory,
+    attempt: int,
+) -> None:
+    session_id = f"sess_concurrent_{attempt}"
+    audit_source = f"native_audit_concurrent_{attempt}"
+    review_source = f"native_review_concurrent_{attempt}"
+    session = _session(session_id, owner_user_id="owner_concurrent")
     with postgres_uow_factory() as uow:
         uow.sessions.create(session)
         uow.commit()
@@ -292,7 +408,15 @@ def test_postgres_native_event_idempotency_survives_concurrent_replay(
     barrier = Barrier(4)
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = [
-            executor.submit(_replay_same_native_events, postgres_uow_factory, barrier, i)
+            executor.submit(
+                _replay_same_native_events,
+                postgres_uow_factory,
+                barrier,
+                i,
+                session_id,
+                audit_source,
+                review_source,
+            )
             for i in range(4)
         ]
         results = [future.result(timeout=10) for future in futures]
@@ -303,36 +427,79 @@ def test_postgres_native_event_idempotency_survives_concurrent_replay(
     assert len(review_ids) == 1
 
     with postgres_uow_factory() as uow:
-        audit_events = uow.audit_events.list("sess_concurrent")
-        reviews = uow.reviews.list_for_session("sess_concurrent")
+        audit_events = uow.audit_events.list(session_id)
+        reviews = uow.reviews.list_for_session(session_id)
 
     assert len(audit_events) == 1
     assert audit_events[0].sequence == 1
-    assert audit_events[0].source_openhands_event_id == "native_audit_concurrent"
+    assert audit_events[0].source_openhands_event_id == audit_source
     assert len(reviews) == 1
-    assert reviews[0].source_openhands_event_id == "native_review_concurrent"
+    assert reviews[0].source_openhands_event_id == review_source
+
+
+def _replay_audit_source_with_application_name(
+    session_factory: sessionmaker[Session],
+    application_name: str,
+) -> StoredAuditEvent:
+    with session_factory() as session:
+        session.execute(text(f"set application_name to {_quote_literal(application_name)}"))
+        event = SqlAuditEventRepository(session).append(
+            "sess_audit_wait",
+            "verification.completed",
+            "tool",
+            {"verified": True},
+            source_openhands_event_id="native_audit_wait",
+        )
+        session.commit()
+        return event
+
+
+def _wait_for_worker_lock(
+    engine: Engine,
+    application_name: str,
+    *,
+    timeout_seconds: float = 5.0,
+) -> None:
+    deadline = monotonic() + timeout_seconds
+    while monotonic() < deadline:
+        with engine.connect() as connection:
+            waiting = connection.execute(
+                text(
+                    "select count(*) from pg_stat_activity "
+                    "where application_name = :application_name "
+                    "and wait_event_type = 'Lock'"
+                ),
+                {"application_name": application_name},
+            ).scalar_one()
+        if int(waiting) > 0:
+            return
+        sleep(0.05)
+    pytest.fail("postgres_worker_did_not_block_on_canonical_audit_replay")
 
 
 def _replay_same_native_events(
     uow_factory: UnitOfWorkFactory,
     barrier: Barrier,
     index: int,
+    session_id: str,
+    audit_source: str,
+    review_source: str,
 ) -> tuple[str, str]:
     barrier.wait(timeout=5)
     with uow_factory() as uow:
         event = uow.audit_events.append(
-            "sess_concurrent",
+            session_id,
             "verification.completed",
             "tool",
             {"verified": True},
-            source_openhands_event_id="native_audit_concurrent",
+            source_openhands_event_id=audit_source,
         )
         review = uow.reviews.add_from_native_event(
             _review(
                 f"rev_concurrent_{index}",
-                _session("sess_concurrent", owner_user_id="owner_concurrent"),
+                _session(session_id, owner_user_id="owner_concurrent"),
                 review_status="completed",
-                source_openhands_event_id="native_review_concurrent",
+                source_openhands_event_id=review_source,
             )
         )
         uow.commit()
@@ -438,6 +605,10 @@ def _quote_identifier(identifier: str) -> str:
     ):
         raise AssertionError("invalid postgres test identifier")
     return f'"{identifier}"'
+
+
+def _quote_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
 
 
 def _table_names(engine: Engine) -> set[str]:

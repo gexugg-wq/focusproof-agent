@@ -482,6 +482,7 @@ class SqlAuditEventRepository:
         source_openhands_event_id: str | None,
         event_id: str | None = None,
     ) -> StoredAuditEvent:
+        _lock_learning_session(self._session, session_id)
         if event_id is not None:
             existing_model = self._session.get(AuditEventModel, event_id)
             if existing_model is not None:
@@ -541,11 +542,23 @@ class SqlAuditEventRepository:
         return _stored_audit_event(model) if model is not None else None
 
 
+def _lock_learning_session(
+    session: Session,
+    session_id: str,
+) -> LearningSessionModel | None:
+    return session.scalar(
+        select(LearningSessionModel)
+        .where(LearningSessionModel.session_id == session_id)
+        .with_for_update()
+    )
+
+
 class SqlReviewRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
     def add_from_native_event(self, record: StoredReview) -> StoredReview:
+        session = _lock_learning_session(self._session, record.session_id)
         if record.source_openhands_event_id is not None:
             existing = self._session.scalar(
                 select(ReviewModel).where(
@@ -568,8 +581,7 @@ class SqlReviewRepository:
             created_at=record.created_at,
         )
         self._session.add(model)
-        session = self._session.get(LearningSessionModel, record.session_id)
-        if session is not None:
+        if session is not None and session.status != "reviewed":
             session.review_result_json = record.result
             session.status = (
                 "reviewed" if record.review_status == "completed" else record.review_status
