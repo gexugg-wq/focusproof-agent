@@ -321,6 +321,7 @@ class SqlSessionRepository:
             update(LearningSessionModel)
             .where(
                 LearningSessionModel.session_id == session_id,
+                LearningSessionModel.status != "reviewed",
                 LearningSessionModel.version == expected_version,
             )
             .values(
