@@ -19,6 +19,7 @@ from fastapi.routing import APIRoute
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sqlalchemy import Engine
+from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.datastructures import Headers
@@ -457,6 +458,45 @@ def create_app(
     return application
 
 
+def create_staging_test_app() -> FastAPI:
+    """Create the credential-free staging proof app with the official SDK TestLLM."""
+    if os.environ.get("FOCUSPROOF_PROFILE") != "staging":
+        raise RuntimeError("staging TestLLM app requires FOCUSPROOF_PROFILE=staging")
+
+    from openhands.sdk.llm import Message, MessageToolCall, TextContent
+    from openhands.sdk.testing import TestLLM
+
+    def staging_test_llm(session_id: str) -> TestLLM:
+        del session_id
+        draft_call = MessageToolCall(
+            id="call_staging_review_draft",
+            name="focusproof_review_draft",
+            arguments=json.dumps(
+                {
+                    "credibility_findings": ["Evidence is repository-backed."],
+                    "understanding_findings": [
+                        "The learner explains that durable IDs survive restart."
+                    ],
+                    "contradictions": [],
+                    "recommended_next_step": "Add one concrete replay example.",
+                    "confidence": 0.8,
+                }
+            ),
+            origin="completion",
+        )
+        return TestLLM.from_messages(
+            [
+                Message(
+                    role="assistant",
+                    content=[TextContent(text="Submit the staging review draft")],
+                    tool_calls=[draft_call],
+                )
+            ]
+        )
+
+    return create_app(llm_factory=staging_test_llm)
+
+
 def _validate_database_path(database_url: str, data_dir: Path) -> None:
     url = make_url(database_url)
     if not url.drivername.startswith("sqlite"):
@@ -572,6 +612,35 @@ def _install_routes(
             "openhands": get_openhands_capabilities(),
             "readiness": readiness,
         }
+
+    @application.get("/ready")
+    def ready(request: Request) -> Any:
+        readiness_error = getattr(
+            request.app.state,
+            "readiness_error",
+            "database_unavailable",
+        )
+        if readiness_error is not None:
+            return JSONResponse(
+                status_code=503,
+                content={"code": readiness_error, "retryable": True},
+            )
+        engine = getattr(request.app.state, "engine", None)
+        manager = getattr(request.app.state, "conversation_manager", None)
+        if engine is None or manager is None:
+            return JSONResponse(
+                status_code=503,
+                content={"code": "database_unavailable", "retryable": True},
+            )
+        try:
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+        except SQLAlchemyError:
+            return JSONResponse(
+                status_code=503,
+                content={"code": "database_unavailable", "retryable": True},
+            )
+        return {"status": "ready"}
 
     @application.get("/openhands/capabilities")
     def openhands_capabilities() -> dict[str, Any]:

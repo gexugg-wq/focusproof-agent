@@ -1,0 +1,163 @@
+name: focusproof-staging
+
+x-backend-image: &backend-image
+  image: focusproof-agent-server:staging
+
+services:
+  postgres:
+    image: postgres:16-bookworm@sha256:ec2448d32297f61000a4b70edc2d27c9dfaedfc28cee3b827233fd4f05392dc8
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: focusproof
+      POSTGRES_USER: focusproof
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - source: postgres_password
+        mode: 0440
+    volumes:
+      - focusproof-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U focusproof -d focusproof"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - private
+    stop_grace_period: 30s
+
+  migrate:
+    <<: *backend-image
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    secrets:
+      - source: postgres_password
+        mode: 0440
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        export DATABASE_URL="postgresql+psycopg://focusproof:$$(cat /run/secrets/postgres_password)@postgres:5432/focusproof"
+        cp /app/alembic.ini /tmp/alembic.ini
+        sed -i "s|^sqlalchemy.url =.*|sqlalchemy.url = $${DATABASE_URL}|" /tmp/alembic.ini
+        ALEMBIC_CONFIG=/tmp/alembic.ini alembic upgrade head
+    networks:
+      - private
+
+  oidc-issuer:
+    image: python:3.12-slim-bookworm@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d
+    user: "10001:10001"
+    restart: unless-stopped
+    command:
+      - python
+      - -c
+      - "import http.server,ssl; s=http.server.ThreadingHTTPServer(('0.0.0.0',8443),http.server.SimpleHTTPRequestHandler); c=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); c.load_cert_chain('/run/secrets/oidc_tls_cert','/run/secrets/oidc_tls_key'); s.socket=c.wrap_socket(s.socket,server_side=True); s.serve_forever()"
+    working_dir: /run/secrets
+    secrets:
+      - source: oidc_jwks
+        target: jwks.json
+        mode: 0440
+      - source: oidc_tls_cert
+        mode: 0440
+      - source: oidc_tls_key
+        mode: 0440
+    networks:
+      private:
+        aliases: [oidc-issuer]
+
+  agent-server:
+    <<: *backend-image
+    build:
+      context: ..
+      dockerfile: deploy/agent-server.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      oidc-issuer:
+        condition: service_started
+    environment:
+      FOCUSPROOF_PROFILE: staging
+      FOCUSPROOF_DATA_DIR: /app/var
+      FOCUSPROOF_OIDC_ISSUER: https://oidc-issuer:8443
+      FOCUSPROOF_OIDC_AUDIENCE: focusproof-api
+      FOCUSPROOF_OIDC_JWKS_URI: https://oidc-issuer:8443/jwks.json
+      FOCUSPROOF_OIDC_ALLOWED_ALGORITHMS: RS256
+      LITELLM_LOCAL_MODEL_COST_MAP: "true"
+      SSL_CERT_FILE: /run/secrets/oidc_ca
+    secrets:
+      - source: postgres_password
+        mode: 0440
+      - source: oidc_fingerprint_key
+        mode: 0440
+      - source: oidc_ca
+        mode: 0440
+    volumes:
+      - focusproof-openhands-data:/app/var
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        export DATABASE_URL="postgresql+psycopg://focusproof:$$(cat /run/secrets/postgres_password)@postgres:5432/focusproof"
+        export FOCUSPROOF_OIDC_FINGERPRINT_KEY="$$(cat /run/secrets/oidc_fingerprint_key)"
+        exec uvicorn focusproof.api.app:create_staging_test_app --factory --host 0.0.0.0 --port 8000 --workers 1
+    ports:
+      - "127.0.0.1:18080:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+      start_period: 10s
+    networks:
+      - private
+    stop_grace_period: 30s
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/frontend.Dockerfile
+    image: focusproof-frontend:staging
+    restart: unless-stopped
+    depends_on:
+      agent-server:
+        condition: service_healthy
+    environment:
+      FOCUSPROOF_API_BASE_URL: http://agent-server:8000
+      NEXT_PUBLIC_OIDC_ISSUER: https://oidc-issuer:8443
+      NEXT_PUBLIC_OIDC_CLIENT_ID: focusproof-staging
+      NEXT_PUBLIC_OIDC_AUDIENCE: focusproof-api
+      NEXT_PUBLIC_OIDC_REDIRECT_URI: http://127.0.0.1:13000/learning
+    ports:
+      - "127.0.0.1:13000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+      start_period: 10s
+    networks:
+      - private
+    stop_grace_period: 30s
+
+secrets:
+  postgres_password:
+    file: ${FOCUSPROOF_STAGING_POSTGRES_PASSWORD_FILE}
+  oidc_fingerprint_key:
+    file: ${FOCUSPROOF_STAGING_OIDC_FINGERPRINT_KEY_FILE}
+  oidc_jwks:
+    file: ${FOCUSPROOF_STAGING_OIDC_JWKS_FILE}
+  oidc_tls_cert:
+    file: ${FOCUSPROOF_STAGING_OIDC_TLS_CERT_FILE}
+  oidc_tls_key:
+    file: ${FOCUSPROOF_STAGING_OIDC_TLS_KEY_FILE}
+  oidc_ca:
+    file: ${FOCUSPROOF_STAGING_OIDC_CA_FILE}
+
+volumes:
+  focusproof-postgres-data:
+  focusproof-openhands-data:
+
+networks:
+  private:

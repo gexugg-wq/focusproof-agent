@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+var/
+.venv/
+agent-server/tests/
+frontend/tests/
+frontend/e2e/
+frontend/node_modules/
+frontend/.next/
+frontend/test-results/
+**/__pycache__/
+.git/
+docs/
