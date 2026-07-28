@@ -139,7 +139,7 @@ class OidcTokenVerifier:
                 audience=self._settings.audience,
                 issuer=self._settings.issuer,
                 leeway=self._settings.clock_skew_seconds,
-                options={"require": ["iss", "aud", "sub", "exp", "iat", "nbf"]},
+                options={"require": ["iss", "aud", "sub", "exp", "iat"]},
             )
         except Exception as exc:
             raise InvalidTokenError("token verification failed") from exc

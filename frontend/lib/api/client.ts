@@ -1,5 +1,5 @@
 import { ApiError, mapApiError } from "./errors";
-import type { CreateSessionInput, FocusProofEvent, RuntimeReviewResult, SessionDetail, SubmitEvidenceRequest, SyncResponse } from "./contracts";
+import type { CreateSessionInput, FocusProofEvent, ReviewProjection, RuntimeReviewResult, SessionDetail, SubmitEvidenceRequest, SyncResponse } from "./contracts";
 import { fetchWithOidcAccessToken } from "@/lib/auth/browser";
 
 async function parseResponsePayload(response: Response): Promise<unknown> {
@@ -52,5 +52,6 @@ export const focusProofApi = {
   submitEvidence: (sessionId: string, input: SubmitEvidenceRequest) => requestJson<SyncResponse>("/sessions/" + encodeURIComponent(sessionId) + "/evidence", { method: "POST", body: JSON.stringify(input) }),
   submitAnswer: (sessionId: string, input: { questionId: string; answer: string }) => requestJson<SyncResponse>("/sessions/" + encodeURIComponent(sessionId) + "/answer", { method: "POST", body: JSON.stringify(input) }),
   requestReview: (sessionId: string) => requestJson<RuntimeReviewResult>("/sessions/" + encodeURIComponent(sessionId) + "/review", { method: "POST", body: JSON.stringify({}) }),
-  getEvents: (sessionId: string) => requestJson<{ events: FocusProofEvent[] }>("/sessions/" + encodeURIComponent(sessionId) + "/events")
+  getEvents: (sessionId: string) => requestJson<{ events: FocusProofEvent[] }>("/sessions/" + encodeURIComponent(sessionId) + "/events"),
+  getReviews: (sessionId: string) => requestJson<{ reviews: ReviewProjection[] }>("/sessions/" + encodeURIComponent(sessionId) + "/reviews")
 };

@@ -25,6 +25,12 @@ PROVIDER_KEYS: Final = (
 )
 MINIMAL_ENV_KEYS: Final = {"PATH", "LANG", "LC_ALL"}
 ProbeOutcome = str | tuple[str, str] | BaseException
+PLAYWRIGHT_CHROMIUM_PROBE: Final = (
+    "node",
+    "-e",
+    "const { chromium } = require(process.argv[1]); const { existsSync } = require('node:fs'); process.exit(existsSync(chromium.executablePath()) ? 0 : 1)",
+    str(PROJECT_ROOT / "frontend" / "node_modules" / "@playwright" / "test"),
+)
 
 
 class ProbeHarness:
@@ -583,6 +589,72 @@ def test_require_capabilities_all_path_preserves_order_and_reasons() -> None:
     assert str(exc_info.value) == (
         "missing required capabilities: container_cli, compose, postgres_client, linux_arch"
     )
+
+
+def test_staging_browser_preflight_requires_linux_node_certutil_and_playwright_chromium(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _configure(
+        monkeypatch,
+        available=("docker", "psql", "node", "certutil"),
+        results={
+            ("docker", "--version"): "Docker version 26.1.4, build test",
+            ("docker", "compose", "version"): "Docker Compose version v2.29.1",
+            ("psql", "--version"): "psql (PostgreSQL) 16.3",
+            ("node", "--version"): "v22.14.0",
+            PLAYWRIGHT_CHROMIUM_PROBE: "",
+        },
+    )
+
+    capabilities.require_staging_browser_capabilities()
+
+    assert ("node", "--version") in [call["args"] for call in harness.calls]
+    assert PLAYWRIGHT_CHROMIUM_PROBE in [call["args"] for call in harness.calls]
+
+
+@pytest.mark.parametrize(
+    ("available", "results", "expected_names"),
+    (
+        (
+            ("docker", "psql", "certutil"),
+            {},
+            ("node", "playwright_browser"),
+        ),
+        (
+            ("docker", "psql", "node"),
+            {
+                ("node", "--version"): "v22.14.0",
+                PLAYWRIGHT_CHROMIUM_PROBE: "",
+            },
+            ("certutil",),
+        ),
+        (
+            ("docker", "psql", "node", "certutil"),
+            {
+                ("node", "--version"): "v22.14.0",
+                PLAYWRIGHT_CHROMIUM_PROBE: subprocess.CalledProcessError(
+                    1, list(PLAYWRIGHT_CHROMIUM_PROBE)
+                ),
+            },
+            ("playwright_browser",),
+        ),
+    ),
+)
+def test_staging_browser_preflight_fails_closed_when_a_required_trust_capability_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    available: Sequence[str],
+    results: Mapping[tuple[str, ...], ProbeOutcome],
+    expected_names: tuple[str, ...],
+) -> None:
+    harness = _configure(monkeypatch, available=available, results=results)
+
+    with pytest.raises(capabilities.CapabilityUnavailableError) as exc_info:
+        capabilities.require_staging_browser_capabilities()
+
+    assert exc_info.value.names == expected_names
+    assert all(reason.startswith(("node:", "certutil:", "playwright_browser:")) for reason in exc_info.value.reasons)
+    _assert_sanitized(" ".join(exc_info.value.reasons))
+    assert all(set(call["env"]).issubset(MINIMAL_ENV_KEYS) for call in harness.calls)
 
 
 def test_subprocess_probes_use_arrays_check_timeout_and_minimum_environment(

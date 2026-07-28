@@ -41,6 +41,7 @@ strict = true
 mypy_path = ["agent-server"]
 
 [tool.pytest.ini_options]
+addopts = "-m 'not real_llm and not postgres and not staging_external'"
 markers = [
     "real_llm: runs the separately authorized bounded OpenHands provider smoke",
     "postgres: requires an explicitly provided disposable PostgreSQL target",

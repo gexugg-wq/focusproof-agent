@@ -17,19 +17,29 @@ export function SessionWorkspace({ sessionId }: { sessionId: string }) {
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const sessionQuery = useQuery({ queryKey: ["session", sessionId], queryFn: () => focusProofApi.getSession(sessionId) });
   const eventsQuery = useQuery({ queryKey: ["events", sessionId], queryFn: () => focusProofApi.getEvents(sessionId) });
+  const reviewsQuery = useQuery({ queryKey: ["reviews", sessionId], queryFn: () => focusProofApi.getReviews(sessionId) });
   const evidence = useMutation({
     mutationFn: (payload: SubmitEvidenceRequest) => focusProofApi.submitEvidence(sessionId, payload),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
       void queryClient.invalidateQueries({ queryKey: ["events", sessionId] });
+      void queryClient.invalidateQueries({ queryKey: ["reviews", sessionId] });
     }
   });
-  const answer = useMutation({ mutationFn: (input: { questionId: string; answer: string }) => focusProofApi.submitAnswer(sessionId, input) });
+  const answer = useMutation({
+    mutationFn: (input: { questionId: string; answer: string }) => focusProofApi.submitAnswer(sessionId, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
+      void queryClient.invalidateQueries({ queryKey: ["events", sessionId] });
+      void queryClient.invalidateQueries({ queryKey: ["reviews", sessionId] });
+    }
+  });
   const review = useMutation({
     mutationFn: () => focusProofApi.requestReview(sessionId),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
       void queryClient.invalidateQueries({ queryKey: ["events", sessionId] });
+      void queryClient.invalidateQueries({ queryKey: ["reviews", sessionId] });
     }
   });
   if (sessionQuery.isLoading) return <main className="p-6">Loading session...</main>;
@@ -67,9 +77,9 @@ export function SessionWorkspace({ sessionId }: { sessionId: string }) {
         <ReviewPanel session={session} onRequestReview={() => review.mutateAsync()} onSubmitAnswer={(input) => answer.mutateAsync(input)} />
       </div>
       <div className="grid h-fit gap-2">
-        {eventsQuery.error ? (
+        {eventsQuery.error || reviewsQuery.error ? (
           <p className="text-sm text-red-700" role="alert">
-            {getSafeErrorMessage(eventsQuery.error)}
+            {getSafeErrorMessage(eventsQuery.error ?? reviewsQuery.error)}
           </p>
         ) : null}
         <BuildLog events={eventsQuery.data?.events ?? []} />

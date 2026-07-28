@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { webcrypto } from "node:crypto";
 import { OidcClient } from "oidc-client-ts";
 import * as React from "react";
 import { render, screen } from "@testing-library/react";
@@ -13,6 +14,12 @@ import {
   type BrowserOidcUser
 } from "@/lib/auth/browser";
 import { getForwardableBearer, isForwardableBearer } from "@/lib/auth/server";
+
+const routerReplace = vi.hoisted(() => vi.fn());
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: routerReplace })
+}));
 
 const tokenSentinel = "token-sentinel.header.payload";
 const context = (path: string[]) => ({ params: Promise.resolve({ path }) });
@@ -221,6 +228,7 @@ describe("browser OIDC identity boundary", () => {
     document.cookie = "focusproof_test=; Max-Age=0; path=/";
     window.history.replaceState({}, "", "/learning");
     vi.restoreAllMocks();
+    routerReplace.mockReset();
   });
 
   afterEach(() => {
@@ -229,8 +237,8 @@ describe("browser OIDC identity boundary", () => {
 
   it("does not mount business children before browser identity initialization completes", async () => {
     vi.stubGlobal("React", React);
-    let finishInitialization: (ready: boolean) => void = () => undefined;
-    const initialization = new Promise<boolean>((resolve) => {
+    let finishInitialization: (ready: Awaited<ReturnType<typeof browserAuth.initializeBrowserOidc>>) => void = () => undefined;
+    const initialization = new Promise<Awaited<ReturnType<typeof browserAuth.initializeBrowserOidc>>>((resolve) => {
       finishInitialization = resolve;
     });
     vi.spyOn(browserAuth, "initializeBrowserOidc").mockReturnValue(initialization);
@@ -238,8 +246,28 @@ describe("browser OIDC identity boundary", () => {
     render(React.createElement(Providers, null, React.createElement("div", null, "protected workspace")));
     expect(screen.queryByText("protected workspace")).not.toBeInTheDocument();
 
-    finishInitialization(true);
+    finishInitialization({ authenticated: true });
     expect(await screen.findByText("protected workspace")).toBeInTheDocument();
+  });
+
+  it("restores a validated callback route through the Next client router after initialization", async () => {
+    vi.stubGlobal("React", React);
+    let finishInitialization: (ready: Awaited<ReturnType<typeof browserAuth.initializeBrowserOidc>>) => void = () => undefined;
+    const initialization = new Promise<Awaited<ReturnType<typeof browserAuth.initializeBrowserOidc>>>((resolve) => {
+      finishInitialization = resolve;
+    });
+    vi.spyOn(browserAuth, "initializeBrowserOidc").mockReturnValue(initialization);
+
+    render(React.createElement(Providers, null, React.createElement("div", null, "protected workspace")));
+    expect(screen.queryByText("protected workspace")).not.toBeInTheDocument();
+
+    finishInitialization({
+      authenticated: true,
+      returnTo: "/sessions/sess_recovery?tab=review#proof"
+    });
+
+    expect(await screen.findByText("protected workspace")).toBeInTheDocument();
+    expect(routerReplace).toHaveBeenCalledWith("/sessions/sess_recovery?tab=review#proof");
   });
 
   it("configures provider-neutral code flow, PKCE, no renewal, and split stores", () => {
@@ -279,6 +307,48 @@ describe("browser OIDC identity boundary", () => {
     expect(sessionStorage.length).toBe(0);
     expect(document.cookie).not.toContain(tokenSentinel);
     expect(window.location.href).not.toContain(tokenSentinel);
+  });
+
+  it("surfaces a validated same-origin callback return route without losing the in-memory token", async () => {
+    const manager = new FakeOidcManager();
+    manager.callbackUser = {
+      access_token: tokenSentinel,
+      expired: false,
+      state: { returnTo: "/sessions/sess_recovery?tab=review#proof" }
+    };
+    window.history.replaceState({}, "", "/?code=code-value&state=expected");
+    const identity = new BrowserOidcIdentity(manager);
+
+    await expect(identity.initialize(window.location.href)).resolves.toEqual({
+      authenticated: true,
+      returnTo: "/sessions/sess_recovery?tab=review#proof"
+    });
+
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
+    await identity.fetch("/api/focusproof/sessions/sess_recovery", undefined, fetchImpl);
+    expect(new Headers(fetchImpl.mock.calls[0][1].headers).get("authorization"))
+      .toBe(`Bearer ${tokenSentinel}`);
+    expect(window.location.href).toBe(`${window.location.origin}/`);
+  });
+
+  it.each([
+    "https://attacker.example/sessions/sess_recovery",
+    "//attacker.example/sessions/sess_recovery",
+    "sessions/sess_recovery",
+    "/\\attacker.example/sessions/sess_recovery",
+    "/sessions/%zz"
+  ])("falls back to the callback path for unsafe OIDC return state: %s", async (returnTo) => {
+    const manager = new FakeOidcManager();
+    manager.callbackUser = {
+      access_token: tokenSentinel,
+      expired: false,
+      state: { returnTo }
+    };
+    window.history.replaceState({}, "", "/?code=code-value&state=expected");
+    const identity = new BrowserOidcIdentity(manager);
+
+    await expect(identity.initialize(window.location.href)).resolves.toEqual({ authenticated: true });
+    expect(window.location.href).toBe(`${window.location.origin}/`);
   });
 
   it("clears callback state and tokens when state or nonce validation fails", async () => {
@@ -383,6 +453,7 @@ describe("browser OIDC identity boundary", () => {
   });
 
   it("uses the official OIDC client to generate PKCE and reject mismatched state and nonce", async () => {
+    vi.stubGlobal("crypto", webcrypto);
     const authority = "https://issuer.example.test/tenant";
     const settings = buildUserManagerSettings({
       authority,

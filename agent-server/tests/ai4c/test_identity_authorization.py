@@ -351,6 +351,54 @@ def test_verifier_rejects_expired_future_nbf_wrong_issuer_wrong_audience_and_mis
     assert wrong_issuer not in caplog.text
 
 
+def test_verifier_accepts_standard_signed_token_without_optional_nbf_and_rejects_future_nbf(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    fixture = local_oidc_fixture()
+    resolver = StaticPrincipalResolver("principal_oidc_optional_nbf")
+    for key, value in _oidc_env(fixture).items():
+        monkeypatch.setenv(key, value)
+    _install_jwks_fetch(monkeypatch, {"keys": [fixture.public_jwk]})
+    app = oidc_test_app(
+        tmp_path,
+        fixture,
+        principal_resolver=resolver,
+    )
+    now = int(time.time())
+    token_without_nbf = jwt.encode(
+        {
+            "iss": fixture.issuer,
+            "aud": fixture.audience,
+            "sub": "keycloak-style-subject",
+            "iat": now,
+            "exp": now + 300,
+        },
+        fixture.private_key_pem,
+        algorithm="RS256",
+        headers={"kid": fixture.kid},
+    )
+    future_nbf = fixture.token(not_before_delta_seconds=300)
+
+    with TestClient(app) as client:
+        accepted = client.post(
+            "/sessions",
+            json=_session_payload(),
+            headers={"Authorization": f"Bearer {token_without_nbf}"},
+        )
+        rejected = client.post(
+            "/sessions",
+            json=_session_payload(),
+            headers={"Authorization": f"Bearer {future_nbf}"},
+        )
+
+    assert accepted.status_code == 200
+    assert rejected.status_code == 401
+    assert rejected.json() == {"code": "invalid_token", "retryable": False}
+
+
 @pytest.mark.parametrize("subject", [" subject", "subject "])
 def test_signed_subject_with_boundary_whitespace_is_invalid_before_any_side_effect(
     tmp_path: Path,

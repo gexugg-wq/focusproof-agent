@@ -458,41 +458,71 @@ def create_app(
     return application
 
 
+def staging_test_llm(session_id: str) -> Any:
+    """Return the staging-only official TestLLM script for one native conversation."""
+    from openhands.sdk.llm import Message, MessageToolCall, TextContent
+    from openhands.sdk.conversation import LocalConversation
+    from openhands.sdk.testing import TestLLM
+
+    data_dir = Path(os.environ["FOCUSPROOF_DATA_DIR"])
+    conversation_id = uuid5(NAMESPACE_URL, f"focusproof:{session_id}")
+    persistence_dir = data_dir / "conversations" / session_id / "persistence"
+    native_store = Path(LocalConversation.get_persistence_dir(persistence_dir, conversation_id))
+    # SDK 1.31.0 exposes get_persistence_dir but no public restored-state
+    # predicate. This staging-only TestLLM selection never consults SQL state.
+    restoring_native_conversation = (native_store / "base_state.json").is_file()
+    learner_input_call = MessageToolCall(
+        id="call_staging_learner_input",
+        name="focusproof_learner_input",
+        arguments=json.dumps(
+            {
+                "question": "Explain why native event continuity matters after restart.",
+                "reason": "Confirm learner understanding after durable recovery.",
+                "requested_evidence_type": "text",
+            }
+        ),
+        origin="completion",
+    )
+    draft_call = MessageToolCall(
+        id="call_staging_review_draft",
+        name="focusproof_review_draft",
+        arguments=json.dumps(
+            {
+                "credibility_findings": ["Evidence is repository-backed."],
+                "understanding_findings": [
+                    "The learner explains that durable IDs survive restart."
+                ],
+                "contradictions": [],
+                "recommended_next_step": "Add one concrete replay example.",
+                "confidence": 0.8,
+            }
+        ),
+        origin="completion",
+    )
+    messages: list[Message | Exception] = (
+        [
+            Message(
+                role="assistant",
+                content=[TextContent(text="Ask for learner confirmation")],
+                tool_calls=[learner_input_call],
+            )
+        ]
+        if not restoring_native_conversation
+        else [
+            Message(
+                role="assistant",
+                content=[TextContent(text="Submit the staging review draft")],
+                tool_calls=[draft_call],
+            )
+        ]
+    )
+    return TestLLM.from_messages(messages)
+
+
 def create_staging_test_app() -> FastAPI:
     """Create the credential-free staging proof app with the official SDK TestLLM."""
     if os.environ.get("FOCUSPROOF_PROFILE") != "staging":
         raise RuntimeError("staging TestLLM app requires FOCUSPROOF_PROFILE=staging")
-
-    from openhands.sdk.llm import Message, MessageToolCall, TextContent
-    from openhands.sdk.testing import TestLLM
-
-    def staging_test_llm(session_id: str) -> TestLLM:
-        del session_id
-        draft_call = MessageToolCall(
-            id="call_staging_review_draft",
-            name="focusproof_review_draft",
-            arguments=json.dumps(
-                {
-                    "credibility_findings": ["Evidence is repository-backed."],
-                    "understanding_findings": [
-                        "The learner explains that durable IDs survive restart."
-                    ],
-                    "contradictions": [],
-                    "recommended_next_step": "Add one concrete replay example.",
-                    "confidence": 0.8,
-                }
-            ),
-            origin="completion",
-        )
-        return TestLLM.from_messages(
-            [
-                Message(
-                    role="assistant",
-                    content=[TextContent(text="Submit the staging review draft")],
-                    tool_calls=[draft_call],
-                )
-            ]
-        )
 
     return create_app(llm_factory=staging_test_llm)
 

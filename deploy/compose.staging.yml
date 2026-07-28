@@ -45,44 +45,76 @@ services:
     networks:
       - private
 
-  oidc-issuer:
-    image: python:3.12-slim-bookworm@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d
-    user: "10001:10001"
+  oidc-provider:
+    image: quay.io/keycloak/keycloak:26.3.2@sha256:98fab020a3a490aba0978f237e2a06cd0ea42bf149c6cf10f11c0aaf27728ff2
     restart: unless-stopped
+    entrypoint:
+      - /bin/bash
+      - -ec
     command:
-      - python
-      - -c
-      - "import http.server,ssl; s=http.server.ThreadingHTTPServer(('0.0.0.0',8443),http.server.SimpleHTTPRequestHandler); c=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); c.load_cert_chain('/run/secrets/oidc_tls_cert','/run/secrets/oidc_tls_key'); s.socket=c.wrap_socket(s.socket,server_side=True); s.serve_forever()"
-    working_dir: /run/secrets
+      - |
+        export KC_BOOTSTRAP_ADMIN_PASSWORD="$$(cat /run/secrets/oidc_admin_password)"
+        export FOCUSPROOF_TEST_USER_PASSWORD="$$(cat /run/secrets/oidc_test_user_password)"
+        exec /opt/keycloak/bin/kc.sh start --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: focusproof-staging-admin
+      KC_HEALTH_ENABLED: "true"
+      KC_HOSTNAME: https://127.0.0.1:${FOCUSPROOF_STAGING_OIDC_HOST_PORT:?required}
+      KC_HTTPS_CERTIFICATE_FILE: /run/secrets/oidc_tls_cert
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /run/secrets/oidc_tls_key
     secrets:
-      - source: oidc_jwks
-        target: jwks.json
+      - source: oidc_realm
+        target: /opt/keycloak/data/import/focusproof-realm.json
+        uid: "1000"
+        gid: "1000"
+        mode: 0440
+      - source: oidc_admin_password
+        uid: "1000"
+        gid: "1000"
+        mode: 0440
+      - source: oidc_test_user_password
+        uid: "1000"
+        gid: "1000"
         mode: 0440
       - source: oidc_tls_cert
+        uid: "1000"
+        gid: "1000"
         mode: 0440
       - source: oidc_tls_key
+        uid: "1000"
+        gid: "1000"
         mode: 0440
+    ports:
+      - "127.0.0.1:${FOCUSPROOF_STAGING_OIDC_HOST_PORT:?required}:8443"
+    healthcheck:
+      test: ["CMD", "/bin/bash", "-ec", "exec 3<>/dev/tcp/127.0.0.1/9000"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
     networks:
       private:
-        aliases: [oidc-issuer]
+        aliases: [oidc-provider]
 
   agent-server:
     <<: *backend-image
     build:
       context: ..
       dockerfile: deploy/agent-server.Dockerfile
+      args:
+        SOURCE_DATE_EPOCH: "1735689600"
     restart: unless-stopped
     depends_on:
       migrate:
         condition: service_completed_successfully
-      oidc-issuer:
-        condition: service_started
+      oidc-provider:
+        condition: service_healthy
     environment:
       FOCUSPROOF_PROFILE: staging
       FOCUSPROOF_DATA_DIR: /app/var
-      FOCUSPROOF_OIDC_ISSUER: https://oidc-issuer:8443
+      FOCUSPROOF_OIDC_ISSUER: https://127.0.0.1:${FOCUSPROOF_STAGING_OIDC_HOST_PORT:?required}/realms/focusproof
       FOCUSPROOF_OIDC_AUDIENCE: focusproof-api
-      FOCUSPROOF_OIDC_JWKS_URI: https://oidc-issuer:8443/jwks.json
+      FOCUSPROOF_OIDC_JWKS_URI: https://oidc-provider:8443/realms/focusproof/protocol/openid-connect/certs
       FOCUSPROOF_OIDC_ALLOWED_ALGORITHMS: RS256
       LITELLM_LOCAL_MODEL_COST_MAP: "true"
       SSL_CERT_FILE: /run/secrets/oidc_ca
@@ -103,7 +135,7 @@ services:
         export FOCUSPROOF_OIDC_FINGERPRINT_KEY="$$(cat /run/secrets/oidc_fingerprint_key)"
         exec uvicorn focusproof.api.app:create_staging_test_app --factory --host 0.0.0.0 --port 8000 --workers 1
     ports:
-      - "127.0.0.1:18080:8000"
+      - "127.0.0.1:${FOCUSPROOF_STAGING_BACKEND_HOST_PORT:?required}:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"]
       interval: 5s
@@ -118,6 +150,12 @@ services:
     build:
       context: ..
       dockerfile: deploy/frontend.Dockerfile
+      args:
+        SOURCE_DATE_EPOCH: "1735689600"
+        NEXT_PUBLIC_OIDC_ISSUER: ${NEXT_PUBLIC_OIDC_ISSUER:?required}
+        NEXT_PUBLIC_OIDC_CLIENT_ID: ${NEXT_PUBLIC_OIDC_CLIENT_ID:?required}
+        NEXT_PUBLIC_OIDC_AUDIENCE: ${NEXT_PUBLIC_OIDC_AUDIENCE:?required}
+        NEXT_PUBLIC_OIDC_REDIRECT_URI: ${NEXT_PUBLIC_OIDC_REDIRECT_URI:?required}
     image: focusproof-frontend:staging
     restart: unless-stopped
     depends_on:
@@ -125,12 +163,8 @@ services:
         condition: service_healthy
     environment:
       FOCUSPROOF_API_BASE_URL: http://agent-server:8000
-      NEXT_PUBLIC_OIDC_ISSUER: https://oidc-issuer:8443
-      NEXT_PUBLIC_OIDC_CLIENT_ID: focusproof-staging
-      NEXT_PUBLIC_OIDC_AUDIENCE: focusproof-api
-      NEXT_PUBLIC_OIDC_REDIRECT_URI: http://127.0.0.1:13000/learning
     ports:
-      - "127.0.0.1:13000:3000"
+      - "127.0.0.1:${FOCUSPROOF_STAGING_FRONTEND_HOST_PORT:?required}:3000"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 5s
@@ -146,8 +180,12 @@ secrets:
     file: ${FOCUSPROOF_STAGING_POSTGRES_PASSWORD_FILE}
   oidc_fingerprint_key:
     file: ${FOCUSPROOF_STAGING_OIDC_FINGERPRINT_KEY_FILE}
-  oidc_jwks:
-    file: ${FOCUSPROOF_STAGING_OIDC_JWKS_FILE}
+  oidc_realm:
+    file: ${FOCUSPROOF_STAGING_OIDC_REALM_FILE:?required}
+  oidc_admin_password:
+    file: ${FOCUSPROOF_STAGING_OIDC_ADMIN_PASSWORD_FILE:?required}
+  oidc_test_user_password:
+    file: ${FOCUSPROOF_STAGING_OIDC_TEST_USER_PASSWORD_FILE:?required}
   oidc_tls_cert:
     file: ${FOCUSPROOF_STAGING_OIDC_TLS_CERT_FILE}
   oidc_tls_key:

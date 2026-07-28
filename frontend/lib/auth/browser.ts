@@ -19,6 +19,12 @@ export type PublicOidcConfig = {
 export type BrowserOidcUser = {
   access_token: string;
   expired?: boolean;
+  state?: unknown;
+};
+
+export type BrowserOidcInitialization = {
+  authenticated: boolean;
+  returnTo?: string;
 };
 
 export type BrowserOidcManager = {
@@ -102,6 +108,32 @@ function isSigninCallback(url: URL): boolean {
     (url.searchParams.has("code") || url.searchParams.has("error"));
 }
 
+function safeInternalReturnTo(value: unknown): string | undefined {
+  if (
+    typeof value !== "string" ||
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    value.includes("\\") ||
+    /%(?![0-9a-fA-F]{2})/.test(value)
+  ) {
+    return undefined;
+  }
+  try {
+    const target = new URL(value, window.location.origin);
+    if (target.origin !== window.location.origin || !target.pathname.startsWith("/")) {
+      return undefined;
+    }
+    return target.pathname + target.search + target.hash;
+  } catch {
+    return undefined;
+  }
+}
+
+function callbackReturnTo(state: unknown): string | undefined {
+  if (!state || typeof state !== "object" || Array.isArray(state)) return undefined;
+  return safeInternalReturnTo((state as { returnTo?: unknown }).returnTo);
+}
+
 function mergeRequestHeaders(input: RequestInfo | URL, init?: RequestInit): Headers {
   const headers = new Headers(input instanceof Request ? input.headers : undefined);
   new Headers(init?.headers).forEach((value, key) => headers.set(key, value));
@@ -121,15 +153,18 @@ export class BrowserOidcIdentity {
     manager.events.addAccessTokenExpired(this.expiredListener);
   }
 
-  async initialize(currentUrl: string): Promise<boolean> {
+  async initialize(currentUrl: string): Promise<BrowserOidcInitialization> {
     const url = new URL(currentUrl, window.location.origin);
     if (isSigninCallback(url)) {
       try {
         const user = await this.manager.signinRedirectCallback(url.href);
         this.accessToken = user.expired ? null : user.access_token;
+        const returnTo = this.accessToken ? callbackReturnTo(user.state) : undefined;
         clearTransactionState();
         cleanCallbackUrl();
-        return this.accessToken !== null;
+        return returnTo
+          ? { authenticated: true, returnTo }
+          : { authenticated: this.accessToken !== null };
       } catch {
         this.accessToken = null;
         await clearManagerState(this.manager);
@@ -140,7 +175,7 @@ export class BrowserOidcIdentity {
 
     const user = await this.manager.getUser();
     this.accessToken = user && !user.expired ? user.access_token : null;
-    return this.accessToken !== null;
+    return { authenticated: this.accessToken !== null };
   }
 
   async signIn(): Promise<void> {
@@ -184,13 +219,13 @@ function getBrowserIdentity(): BrowserOidcIdentity | null {
   return browserIdentity;
 }
 
-export async function initializeBrowserOidc(): Promise<boolean> {
+export async function initializeBrowserOidc(): Promise<BrowserOidcInitialization> {
   const identity = getBrowserIdentity();
-  if (!identity) return true;
-  const authenticated = await identity.initialize(window.location.href);
-  if (authenticated) return true;
+  if (!identity) return { authenticated: true };
+  const initialization = await identity.initialize(window.location.href);
+  if (initialization.authenticated) return initialization;
   await identity.signIn();
-  return false;
+  return initialization;
 }
 
 export async function logoutBrowserOidc(): Promise<void> {

@@ -347,6 +347,8 @@ raw token.
 
 ## 8. AI4C.3 Reproducible Staging
 
+The release-equivalence decision for this phase is specified by [ADR-0001: Versioned Canonical Release Digest](../../architecture/ADR-0001-CANONICAL-RELEASE-DIGEST.md). The canonical digest, rather than Docker image byte identity, is the normative two-round gate; OCI image IDs remain recorded diagnostics.
+
 ### 8.1 Runtime topology
 
 The accepted first topology is:

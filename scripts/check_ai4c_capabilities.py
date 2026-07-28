@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import os
+from pathlib import Path
 import platform
 import re
 import shutil
@@ -25,6 +26,12 @@ PROVIDER_KEYS = frozenset(
     )
 )
 MINIMAL_ENV_KEYS = ("PATH", "LANG", "LC_ALL")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+STAGING_BROWSER_CAPABILITY_NAMES = ("node", "certutil", "playwright_browser")
+PLAYWRIGHT_CHROMIUM_PROBE = (
+    "const { chromium } = require(process.argv[1]); const { existsSync } = require('node:fs'); "
+    "process.exit(existsSync(chromium.executablePath()) ? 0 : 1)"
+)
 CAPABILITY_NAMES: tuple[CapabilityName, ...] = (
     "container_cli",
     "compose",
@@ -91,6 +98,10 @@ def _has_psql_version(output: str) -> bool:
         r"(?im)^\s*psql\s+\(PostgreSQL\)\s+\d+(?:\.\d+){0,2}(?:[\s,]|$)",
         output,
     ) is not None
+
+
+def _has_node_version(output: str) -> bool:
+    return re.search(r"(?m)^v?\d+(?:\.\d+){1,3}(?:\s|$)", output) is not None
 
 
 def _run_probe(
@@ -227,6 +238,69 @@ def _detect_postgres_client() -> _Probe:
         capability="postgres_client",
         validator=_has_psql_version,
     )
+
+
+def _playwright_chromium_probe_args() -> list[str]:
+    return [
+        "node",
+        "-e",
+        PLAYWRIGHT_CHROMIUM_PROBE,
+        str(PROJECT_ROOT / "frontend" / "node_modules" / "@playwright" / "test"),
+    ]
+
+
+def require_staging_browser_capabilities() -> None:
+    if platform.system() != "Linux":
+        raise CapabilityUnavailableError(
+            STAGING_BROWSER_CAPABILITY_NAMES,
+            tuple(
+                f"{name}:blocked:unsupported_os" for name in STAGING_BROWSER_CAPABILITY_NAMES
+            ),
+        )
+
+    if shutil.which("node") is None:
+        node = _Probe(state="blocked", command=None, reason="node:blocked:not_found")
+    else:
+        node = _run_probe(
+            ["node", "--version"],
+            reason_tool="node",
+            capability="node",
+            validator=_has_node_version,
+        )
+    certutil = _Probe(
+        state="available" if shutil.which("certutil") is not None else "blocked",
+        command="certutil" if shutil.which("certutil") is not None else None,
+        reason=None if shutil.which("certutil") is not None else "certutil:blocked:not_found",
+    )
+    if node.state == "available":
+        playwright_browser = _run_probe(
+            _playwright_chromium_probe_args(),
+            reason_tool="playwright-chromium",
+            capability="playwright_browser",
+            validator=lambda _output: True,
+        )
+    else:
+        playwright_browser = _Probe(
+            state="blocked",
+            command=None,
+            reason="playwright_browser:blocked:node_unavailable",
+        )
+
+    probes = {
+        "node": node,
+        "certutil": certutil,
+        "playwright_browser": playwright_browser,
+    }
+    missing = tuple(name for name in STAGING_BROWSER_CAPABILITY_NAMES if probes[name].state == "blocked")
+    if missing:
+        raise CapabilityUnavailableError(
+            missing,
+            tuple(
+                probe.reason
+                for name in missing
+                if (probe := probes[name]).reason is not None
+            ),
+        )
 
 
 def detect_capabilities() -> CapabilityReport:

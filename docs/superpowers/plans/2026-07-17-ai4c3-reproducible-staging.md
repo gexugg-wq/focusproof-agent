@@ -10,6 +10,8 @@
 
 ## Constraints and Ownership
 
+- Apply [ADR-0001](../../architecture/ADR-0001-CANONICAL-RELEASE-DIGEST.md): compare two versioned canonical release digests, record OCI IDs only for diagnosis, and never seed Next build keys or place deployment/operator secrets in a build.
+
 - Begin only after AI0 accepts AI4C.2; end with a local commit/report/stop for AI0.
 - Never assume container/Compose/PostgreSQL capability. Preflight failure is a blocker, not a skipped pass represented as success.
 - Test official `openhands-sdk==1.31.0` first. A custom wheel requires failed equivalence evidence and separate AI0 approval for fixed commit plus SHA-256; branch/tag/local paths are prohibited.
@@ -96,7 +98,7 @@ env -u DASHSCOPE_API_KEY -u OPENAI_API_KEY -u FOCUSPROOF_LLM_API_KEY -u ANTHROPI
 ```
 
 - [ ] Implement with `shutil.which`, `platform.system` and bounded `subprocess.run([...])`; accept Docker or Podman-compatible OCI CLI and Compose v2 only after version probes.
-- [ ] Register `postgres` and `staging_external`. Explicitly selected fixtures stop with a clear blocker; default suites exclude them.
+- [ ] Register `real_llm`, `postgres` and `staging_external`. Configure pytest's official default marker expression in `pyproject.toml` so ordinary suites, whole-file runs and focused node IDs exclude all three. An explicit command-line `-m real_llm`, `-m postgres` or `-m staging_external` overrides the default and is the authorization boundary; no collection hook or path-based hiding is allowed.
 - [ ] Run green, Ruff/Mypy/diff check; commit `test: add honest staging capability preflight`.
 
 ### Task 2: OpenHands Release Equivalence and Locks
@@ -157,16 +159,18 @@ env -u DASHSCOPE_API_KEY -u OPENAI_API_KEY -u FOCUSPROOF_LLM_API_KEY -u ANTHROPI
 `docs/deployment/AI4C_STAGING.md`, and
 `agent-server/focusproof/api/app.py` only if readiness is red.
 
-- [ ] Write red static tests for pinned bases, non-root users, excluded `.env`/`var`/test artifacts/host venv, hash-locked backend install, `npm ci`, production Next start, exactly one Uvicorn worker, loopback publication, private database port, read-only secrets, health checks and volumes.
-- [ ] Write `staging_external` test: preflight, clean Git-archive build context, deterministic FastAPI/TestLLM/local issuer, production BFF learning flow, service restart and preservation of Session/conversation/native event/projection/review IDs. Never mock a successful API.
-- [ ] Run static red first; run external red only when capabilities pass. Missing capability remains a blocker.
-- [ ] Implement minimal Dockerfiles/Compose. A one-shot Compose migration service
+- [x] Write red static tests for pinned bases, non-root users, excluded `.env`/`var`/test artifacts/host venv, hash-locked backend install, `npm ci`, production Next start, exactly one Uvicorn worker, loopback publication, private database port, read-only secrets, health checks and volumes.
+- [x] Write `staging_external` test: preflight, clean Git-archive build context, deterministic FastAPI/TestLLM/local issuer, production BFF learning flow, service restart and preservation of Session/conversation/native event/projection/review IDs. Never mock a successful API.
+- [x] Run static red first; run external red only when capabilities pass. Missing capability remains a blocker.
+- [x] Implement minimal Dockerfiles/Compose. A one-shot Compose migration service
   applies Alembic before the backend starts; application startup only checks
   that the database is at exact head and never migrates implicitly. Backend
   starts exactly one worker. Frontend receives only internal API URL and public
   OIDC client metadata. Services are non-root, bounded and gracefully stopped.
-- [ ] Add `/ready` only if red proves it missing. It checks migration/database/runtime registry without LLM calls or secret details and reuses app lifespan/manager/handle.
-- [ ] Build and run twice from clean context; record image digests and recovery; run default regressions; commit `build: add reproducible single-host staging stack`.
+- [x] Add `/ready` only if red proves it missing. It checks migration/database/runtime registry without LLM calls or secret details and reuses app lifespan/manager/handle.
+- [x] Build and run twice from clean context; record image digests and recovery; run default regressions; commit `build: add reproducible single-host staging stack`.
+
+Final external acceptance: `1 passed in 1529.73s`; both clean rounds produced identical strict canonical digests (`agent-server` `sha256:847371add386c19f67b4f017608aef2aac163f33e8bab55ca155ca64ba504e0e`, `frontend` `sha256:3f667ff29bff08bdc5ee16db045695ed853bbf4055be2e6ea1b6ab091caf5146`) and completed official OpenHands Conversation restart/restore with stable event continuity.
 
 ### Task 5: Paired Backup, Restore and Operations
 

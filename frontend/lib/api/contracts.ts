@@ -80,6 +80,15 @@ export type FocusProofEvent = {
   payload: Record<string, unknown>;
 };
 
+export type ReviewProjection = {
+  reviewId: string;
+  sessionId: string;
+  conversationId: string;
+  reviewStatus: string;
+  nativeEventCount: number;
+  sourceOpenHandsEventId: string | null;
+};
+
 export type CreateSessionInput = {
   domain: string;
   title: string;
