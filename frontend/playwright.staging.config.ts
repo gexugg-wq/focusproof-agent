@@ -2,6 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
+  testMatch: "ai4c-staging.spec.ts",
   outputDir: "test-results/ai4c-staging",
   timeout: 120000,
   workers: 1,

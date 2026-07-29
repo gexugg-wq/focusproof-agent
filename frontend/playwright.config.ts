@@ -9,6 +9,7 @@ const pythonPath = path.join(repositoryDir, ".venv/bin/python3.12");
 
 export default defineConfig({
   testDir: "./e2e",
+  testIgnore: "ai4c-staging.spec.ts",
   outputDir: "test-results/artifacts",
   timeout: 30000,
   workers: 1,

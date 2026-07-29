@@ -1659,3 +1659,34 @@ def test_staging_external_stack_builds_runs_and_preserves_ids(tmp_path: Path) ->
         round_one_records=round_canonical_records[0],
         round_two_records=round_canonical_records[1],
     )
+
+
+def test_playwright_configs_separate_deterministic_and_external_staging_suites() -> None:
+    playwright = PROJECT_ROOT / "frontend/node_modules/.bin/playwright"
+    deterministic = subprocess.run(
+        [str(playwright), "test", "--list", "--config", "playwright.config.ts"],
+        cwd=PROJECT_ROOT / "frontend",
+        env=_safe_subprocess_env(),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    staging = subprocess.run(
+        [str(playwright), "test", "--list", "--config", "playwright.staging.config.ts"],
+        cwd=PROJECT_ROOT / "frontend",
+        env=_safe_subprocess_env(),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert deterministic.returncode == 0, deterministic.stderr
+    assert "ai4b-real-flow.spec.ts" in deterministic.stdout
+    assert "focusproof-flow.spec.ts" in deterministic.stdout
+    assert "ai4c-staging.spec.ts" not in deterministic.stdout
+    assert staging.returncode == 0, staging.stderr
+    assert "ai4c-staging.spec.ts" in staging.stdout
+    assert "ai4b-real-flow.spec.ts" not in staging.stdout
+    assert "focusproof-flow.spec.ts" not in staging.stdout
