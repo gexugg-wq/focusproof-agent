@@ -157,7 +157,7 @@ def test_canonical_release_digest_fails_closed_on_unknown_schema(
         canonical_release_digest(archive, replace(descriptor, schema=bad_schema))
 
 
-def test_next_entropy_normalization_is_bound_to_next_15_5_18(
+def test_next_entropy_normalization_is_bound_to_next_15_5_21(
     tmp_path: Path, descriptor: ReleaseDescriptor
 ) -> None:
     archive = _tar(
