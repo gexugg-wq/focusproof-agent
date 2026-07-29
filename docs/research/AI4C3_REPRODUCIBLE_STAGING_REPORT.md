@@ -140,4 +140,15 @@ SQLite adapters and Vite's CJS API. The Task 6 PostgreSQL setup rotated only the
 dedicated local test role password because the fixture pgpass was absent; it did
 not touch other roles or databases.
 
-Rollback code, images, Compose manifests and migrations together to the
+Rollback to the verified, accepted AI4C.2 release and use the paired recovery
+unit produced by that same revision. Its code, images, Compose manifests and
+migrations are one release unit and must move together; its PostgreSQL data and
+OpenHands native persistence are one paired recovery unit and must be restored
+together.
+
+Before reopening writes, verify the restored canonical release digests and
+migration state, then verify product and native event identities and counts,
+review and ownership identities, and the established redaction guarantees. If
+any release component, recovery member, digest, migration or restored identity
+does not match, keep writes closed, stop the release and preserve the failed
+deployment for investigation.
