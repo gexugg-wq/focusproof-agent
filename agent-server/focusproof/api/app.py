@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -9,6 +10,7 @@ from secrets import token_hex
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
+from time import monotonic
 from typing import Annotated, Any, cast
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -93,6 +95,112 @@ from focusproof.runtime.view import AgentView, SessionView, ToolDescription
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 MAX_REQUEST_BODY_BYTES = 262_144
+MAINTENANCE_LOCK_NAME = ".focusproof-maintenance.lock"
+OPERATIONS_LOGGER = logging.getLogger("focusproof.operations")
+_OPERATIONAL_FIELDS = frozenset(
+    {
+        "route", "status", "latency_ms", "provider_calls",
+        "provider_input_tokens", "provider_output_tokens",
+        "provider_cost_microusd", "provider_latency_ms", "outcome",
+    }
+)
+
+
+def _emit_operational_event(
+    event: str, **fields: str | int | float | bool | None
+) -> None:
+    if set(fields) - _OPERATIONAL_FIELDS:
+        raise ValueError("unsupported operational field")
+    payload: dict[str, str | int | float | bool | None] = {"event": event}
+    payload.update(fields)
+    OPERATIONS_LOGGER.info(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    )
+
+
+def _record_review_operational_signal(
+    manager: ConversationManager,
+    session_id: str,
+    result: RuntimeReviewResult,
+    *,
+    latency_ms: int,
+) -> None:
+    usage = manager.get(session_id).provider_usage_snapshot()
+    _emit_operational_event(
+        "review",
+        status=result.reviewStatus,
+        latency_ms=latency_ms,
+        provider_calls=usage.call_count,
+        provider_input_tokens=usage.input_tokens,
+        provider_output_tokens=usage.output_tokens,
+        provider_cost_microusd=round(usage.cost_usd * 1_000_000),
+        provider_latency_ms=round(usage.latency_seconds * 1000),
+    )
+
+
+def _bounded_route(path: str) -> str:
+    if path.startswith("/sessions/"):
+        suffix = path.split("/", 3)
+        tail = f"/{suffix[3]}" if len(suffix) == 4 else ""
+        return f"/sessions/{{session_id}}{tail}"
+    allowed = {"/health", "/ready", "/sessions", "/openhands/capabilities"}
+    return path if path in allowed else "other"
+
+
+class OperationalTelemetryMiddleware:
+    def __init__(self, app: ASGIApp, *, data_dir: Path) -> None:
+        self._app = app
+        self._data_dir = data_dir
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+        method = str(scope.get("method", "GET"))
+        path = str(scope.get("path", ""))
+        route = _bounded_route(path)
+        if method in {"POST", "PUT", "PATCH", "DELETE"} and (
+            self._data_dir / MAINTENANCE_LOCK_NAME
+        ).is_file():
+            _emit_operational_event(
+                "admission_rejection",
+                route=route,
+                status="maintenance_mode",
+                outcome="rejected",
+            )
+            await JSONResponse(
+                status_code=503,
+                content={"code": "maintenance_mode", "retryable": True},
+            )(scope, receive, send)
+            return
+        started = monotonic()
+        status_code = 500
+
+        async def capture_status(message: Message) -> None:
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = int(message["status"])
+            await send(message)
+
+        await self._app(scope, receive, capture_status)
+        latency_ms = max(0, round((monotonic() - started) * 1000))
+        _emit_operational_event(
+            "request", route=route, status=str(status_code), latency_ms=latency_ms
+        )
+        if path in {"/health", "/ready"}:
+            _emit_operational_event(
+                "health",
+                route=path,
+                status="healthy" if status_code < 500 else "unhealthy",
+                outcome="database_runtime",
+            )
+        if status_code in {401, 403}:
+            _emit_operational_event(
+                "auth",
+                route=route,
+                status="invalid" if status_code == 401 else "forbidden",
+                outcome="rejected",
+            )
 
 
 def _request_too_large_response() -> JSONResponse:
@@ -452,6 +560,10 @@ def create_app(
     application.add_middleware(
         RequestBodyLimitMiddleware,
         max_body_bytes=MAX_REQUEST_BODY_BYTES,
+    )
+    application.add_middleware(
+        OperationalTelemetryMiddleware,
+        data_dir=resolved_data_dir,
     )
     _install_exception_handlers(application)
     _install_routes(application, configured_runtime_mode)
@@ -858,6 +970,7 @@ def _install_routes(
             identity,
         )
         _record_authorized_request(request, identity)
+        review_started = monotonic()
         review_call_id = token_hex(16)
         review_task = asyncio.create_task(
             asyncio.to_thread(
@@ -884,6 +997,12 @@ def _install_routes(
             return _runtime_unavailable(session_id, "unavailable")
         except (RuntimeCreationError, ValueError):
             return _runtime_unavailable(session_id, "failed")
+        _record_review_operational_signal(
+            manager,
+            session_id,
+            result,
+            latency_ms=max(0, round((monotonic() - review_started) * 1000)),
+        )
         if result.reviewStatus == "failed":
             return JSONResponse(status_code=503, content=result.model_dump(mode="json"))
         with uow_factory() as uow:
