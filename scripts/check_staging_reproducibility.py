@@ -74,7 +74,7 @@ def _validate_descriptor(descriptor: ReleaseDescriptor) -> None:
         if not name or name in names or not _PINNED_DIGEST.fullmatch(digest):
             raise CanonicalizationError("base images must be unique and pinned by sha256")
         names.add(name)
-    if descriptor.normalization_profile not in {None, "next@15.5.18"}:
+    if descriptor.normalization_profile not in {None, "next@15.5.21"}:
         raise CanonicalizationError("unknown release normalization profile")
     encoded_config = _canonical_json(descriptor.config)
     if any(
@@ -133,7 +133,7 @@ def canonical_release_snapshot(
             if not raw_name or path.is_absolute() or ".." in path.parts or raw_name in seen:
                 raise CanonicalizationError("unsafe or duplicate root filesystem path")
             seen.add(raw_name)
-            if descriptor.normalization_profile == "next@15.5.18" and (
+            if descriptor.normalization_profile == "next@15.5.21" and (
                 raw_name == "root/.npm"
                 or raw_name.startswith("root/.npm/")
                 or raw_name == "tmp/node-compile-cache"
@@ -159,7 +159,7 @@ def canonical_release_snapshot(
                 payload = stream.read()
                 if (
                     raw_name == prerender_path
-                    and descriptor.normalization_profile == "next@15.5.18"
+                    and descriptor.normalization_profile == "next@15.5.21"
                 ):
                     payload = _normalize_next_prerender_manifest(payload)
                     saw_prerender_manifest = True
@@ -169,7 +169,7 @@ def canonical_release_snapshot(
             entries.append(record)
     if not entries:
         raise CanonicalizationError("empty root filesystem archive")
-    if descriptor.normalization_profile == "next@15.5.18" and not saw_prerender_manifest:
+    if descriptor.normalization_profile == "next@15.5.21" and not saw_prerender_manifest:
         raise CanonicalizationError("Next normalization profile requires its prerender manifest")
     ordered_entries = sorted(entries, key=lambda item: str(item["path"]))
     artifact = {

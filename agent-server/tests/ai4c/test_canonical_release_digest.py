@@ -87,7 +87,7 @@ def test_canonical_release_digest_is_versioned_and_normalizes_only_allowlisted_n
         ],
     )
 
-    next_descriptor = replace(descriptor, normalization_profile="next@15.5.18")
+    next_descriptor = replace(descriptor, normalization_profile="next@15.5.21")
     assert canonical_release_digest(first, next_descriptor) == canonical_release_digest(
         second, next_descriptor
     )
@@ -171,7 +171,7 @@ def test_next_entropy_normalization_is_bound_to_next_15_5_18(
 def test_next_runtime_rootfs_rejects_build_tool_caches(
     tmp_path: Path, descriptor: ReleaseDescriptor
 ) -> None:
-    next_descriptor = replace(descriptor, normalization_profile="next@15.5.18")
+    next_descriptor = replace(descriptor, normalization_profile="next@15.5.21")
     required_manifest: Entry = (
         "app/.next/prerender-manifest.json",
         _manifest(),
