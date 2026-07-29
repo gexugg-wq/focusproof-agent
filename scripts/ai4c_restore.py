@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import fields
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -9,17 +10,19 @@ import subprocess
 import tarfile
 import tempfile
 from typing import Any
-from urllib.parse import unquote, urlsplit
 
 from ai4c_backup import (
     BACKUP_TIMEOUT_SECONDS,
+    PostgresUrlError,
     RecoveryManifest,
     _file_sha256,
-    _is_postgres_scheme,
     _minimal_environment,
+    _postgres_cli_connection,
     current_application_revision,
 )
 from ai4c_staging_check import recovery_outcome
+from ai4c_staging_check import maintenance_window
+from focusproof.recovery import MaintenanceWindow
 
 
 class RecoveryValidationError(RuntimeError):
@@ -46,10 +49,27 @@ def _restore_backup(
     database_url: str,
     openhands_data_dir: Path,
 ) -> None:
+    with maintenance_window(openhands_data_dir) as window:
+        _restore_backup_in_window(
+            manifest_path=manifest_path,
+            database_url=database_url,
+            openhands_data_dir=openhands_data_dir,
+            window=window,
+        )
+
+
+def _restore_backup_in_window(
+    *,
+    manifest_path: Path,
+    database_url: str,
+    openhands_data_dir: Path,
+    window: MaintenanceWindow,
+) -> None:
     if not manifest_path.is_file() or manifest_path.is_symlink():
         raise RecoveryValidationError("manifest does not exist or is not regular")
     manifest = _read_manifest(manifest_path)
     bundle_dir = manifest_path.parent.resolve(strict=True)
+    _require_exact_bundle(bundle_dir)
     database_dump = bundle_dir / "database.dump"
     archive = bundle_dir / "openhands.tar.gz"
     _require_regular_bundle_file(database_dump, bundle_dir)
@@ -61,8 +81,11 @@ def _restore_backup(
     if current_application_revision() != manifest.application_revision:
         raise RecoveryValidationError("application revision mismatch")
     _validate_archive(archive)
+    window.begin_recovery()
     _run_pg_restore(database_url, database_dump)
     _replace_openhands_persistence(archive, openhands_data_dir)
+    _verify_openhands_persistence(archive, openhands_data_dir)
+    window.complete_recovery()
 
 
 def _read_manifest(path: Path) -> RecoveryManifest:
@@ -92,6 +115,16 @@ def _require_regular_bundle_file(path: Path, bundle_dir: Path) -> None:
         raise RecoveryValidationError("paired artifact escapes bundle")
 
 
+def _require_exact_bundle(bundle_dir: Path) -> None:
+    expected = {"database.dump", "openhands.tar.gz", "manifest.json"}
+    try:
+        actual = {path.name for path in bundle_dir.iterdir()}
+    except OSError as exc:
+        raise RecoveryValidationError("paired bundle is unavailable") from exc
+    if actual != expected:
+        raise RecoveryValidationError("paired bundle must contain exactly three files")
+
+
 def _validate_archive(path: Path) -> None:
     try:
         with tarfile.open(path, "r:gz") as archive:
@@ -110,22 +143,21 @@ def _validate_archive(path: Path) -> None:
 
 
 def _run_pg_restore(database_url: str, source: Path) -> None:
-    parsed = urlsplit(database_url)
-    if not _is_postgres_scheme(parsed.scheme):
-        raise RecoveryValidationError("database URL must use PostgreSQL")
-    database_name = unquote(parsed.path.lstrip("/"))
-    if not parsed.hostname or not database_name:
-        raise RecoveryValidationError("database URL is incomplete")
+    try:
+        connection = _postgres_cli_connection(database_url)
+    except PostgresUrlError as exc:
+        raise RecoveryValidationError(str(exc)) from exc
     args = ["pg_restore", "--clean", "--if-exists", "--exit-on-error"]
-    args.extend(["--host", parsed.hostname])
-    if parsed.port is not None:
-        args.extend(["--port", str(parsed.port)])
-    if parsed.username is not None:
-        args.extend(["--username", unquote(parsed.username)])
-    args.extend(["--dbname", database_name, str(source)])
+    args.extend(["--host", connection.host])
+    if connection.port is not None:
+        args.extend(["--port", str(connection.port)])
+    if connection.username is not None:
+        args.extend(["--username", connection.username])
+    args.extend(["--dbname", connection.database_name, str(source)])
     env = _minimal_environment()
-    if parsed.password is not None:
-        env["PGPASSWORD"] = unquote(parsed.password)
+    env.update(connection.libpq_environment)
+    if connection.password is not None:
+        env["PGPASSWORD"] = connection.password
     subprocess.run(args, check=True, timeout=BACKUP_TIMEOUT_SECONDS, env=env)
 
 
@@ -153,3 +185,33 @@ def _replace_openhands_persistence(archive: Path, target: Path) -> None:
             shutil.rmtree(previous)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def _verify_openhands_persistence(archive: Path, target: Path) -> None:
+    if target.is_symlink() or not target.is_dir():
+        raise RecoveryValidationError("restored OpenHands target is invalid")
+    restored_members = {
+        path.relative_to(target).as_posix()
+        for path in target.rglob("*")
+    }
+    with tarfile.open(archive, "r:gz") as source:
+        expected_members = {member.name.rstrip("/") for member in source.getmembers()}
+        if restored_members != expected_members:
+            raise RecoveryValidationError("restored OpenHands members differ")
+        for member in source.getmembers():
+            if not member.isfile():
+                continue
+            archived = source.extractfile(member)
+            if archived is None:
+                raise RecoveryValidationError("restored OpenHands file is missing")
+            archived_digest = _stream_sha256(archived)
+            with (target / member.name).open("rb") as restored:
+                if _stream_sha256(restored) != archived_digest:
+                    raise RecoveryValidationError("restored OpenHands digest differs")
+
+
+def _stream_sha256(stream: Any) -> str:
+    digest = sha256()
+    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+        digest.update(chunk)
+    return digest.hexdigest()

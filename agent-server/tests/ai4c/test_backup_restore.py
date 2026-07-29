@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import importlib
 import json
 import logging
@@ -10,6 +9,7 @@ import socket
 import subprocess
 import sys
 import tarfile
+from threading import Event, Thread
 from time import monotonic, sleep
 from typing import Any, Final
 from uuid import NAMESPACE_URL, uuid5
@@ -19,6 +19,11 @@ from alembic.config import Config
 from fastapi.testclient import TestClient
 import pytest
 from sqlalchemy.engine import URL
+
+from focusproof import recovery as recovery_coordination
+
+from .oidc_fixture import LocalOidcFixture, local_oidc_fixture
+from .test_identity_end_to_end import _authorization, _install_jwks_fetch
 
 
 PROJECT_ROOT: Final = Path(__file__).resolve().parents[3]
@@ -134,6 +139,86 @@ def test_postgres_driver_urls_are_normalized_to_secret_safe_cli_argv(
     assert all(env["PGPASSWORD"] == "local-password" for _args, env in calls)
 
 
+def test_postgres_query_preserves_unix_socket_and_safe_libpq_settings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def fake_run(
+        args: list[str],
+        *,
+        check: bool,
+        timeout: float,
+        env: dict[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        assert check is True
+        assert timeout > 0
+        calls.append((args, env))
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(backup.subprocess, "run", fake_run)
+    monkeypatch.setattr(restore.subprocess, "run", fake_run)
+    database_url = (
+        "postgresql+psycopg://focus%20proof:p%40ss%3Aword@/focus%2Fproof"
+        "?host=%2Fvar%2Frun%2Fpostgresql&sslmode=verify-full"
+        "&sslrootcert=%2Fetc%2Fssl%2Froot.pem&sslcert=%2Fetc%2Fssl%2Fclient.pem"
+        "&sslkey=%2Frun%2Fsecrets%2Fclient.key&target_session_attrs=read-write"
+        "&connect_timeout=7&options=-c%20statement_timeout%3D5000"
+    )
+
+    backup._run_pg_dump(database_url, tmp_path / "database.dump")
+    restore._run_pg_restore(database_url, tmp_path / "database.dump")
+
+    assert len(calls) == 2
+    for args, env in calls:
+        assert "/var/run/postgresql" in args
+        assert "focus proof" in args
+        assert "focus/proof" in args
+        assert "p@ss:word" not in " ".join(args)
+        assert env["PGPASSWORD"] == "p@ss:word"
+        assert env["PGSSLMODE"] == "verify-full"
+        assert env["PGSSLROOTCERT"] == "/etc/ssl/root.pem"
+        assert env["PGSSLCERT"] == "/etc/ssl/client.pem"
+        assert env["PGSSLKEY"] == "/run/secrets/client.key"
+        assert env["PGTARGETSESSIONATTRS"] == "read-write"
+        assert env["PGCONNECT_TIMEOUT"] == "7"
+        assert env["PGOPTIONS"] == "-c statement_timeout=5000"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "application_name=unsafe",
+        "sslmode=require&sslmode=disable",
+        "options=-c%20safe%0Ainjected",
+    ],
+)
+def test_postgres_query_rejects_unknown_duplicate_or_control_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    query: str,
+) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        backup.subprocess,
+        "run",
+        lambda args, **kwargs: calls.append(args),
+    )
+    monkeypatch.setattr(
+        restore.subprocess,
+        "run",
+        lambda args, **kwargs: calls.append(args),
+    )
+    database_url = f"postgresql://focusproof@db/focusproof?{query}"
+
+    with pytest.raises(backup.RecoveryError, match="query"):
+        backup._run_pg_dump(database_url, tmp_path / "database.dump")
+    with pytest.raises(restore.RecoveryValidationError, match="query"):
+        restore._run_pg_restore(database_url, tmp_path / "database.dump")
+    assert calls == []
+
+
 def test_backup_publishes_the_paired_bundle_with_one_atomic_directory_rename(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -182,6 +267,29 @@ def test_restore_rejects_missing_manifest(tmp_path: Path) -> None:
             database_url="postgresql://db/focusproof",
             openhands_data_dir=tmp_path / "openhands",
         )
+
+
+def test_restore_rejects_bundle_with_extra_member_before_pg_restore(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path, bundle = _paired_bundle(tmp_path, monkeypatch)
+    (bundle / "operator-note.txt").write_text("unexpected", encoding="utf-8")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(restore, "current_application_revision", lambda: "rev-test")
+    monkeypatch.setattr(
+        restore.subprocess,
+        "run",
+        lambda args, **kwargs: calls.append(args),
+    )
+
+    with pytest.raises(restore.RecoveryValidationError, match="exactly"):
+        restore.restore_backup(
+            manifest_path=manifest_path,
+            database_url="postgresql://db/focusproof",
+            openhands_data_dir=tmp_path / "restored",
+        )
+    assert calls == []
 
 
 def test_backup_failure_removes_partial_artifacts(
@@ -379,6 +487,131 @@ def test_maintenance_lock_is_exclusive_and_removed_without_secret_output(
     assert output.err == ""
 
 
+def test_maintenance_window_drains_entered_writer_and_rejects_new_writes(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "openhands"
+    data_dir.mkdir()
+    writer_entered = Event()
+    release_writer = Event()
+    maintenance_entered = Event()
+    release_maintenance = Event()
+    failures: list[BaseException] = []
+
+    def entered_writer() -> None:
+        try:
+            with staging_check.writer_barrier(data_dir):
+                writer_entered.set()
+                assert release_writer.wait(5.0)
+        except BaseException as exc:
+            failures.append(exc)
+
+    def recovery_operation() -> None:
+        try:
+            with staging_check.maintenance_window(data_dir):
+                maintenance_entered.set()
+                assert release_maintenance.wait(5.0)
+        except BaseException as exc:
+            failures.append(exc)
+
+    writer_thread = Thread(target=entered_writer, daemon=True)
+    recovery_thread = Thread(target=recovery_operation, daemon=True)
+    writer_thread.start()
+    assert writer_entered.wait(2.0)
+    recovery_thread.start()
+    deadline = monotonic() + 2.0
+    while monotonic() < deadline and not staging_check.is_maintenance_locked(data_dir):
+        sleep(0.01)
+
+    try:
+        assert staging_check.is_maintenance_locked(data_dir)
+        assert not maintenance_entered.wait(0.1)
+        with pytest.raises(staging_check.MaintenanceLockError):
+            with staging_check.writer_barrier(data_dir):
+                pass
+        release_writer.set()
+        assert maintenance_entered.wait(2.0)
+        with pytest.raises(staging_check.MaintenanceLockError):
+            with staging_check.writer_barrier(data_dir):
+                pass
+    finally:
+        release_writer.set()
+        release_maintenance.set()
+        writer_thread.join(2.0)
+        recovery_thread.join(2.0)
+
+    assert not writer_thread.is_alive()
+    assert not recovery_thread.is_alive()
+    assert failures == []
+    assert not staging_check.is_maintenance_locked(data_dir)
+
+
+def test_default_recovery_coordination_path_is_external_and_gitignored() -> None:
+    default_data_dir = PROJECT_ROOT / "var"
+    coordination = recovery_coordination.coordination_dir_path(default_data_dir)
+
+    assert coordination.parent == default_data_dir.parent
+    assert not coordination.is_relative_to(default_data_dir)
+    ignored = subprocess.run(
+        [
+            "git",
+            "check-ignore",
+            "--quiet",
+            "--no-index",
+            str(coordination / "writer-drain.lock"),
+        ],
+        cwd=PROJECT_ROOT,
+        check=False,
+        timeout=10.0,
+        env=backup._minimal_environment(),
+    )
+    assert ignored.returncode == 0
+
+
+def test_restore_half_failure_keeps_incomplete_marker_and_app_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path, _ = _paired_bundle(tmp_path, monkeypatch)
+    target = tmp_path / "restored-openhands"
+    target.mkdir()
+    (target / "old-native.json").write_text("old", encoding="utf-8")
+    monkeypatch.setattr(restore, "current_application_revision", lambda: "rev-test")
+    monkeypatch.setattr(
+        restore.subprocess,
+        "run",
+        lambda args, **kwargs: subprocess.CompletedProcess(args, 0),
+    )
+
+    def fail_after_postgres(*args: Any, **kwargs: Any) -> None:
+        raise OSError("injected OpenHands replacement failure")
+
+    monkeypatch.setattr(restore, "_replace_openhands_persistence", fail_after_postgres)
+
+    with pytest.raises(OSError, match="injected OpenHands"):
+        restore.restore_backup(
+            manifest_path=manifest_path,
+            database_url="postgresql://db/focusproof",
+            openhands_data_dir=target,
+        )
+
+    assert staging_check.is_recovery_incomplete(target)
+    app = _recovery_app(
+        f"sqlite+pysqlite:///{target / 'fail-closed.sqlite3'}",
+        target,
+    )
+    with TestClient(app, raise_server_exceptions=False) as client:
+        health = client.get("/health")
+        readiness = client.get("/ready")
+        rejected = client.post("/sessions", json={"evidence": "must-not-write"})
+
+    assert health.status_code == 200
+    assert readiness.status_code == 503
+    assert readiness.json() == {"code": "recovery_incomplete", "retryable": True}
+    assert rejected.status_code == 503
+    assert rejected.json() == {"code": "recovery_incomplete", "retryable": True}
+
+
 def test_backup_rejects_absolute_or_traversing_output_name(tmp_path: Path) -> None:
     data_dir = tmp_path / "openhands"
     data_dir.mkdir()
@@ -471,17 +704,44 @@ def _start_postgres(
     pytest.fail("disposable_postgres_not_ready", pytrace=False)
 
 
-def _remove_postgres(container_name: str, volume_name: str) -> None:
+def _docker_object_exists(kind: str, name: str) -> bool:
+    inspected = _external_run(
+        ["docker", kind, "inspect", name],
+        timeout=30.0,
+        check=False,
+    )
+    return inspected.returncode == 0
+
+
+def _destroy_postgres_authoritatively(container_name: str, volume_name: str) -> None:
     _external_run(
         ["docker", "rm", "--force", container_name],
         timeout=30.0,
-        check=False,
+        check=True,
     )
     _external_run(
-        ["docker", "volume", "rm", "--force", volume_name],
+        ["docker", "volume", "rm", volume_name],
         timeout=30.0,
-        check=False,
+        check=True,
     )
+    assert not _docker_object_exists("container", container_name)
+    assert not _docker_object_exists("volume", volume_name)
+
+
+def _cleanup_postgres(container_name: str, *volume_names: str) -> None:
+    if _docker_object_exists("container", container_name):
+        _external_run(
+            ["docker", "rm", "--force", container_name],
+            timeout=30.0,
+            check=True,
+        )
+    for volume_name in volume_names:
+        if _docker_object_exists("volume", volume_name):
+            _external_run(
+                ["docker", "volume", "rm", volume_name],
+                timeout=30.0,
+                check=True,
+            )
 
 
 def _migrate_external_database(database_url: str) -> None:
@@ -491,46 +751,6 @@ def _migrate_external_database(database_url: str) -> None:
     )
     config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
     command.upgrade(config, "head")
-
-
-def _stored_session(session_id: str, owner_id: str) -> Any:
-    from focusproof.persistence.repositories import StoredSession
-
-    now = datetime.now(UTC)
-    return StoredSession(
-        session_id=session_id,
-        owner_user_id=owner_id,
-        status="running",
-        adapter_mode="openhands-local-scripted-test",
-        domain="general",
-        title="Paired recovery exercise",
-        goal="Verify that paired recovery preserves learning facts",
-        expected_output="A concise recovery explanation",
-        planned_minutes=15,
-        conversation_id=str(uuid5(NAMESPACE_URL, f"focusproof:{session_id}")),
-        runtime_mode="openhands-local-scripted-test",
-        review_result=None,
-        goal_conversation_synced_at=None,
-        version=1,
-        created_at=now,
-        updated_at=now,
-    )
-
-
-def _stored_evidence(session_id: str, evidence_id: str) -> Any:
-    from focusproof.persistence.repositories import StoredEvidence
-
-    return StoredEvidence(
-        evidence_id=evidence_id,
-        session_id=session_id,
-        evidence_type="text",
-        content_hash=f"sha256:{evidence_id}",
-        text_content=RECOVERY_EVIDENCE_TEXT,
-        source_url=None,
-        metadata={"source": "paired-recovery"},
-        conversation_synced_at=None,
-        created_at=datetime.now(UTC),
-    )
 
 
 def _recovery_app(database_url: str, data_dir: Path) -> Any:
@@ -546,50 +766,87 @@ def _recovery_app(database_url: str, data_dir: Path) -> Any:
 def _seed_two_owners_and_completed_review(
     database_url: str,
     data_dir: Path,
+    fixture: LocalOidcFixture,
 ) -> dict[str, Any]:
-    session_ids = ("task5-owner-a-session", "task5-owner-b-session")
-    owner_ids = ("task5-owner-a", "task5-owner-b")
+    subjects = ("task5-owner-a", "task5-owner-b")
+    tokens = tuple(fixture.token(subject=subject) for subject in subjects)
+    session_ids: list[str] = []
     app = _recovery_app(database_url, data_dir)
-    with TestClient(app):
-        uow_factory = app.state.uow_factory
-        with uow_factory() as uow:
-            for index, (session_id, owner_id) in enumerate(
-                zip(session_ids, owner_ids, strict=True), start=1
-            ):
-                uow.sessions.create(_stored_session(session_id, owner_id))
-                uow.evidence.add(_stored_evidence(session_id, f"task5-evidence-{index}"))
-                if index == 2:
-                    uow.answers.upsert(
-                        session_id,
-                        "recovery-question",
-                        "owner-2-answer",
-                    )
-            uow.commit()
-        manager = app.state.conversation_manager
-        first = manager.run_review(session_ids[0], owner_ids[0])
-        assert first.reviewStatus == "awaiting_user"
-        question_id = first.agentQuestions[0]["questionId"]
-        manager.get_or_restore(session_ids[1], owner_ids[1])
+    with TestClient(app) as client:
+        for index, token in enumerate(tokens, start=1):
+            created = client.post(
+                "/sessions",
+                headers=_authorization(token),
+                json={
+                    "domain": "general",
+                    "title": f"Paired recovery owner {index}",
+                    "goal": "Verify that paired recovery preserves learning facts.",
+                    "expectedOutput": "A concise recovery explanation",
+                    "plannedMinutes": 15,
+                },
+            )
+            assert created.status_code == 200
+            session_id = str(created.json()["sessionId"])
+            session_ids.append(session_id)
+            evidence = client.post(
+                f"/sessions/{session_id}/evidence",
+                headers=_authorization(token),
+                json={
+                    "evidenceType": "text",
+                    "textContent": RECOVERY_EVIDENCE_TEXT,
+                    "metadata": {"source": "paired-recovery"},
+                },
+            )
+            assert evidence.status_code == 200
+        first = client.post(
+            f"/sessions/{session_ids[0]}/review",
+            headers=_authorization(tokens[0]),
+        )
+        assert first.status_code == 200
+        assert first.json()["reviewStatus"] == "awaiting_user"
+        question_id = str(first.json()["agentQuestions"][0]["questionId"])
+        owner_ids: list[str] = []
+        with app.state.uow_factory() as uow:
+            for subject in subjects:
+                principal = uow.principals.get_exact(
+                    issuer=fixture.issuer,
+                    subject=subject,
+                )
+                assert principal is not None
+                owner_ids.append(principal.principal_id)
 
     restored_app = _recovery_app(database_url, data_dir)
-    with TestClient(restored_app):
-        with restored_app.state.uow_factory() as uow:
-            uow.answers.upsert(
-                session_ids[0],
-                question_id,
-                "owner-1-native-continuity-answer",
-            )
-            uow.commit()
-        restored_manager = restored_app.state.conversation_manager
-        restored_manager.send_answer(session_ids[0], owner_ids[0])
-        completed = restored_manager.run_review(session_ids[0], owner_ids[0])
-        assert completed.reviewStatus == "completed"
-    return _recovery_snapshot(database_url, data_dir)
+    with TestClient(restored_app) as client:
+        answer = client.post(
+            f"/sessions/{session_ids[0]}/answer",
+            headers=_authorization(tokens[0]),
+            json={
+                "questionId": question_id,
+                "answer": "Native event IDs remain durable across paired recovery.",
+            },
+        )
+        assert answer.status_code == 200
+        completed = client.post(
+            f"/sessions/{session_ids[0]}/review",
+            headers=_authorization(tokens[0]),
+        )
+        assert completed.status_code == 200
+        assert completed.json()["reviewStatus"] == "completed"
+    assert len(session_ids) == len(owner_ids) == 2
+    return _recovery_snapshot(
+        database_url,
+        data_dir,
+        (session_ids[0], session_ids[1]),
+        (owner_ids[0], owner_ids[1]),
+    )
 
 
-def _recovery_snapshot(database_url: str, data_dir: Path) -> dict[str, Any]:
-    session_ids = ("task5-owner-a-session", "task5-owner-b-session")
-    owner_ids = ("task5-owner-a", "task5-owner-b")
+def _recovery_snapshot(
+    database_url: str,
+    data_dir: Path,
+    session_ids: tuple[str, str],
+    owner_ids: tuple[str, str],
+) -> dict[str, Any]:
     app = _recovery_app(database_url, data_dir)
     with TestClient(app):
         with app.state.uow_factory() as uow:
@@ -657,6 +914,7 @@ def test_staging_external_restores_paired_product_and_native_state_idempotently(
     suffix = uuid5(NAMESPACE_URL, str(tmp_path.resolve())).hex[:12]
     container_name = f"focusproof-task5-pg-{suffix}"
     volume_name = f"focusproof-task5-pgdata-{suffix}"
+    restored_volume_name = f"focusproof-task5-restored-pgdata-{suffix}"
     password = "task5-local-postgres-password"
     password_file = tmp_path / "postgres_password"
     password_file.write_text(password, encoding="utf-8")
@@ -672,9 +930,23 @@ def test_staging_external_restores_paired_product_and_native_state_idempotently(
     ).render_as_string(hide_password=False)
     data_dir = tmp_path / "openhands"
     bundle_dir = tmp_path / "paired-backup"
-    monkeypatch.setenv("FOCUSPROOF_PROFILE", "local-dev")
+    fixture = local_oidc_fixture()
+    monkeypatch.setenv("FOCUSPROOF_PROFILE", "staging")
     monkeypatch.setenv("FOCUSPROOF_DATA_DIR", str(data_dir))
     monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("FOCUSPROOF_OIDC_ISSUER", fixture.issuer)
+    monkeypatch.setenv("FOCUSPROOF_OIDC_AUDIENCE", fixture.audience)
+    monkeypatch.setenv(
+        "FOCUSPROOF_OIDC_JWKS_URI",
+        "https://testserver/__test__/oidc/jwks",
+    )
+    monkeypatch.setenv("FOCUSPROOF_OIDC_ALLOWED_ALGORITHMS", "RS256")
+    monkeypatch.setenv(
+        "FOCUSPROOF_OIDC_FINGERPRINT_KEY",
+        "task5-fingerprint-key-with-at-least-32-bytes",
+    )
+    _install_jwks_fetch(monkeypatch, {"keys": [fixture.public_jwk]})
+    token_a = fixture.token(subject="task5-owner-a")
 
     try:
         _start_postgres(
@@ -687,20 +959,35 @@ def test_staging_external_restores_paired_product_and_native_state_idempotently(
         caplog.set_level(logging.WARNING, logger="sqlalchemy.engine")
         caplog.set_level(logging.WARNING, logger="sqlalchemy.engine.Engine")
         logging.disable(logging.INFO)
-        expected = _seed_two_owners_and_completed_review(database_url, data_dir)
+        expected = _seed_two_owners_and_completed_review(
+            database_url,
+            data_dir,
+            fixture,
+        )
         assert len(expected["sessions"]) == 2
-        assert {row[1] for row in expected["sessions"]} == {
-            "task5-owner-a",
-            "task5-owner-b",
-        }
+        assert len({row[1] for row in expected["sessions"]}) == 2
         assert [row[1] for row in expected["reviews"]].count("completed") == 1
         assert all(expected["native_events"])
+        session_ids = (
+            str(expected["sessions"][0][0]),
+            str(expected["sessions"][1][0]),
+        )
+        owner_ids = (
+            str(expected["sessions"][0][1]),
+            str(expected["sessions"][1][1]),
+        )
 
         maintenance_app = _recovery_app(database_url, data_dir)
         with TestClient(maintenance_app) as client:
-            with staging_check.maintenance_lock(data_dir):
+            with staging_check.maintenance_window(data_dir):
                 rejected = client.post(
-                    "/sessions", json={"evidence": RECOVERY_EVIDENCE_TEXT}
+                    "/sessions",
+                    headers=_authorization(token_a),
+                    json={
+                        "domain": "general",
+                        "title": "Must be rejected",
+                        "goal": "Prove maintenance rejects writes.",
+                    },
                 )
                 healthy = client.get("/health")
         assert rejected.status_code == 503
@@ -712,12 +999,12 @@ def test_staging_external_restores_paired_product_and_native_state_idempotently(
             openhands_data_dir=data_dir,
             output_dir=bundle_dir,
         )
-        _remove_postgres(container_name, volume_name)
+        _destroy_postgres_authoritatively(container_name, volume_name)
         shutil.rmtree(data_dir)
 
         _start_postgres(
             container_name=container_name,
-            volume_name=volume_name,
+            volume_name=restored_volume_name,
             port=port,
             password_file=password_file,
         )
@@ -726,7 +1013,12 @@ def test_staging_external_restores_paired_product_and_native_state_idempotently(
             database_url=database_url,
             openhands_data_dir=data_dir,
         )
-        first_restore = _recovery_snapshot(database_url, data_dir)
+        first_restore = _recovery_snapshot(
+            database_url,
+            data_dir,
+            session_ids,
+            owner_ids,
+        )
         assert first_restore == expected
 
         restore.restore_backup(
@@ -734,7 +1026,12 @@ def test_staging_external_restores_paired_product_and_native_state_idempotently(
             database_url=database_url,
             openhands_data_dir=data_dir,
         )
-        second_restore = _recovery_snapshot(database_url, data_dir)
+        second_restore = _recovery_snapshot(
+            database_url,
+            data_dir,
+            session_ids,
+            owner_ids,
+        )
         assert second_restore == expected
         assert len(second_restore["reviews"]) == len(expected["reviews"])
         assert [len(events) for events in second_restore["native_events"]] == [
@@ -742,7 +1039,7 @@ def test_staging_external_restores_paired_product_and_native_state_idempotently(
         ]
     finally:
         logging.disable(logging.NOTSET)
-        _remove_postgres(container_name, volume_name)
+        _cleanup_postgres(container_name, volume_name, restored_volume_name)
 
     captured = capsys.readouterr()
     manifest_text = (bundle_dir / "manifest.json").read_text(encoding="utf-8")

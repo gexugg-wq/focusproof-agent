@@ -62,11 +62,14 @@ docker compose --env-file /secure/staging.paths \
 ## Paired backup
 
 Schedule a quiet period. The backup helper creates
-`.focusproof-maintenance.lock` in the OpenHands data root; the backend rejects
-new `POST`, `PUT`, `PATCH`, and `DELETE` requests with HTTP 503 while that lock
-exists. Health and readiness remain available. For the strongest boundary,
-drain current requests and stop `agent-server` before copying or snapshotting
-storage. Do not stop PostgreSQL until `pg_dump` completes.
+`.focusproof-maintenance.lock` in the stable sibling coordination directory
+`.<OPENHANDS_DATA_DIR name>.focusproof-recovery/`. This directory is outside the
+OpenHands tree that restore replaces. The single worker admits every `POST`,
+`PUT`, `PATCH`, and `DELETE` through the same cross-process file barrier. Backup
+creates the marker, waits for an already-entered writer to leave, and holds the
+drain barrier through both `pg_dump` and the official OpenHands archive. New
+writes receive HTTP 503. `/health` and `/ready` remain available during ordinary
+maintenance. Do not stop PostgreSQL until `pg_dump` completes.
 
 The operator process needs `pg_dump`, access to the private PostgreSQL endpoint,
 and direct access to the mounted OpenHands data directory. On a native Linux
@@ -85,7 +88,7 @@ nonexistent output directory for every recovery unit:
 ```sh
 env -u DASHSCOPE_API_KEY -u OPENAI_API_KEY \
   -u FOCUSPROOF_LLM_API_KEY -u ANTHROPIC_API_KEY \
-  PYTHONPATH=scripts .venv/bin/python -c \
+  PYTHONPATH=agent-server:scripts .venv/bin/python -c \
   'import os; from pathlib import Path; from ai4c_backup import create_backup; create_backup(database_url=os.environ["DATABASE_URL"], openhands_data_dir=Path(os.environ["OPENHANDS_DATA_DIR"]), output_dir=Path(os.environ["RECOVERY_OUTPUT_DIR"]))'
 ```
 
@@ -104,18 +107,21 @@ work. Record only revision, timestamps, counts, digests, paths, and the outcome;
 never record evidence text, answers, tokens, URLs containing credentials, or
 secret values.
 
-After a successful backup, remove any manually created maintenance lock, start
-the backend if it was stopped, and confirm `/ready`. If backup fails, keep
-writers stopped until the failure is understood; do not label a partial
-directory as recoverable.
+The helper removes its maintenance marker on both success and failure. Never
+create or remove that marker manually during a normal backup. After success,
+confirm `/ready`. If backup fails, keep writers stopped until the failure is
+understood; do not label a partial directory as recoverable.
 
 ## Paired restore and recovery drill
 
-Restore only into the approved target and only while all writers are stopped.
+Restore only into the approved target. The helper uses the same maintenance and
+drain barrier as backup, so all admitted writers finish before either store is
+changed and no new writer enters during restore.
 Check out the exact `application_revision` from the manifest first. The restore
-helper rejects revision mismatch, missing or extra manifest fields, digest
-mismatch, symlinks, hard links, absolute members, traversal, and unsupported
-archive members before changing either store.
+helper rejects revision mismatch, a bundle containing anything other than the
+three named files, missing or extra manifest fields, digest mismatch, symlinks,
+hard links, absolute members, traversal, and unsupported archive members before
+changing either store.
 
 Prepare a fresh PostgreSQL database and an absent or disposable OpenHands target,
 then inject `DATABASE_URL`, `OPENHANDS_DATA_DIR`, and `RECOVERY_MANIFEST` without
@@ -124,14 +130,28 @@ printing them:
 ```sh
 env -u DASHSCOPE_API_KEY -u OPENAI_API_KEY \
   -u FOCUSPROOF_LLM_API_KEY -u ANTHROPIC_API_KEY \
-  PYTHONPATH=scripts .venv/bin/python -c \
+  PYTHONPATH=agent-server:scripts .venv/bin/python -c \
   'import os; from pathlib import Path; from ai4c_restore import restore_backup; restore_backup(manifest_path=Path(os.environ["RECOVERY_MANIFEST"]), database_url=os.environ["DATABASE_URL"], openhands_data_dir=Path(os.environ["OPENHANDS_DATA_DIR"]))'
 ```
 
-`pg_restore` runs with `--clean --if-exists --exit-on-error`; native persistence
-is extracted into a sibling temporary directory and replaces the target only
-after archive validation. If the filesystem replacement fails, the previous
-OpenHands directory is put back.
+Before `pg_restore`, restore creates `.focusproof-recovery-incomplete` in the
+stable coordination directory. `pg_restore` runs with
+`--clean --if-exists --exit-on-error`; native persistence is extracted into a
+sibling temporary directory and replaces the target only after archive
+validation. The helper then verifies the restored native member set and file
+digests. Only a successful paired restore and post-restore verification clears
+the incomplete marker atomically while still holding the drain barrier. If PG
+restore succeeds but filesystem replacement or verification fails, the marker
+remains: `/health` stays 200, `/ready` returns 503 `recovery_incomplete`, and all
+writes return 503. Rerun the complete paired restore; never clear the incomplete
+marker to make readiness green.
+
+The database URL accepts `postgres`/`postgresql` and SQLAlchemy driver suffixes.
+Passwords are supplied only through `PGPASSWORD`. Supported query settings are
+`host` for Unix sockets plus `sslmode`, `sslrootcert`, `sslcert`, `sslkey`,
+`target_session_attrs`, `connect_timeout`, and `options`, which are mapped to a
+minimal libpq environment. Unknown, duplicate, empty, or control-character
+query values are rejected rather than ignored.
 
 Start the application at the manifest revision, verify `/ready`, and validate:
 
@@ -153,7 +173,36 @@ env -u DASHSCOPE_API_KEY -u OPENAI_API_KEY \
 ```
 
 The drill uses disposable PostgreSQL data and must remove both its container and
-named volume before creating the fresh target. Never point it at retained data.
+named volume with checked commands, then prove both are absent with Docker
+inspect before creating the fresh target volume. Never point it at retained
+data.
+
+## Recovery coordination state
+
+The stable sibling coordination directory contains two marker files and two
+advisory-lock files:
+
+- `.focusproof-maintenance.lock` means a backup or restore is active or was
+  interrupted before cleanup.
+- `.focusproof-recovery-incomplete` means paired restore has not completed and
+  verified; readiness and writes intentionally fail closed.
+- `writer-admission.lock` and `writer-drain.lock` are reusable `filelock`
+  backing files. Their mere existence is normal and does not mean a lock is
+  held.
+
+Treat a maintenance marker as active unless the `agent-server` is stopped, the
+backup/restore operator process has exited, and host lock inspection shows no
+process holding either advisory lock. If any check is uncertain, leave the
+marker and investigate. Only after all three checks may an operator remove a
+stale maintenance marker, record the incident, restart the app, and verify both
+`/health` and `/ready`. Do not delete the advisory-lock files.
+
+An incomplete marker is never a stale-lock cleanup item. Preserve it and the
+failed stores, diagnose the paired failure, then rerun restore from the exact
+three-file bundle at its manifest revision. The restore helper clears the marker
+only after PostgreSQL, OpenHands replacement, and post-restore verification all
+succeed. If no valid paired bundle exists, keep the service fail closed and
+escalate; do not manually unlink the marker or reopen writes.
 
 ## Rollback
 
@@ -206,5 +255,6 @@ whole paired unit.
 
 This topology is single-host and single-worker. It has no distributed lock,
 scheduler, cross-host failover, online snapshot coordinator, or multi-worker
-recovery protocol. Maintenance mode is a filesystem lock shared with that one
-worker. Scale-out or public deployment requires a separate design and approval.
+recovery protocol. Maintenance uses a cross-process filesystem admission/drain
+barrier shared with that one worker. Scale-out or public deployment requires a
+separate design and approval.

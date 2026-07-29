@@ -66,7 +66,10 @@ from focusproof.openhands_runtime.manager import (
     DEFAULT_REVIEW_TIMEOUT_SECONDS,
     ConversationManager,
 )
-from focusproof.openhands_runtime.provider_admission import BoundedProviderAdmission
+from focusproof.openhands_runtime.provider_admission import (
+    BoundedProviderAdmission,
+    ProviderAdmissionUnavailableError,
+)
 from focusproof.openhands_runtime.tool_registry import release_repository_provider
 from focusproof.persistence.database import (
     create_database_engine,
@@ -92,10 +95,17 @@ from focusproof.persistence.schema_check import (
 from focusproof.persistence.unit_of_work import UnitOfWork, UnitOfWorkFactory
 from focusproof.runtime.evidence import Evidence, LearningGoal, hash_evidence_content
 from focusproof.runtime.view import AgentView, SessionView, ToolDescription
+from focusproof.recovery import (
+    MAINTENANCE_MARKER_NAME,
+    RecoveryCoordinationError,
+    WriterBlockedError,
+    is_recovery_incomplete,
+    writer_barrier,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 MAX_REQUEST_BODY_BYTES = 262_144
-MAINTENANCE_LOCK_NAME = ".focusproof-maintenance.lock"
+MAINTENANCE_LOCK_NAME = MAINTENANCE_MARKER_NAME
 OPERATIONS_LOGGER = logging.getLogger("focusproof.operations")
 _OPERATIONAL_FIELDS = frozenset(
     {
@@ -126,25 +136,59 @@ def _record_review_operational_signal(
     latency_ms: int,
 ) -> None:
     usage = manager.get(session_id).provider_usage_snapshot()
+    status = (
+        result.reviewStatus
+        if result.reviewStatus in {"completed", "awaiting_user", "failed"}
+        else "failed"
+    )
     _emit_operational_event(
         "review",
-        status=result.reviewStatus,
+        status=status,
         latency_ms=latency_ms,
         provider_calls=usage.call_count,
         provider_input_tokens=usage.input_tokens,
         provider_output_tokens=usage.output_tokens,
         provider_cost_microusd=round(usage.cost_usd * 1_000_000),
         provider_latency_ms=round(usage.latency_seconds * 1000),
+        outcome="provider_run",
+    )
+
+
+def _record_review_failure_operational_signal(
+    *,
+    status: str,
+    outcome: str,
+    latency_ms: int,
+) -> None:
+    bounded_status = (
+        status if status in {"failed", "rejected", "unavailable"} else "failed"
+    )
+    bounded_outcome = (
+        outcome
+        if outcome in {"runtime", "runtime_creation", "provider_admission"}
+        else "runtime"
+    )
+    _emit_operational_event(
+        "review",
+        status=bounded_status,
+        outcome=bounded_outcome,
+        latency_ms=max(0, latency_ms),
     )
 
 
 def _bounded_route(path: str) -> str:
-    if path.startswith("/sessions/"):
-        suffix = path.split("/", 3)
-        tail = f"/{suffix[3]}" if len(suffix) == 4 else ""
-        return f"/sessions/{{session_id}}{tail}"
+    parts = path.split("/")
+    if len(parts) == 3 and parts[1] == "sessions" and parts[2]:
+        return "/sessions/{session_id}"
+    if (
+        len(parts) == 4
+        and parts[1] == "sessions"
+        and parts[2]
+        and parts[3] in {"evidence", "answer", "review", "events", "reviews"}
+    ):
+        return f"/sessions/{{session_id}}/{parts[3]}"
     allowed = {"/health", "/ready", "/sessions", "/openhands/capabilities"}
-    return path if path in allowed else "other"
+    return path if path in allowed else "unmatched"
 
 
 class OperationalTelemetryMiddleware:
@@ -159,20 +203,35 @@ class OperationalTelemetryMiddleware:
         method = str(scope.get("method", "GET"))
         path = str(scope.get("path", ""))
         route = _bounded_route(path)
-        if method in {"POST", "PUT", "PATCH", "DELETE"} and (
-            self._data_dir / MAINTENANCE_LOCK_NAME
-        ).is_file():
-            _emit_operational_event(
-                "admission_rejection",
-                route=route,
-                status="maintenance_mode",
-                outcome="rejected",
-            )
-            await JSONResponse(
-                status_code=503,
-                content={"code": "maintenance_mode", "retryable": True},
-            )(scope, receive, send)
-            return
+        write_window: Any | None = None
+        if method in {"POST", "PUT", "PATCH", "DELETE"}:
+            write_window = writer_barrier(self._data_dir)
+            try:
+                await asyncio.to_thread(write_window.__enter__)
+            except WriterBlockedError as exc:
+                _emit_operational_event(
+                    "admission_rejection",
+                    route=route,
+                    status=exc.code,
+                    outcome="rejected",
+                )
+                await JSONResponse(
+                    status_code=503,
+                    content={"code": exc.code, "retryable": True},
+                )(scope, receive, send)
+                return
+            except RecoveryCoordinationError:
+                _emit_operational_event(
+                    "admission_rejection",
+                    route=route,
+                    status="recovery_incomplete",
+                    outcome="rejected",
+                )
+                await JSONResponse(
+                    status_code=503,
+                    content={"code": "recovery_incomplete", "retryable": True},
+                )(scope, receive, send)
+                return
         started = monotonic()
         status_code = 500
 
@@ -182,7 +241,11 @@ class OperationalTelemetryMiddleware:
                 status_code = int(message["status"])
             await send(message)
 
-        await self._app(scope, receive, capture_status)
+        try:
+            await self._app(scope, receive, capture_status)
+        finally:
+            if write_window is not None:
+                await asyncio.to_thread(write_window.__exit__, None, None, None)
         latency_ms = max(0, round((monotonic() - started) * 1000))
         _emit_operational_event(
             "request", route=route, status=str(status_code), latency_ms=latency_ms
@@ -557,6 +620,7 @@ def create_app(
                     engine.dispose()
 
     application = FastAPI(title="FocusProof Agent Server", lifespan=lifespan)
+    application.state.recovery_data_dir = resolved_data_dir
     application.add_middleware(
         RequestBodyLimitMiddleware,
         max_body_bytes=MAX_REQUEST_BODY_BYTES,
@@ -757,6 +821,17 @@ def _install_routes(
 
     @application.get("/ready")
     def ready(request: Request) -> Any:
+        try:
+            recovery_incomplete = is_recovery_incomplete(
+                Path(request.app.state.recovery_data_dir)
+            )
+        except RecoveryCoordinationError:
+            recovery_incomplete = True
+        if recovery_incomplete:
+            return JSONResponse(
+                status_code=503,
+                content={"code": "recovery_incomplete", "retryable": True},
+            )
         readiness_error = getattr(
             request.app.state,
             "readiness_error",
@@ -993,9 +1068,27 @@ def _install_routes(
         except asyncio.CancelledError:
             manager.interrupt(session_id, review_call_id)
             raise
-        except RuntimeUnavailableError:
+        except RuntimeUnavailableError as exc:
+            _record_review_failure_operational_signal(
+                status=(
+                    "rejected"
+                    if isinstance(exc, ProviderAdmissionUnavailableError)
+                    else "unavailable"
+                ),
+                outcome=(
+                    "provider_admission"
+                    if isinstance(exc, ProviderAdmissionUnavailableError)
+                    else "runtime"
+                ),
+                latency_ms=max(0, round((monotonic() - review_started) * 1000)),
+            )
             return _runtime_unavailable(session_id, "unavailable")
         except (RuntimeCreationError, ValueError):
+            _record_review_failure_operational_signal(
+                status="failed",
+                outcome="runtime_creation",
+                latency_ms=max(0, round((monotonic() - review_started) * 1000)),
+            )
             return _runtime_unavailable(session_id, "failed")
         _record_review_operational_signal(
             manager,

@@ -12,11 +12,11 @@ import subprocess
 import tarfile
 import tempfile
 from typing import Final
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from ai4c_staging_check import (
     MAINTENANCE_LOCK_NAME,
-    maintenance_lock,
+    maintenance_window,
     recovery_outcome,
 )
 
@@ -30,9 +30,22 @@ PROVIDER_KEYS: Final = frozenset(
     }
 )
 BACKUP_TIMEOUT_SECONDS: Final = 300.0
+LIBPQ_QUERY_ENV: Final = {
+    "sslmode": "PGSSLMODE",
+    "sslrootcert": "PGSSLROOTCERT",
+    "sslcert": "PGSSLCERT",
+    "sslkey": "PGSSLKEY",
+    "target_session_attrs": "PGTARGETSESSIONATTRS",
+    "connect_timeout": "PGCONNECT_TIMEOUT",
+    "options": "PGOPTIONS",
+}
 
 
 class RecoveryError(RuntimeError):
+    pass
+
+
+class PostgresUrlError(ValueError):
     pass
 
 
@@ -43,6 +56,16 @@ class RecoveryManifest:
     database_sha256: str
     openhands_archive_sha256: str
     created_at_utc: str
+
+
+@dataclass(frozen=True, slots=True)
+class PostgresCliConnection:
+    database_name: str
+    host: str
+    port: int | None
+    username: str | None
+    password: str | None
+    libpq_environment: dict[str, str]
 
 
 def current_application_revision() -> str:
@@ -89,53 +112,50 @@ def _create_backup(
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     if output_dir.exists():
         raise RecoveryError("output path already exists")
-    lock = maintenance_lock(source)
-    lock.__enter__()
-    work_dir = Path(
-        tempfile.mkdtemp(prefix=f".{output_dir.name}-", dir=output_dir.parent)
-    )
-    try:
-        database_dump = work_dir / "database.dump"
-        archive = work_dir / "openhands.tar.gz"
-        manifest_path = work_dir / "manifest.json"
-        _run_pg_dump(database_url, database_dump)
-        _write_deterministic_archive(source, archive)
-        manifest = RecoveryManifest(
-            schema_version=1,
-            application_revision=current_application_revision(),
-            database_sha256=_file_sha256(database_dump),
-            openhands_archive_sha256=_file_sha256(archive),
-            created_at_utc=datetime.now(UTC).isoformat(),
+    with maintenance_window(source):
+        work_dir = Path(
+            tempfile.mkdtemp(prefix=f".{output_dir.name}-", dir=output_dir.parent)
         )
-        manifest_path.write_text(
-            json.dumps(asdict(manifest), sort_keys=True, separators=(",", ":"))
-            + "\n",
-            encoding="utf-8",
-        )
-        os.replace(work_dir, output_dir)
-        return manifest
-    finally:
-        shutil.rmtree(work_dir, ignore_errors=True)
-        lock.__exit__(None, None, None)
+        try:
+            database_dump = work_dir / "database.dump"
+            archive = work_dir / "openhands.tar.gz"
+            manifest_path = work_dir / "manifest.json"
+            _run_pg_dump(database_url, database_dump)
+            _write_deterministic_archive(source, archive)
+            manifest = RecoveryManifest(
+                schema_version=1,
+                application_revision=current_application_revision(),
+                database_sha256=_file_sha256(database_dump),
+                openhands_archive_sha256=_file_sha256(archive),
+                created_at_utc=datetime.now(UTC).isoformat(),
+            )
+            manifest_path.write_text(
+                json.dumps(asdict(manifest), sort_keys=True, separators=(",", ":"))
+                + "\n",
+                encoding="utf-8",
+            )
+            os.replace(work_dir, output_dir)
+            return manifest
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def _run_pg_dump(database_url: str, destination: Path) -> None:
-    parsed = urlsplit(database_url)
-    if not _is_postgres_scheme(parsed.scheme):
-        raise RecoveryError("database URL must use PostgreSQL")
-    database_name = unquote(parsed.path.lstrip("/"))
-    if not parsed.hostname or not database_name:
-        raise RecoveryError("database URL is incomplete")
+    try:
+        connection = _postgres_cli_connection(database_url)
+    except PostgresUrlError as exc:
+        raise RecoveryError(str(exc)) from exc
     args = ["pg_dump", "--format=custom", "--file", str(destination)]
-    args.extend(["--host", parsed.hostname])
-    if parsed.port is not None:
-        args.extend(["--port", str(parsed.port)])
-    if parsed.username is not None:
-        args.extend(["--username", unquote(parsed.username)])
-    args.append(database_name)
+    args.extend(["--host", connection.host])
+    if connection.port is not None:
+        args.extend(["--port", str(connection.port)])
+    if connection.username is not None:
+        args.extend(["--username", connection.username])
+    args.append(connection.database_name)
     env = _minimal_environment()
-    if parsed.password is not None:
-        env["PGPASSWORD"] = unquote(parsed.password)
+    env.update(connection.libpq_environment)
+    if connection.password is not None:
+        env["PGPASSWORD"] = connection.password
     subprocess.run(
         args,
         check=True,
@@ -148,6 +168,81 @@ def _is_postgres_scheme(scheme: str) -> bool:
     base, separator, driver = scheme.partition("+")
     return base in {"postgresql", "postgres"} and (
         not separator or bool(driver)
+    )
+
+
+def _postgres_cli_connection(database_url: str) -> PostgresCliConnection:
+    parsed = urlsplit(database_url)
+    if not _is_postgres_scheme(parsed.scheme):
+        raise PostgresUrlError("database URL must use PostgreSQL")
+    if parsed.fragment:
+        raise PostgresUrlError("database URL query is invalid")
+    try:
+        pairs = parse_qsl(
+            parsed.query,
+            keep_blank_values=True,
+            strict_parsing=True,
+        )
+    except ValueError as exc:
+        raise PostgresUrlError("database URL query is invalid") from exc
+    query: dict[str, str] = {}
+    allowed = set(LIBPQ_QUERY_ENV) | {"host"}
+    for key, value in pairs:
+        if key not in allowed or key in query or not _safe_connection_value(value):
+            raise PostgresUrlError("database URL query is invalid")
+        query[key] = value
+    authority_host = unquote(parsed.hostname) if parsed.hostname is not None else None
+    if authority_host is not None and "host" in query:
+        raise PostgresUrlError("database URL query is invalid")
+    host = query.pop("host", authority_host)
+    database_name = unquote(parsed.path.lstrip("/"))
+    username = unquote(parsed.username) if parsed.username is not None else None
+    password = unquote(parsed.password) if parsed.password is not None else None
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise PostgresUrlError("database URL is incomplete") from exc
+    values = (host, database_name, username, password)
+    if (
+        not host
+        or not database_name
+        or any(value is not None and not _safe_connection_value(value) for value in values)
+    ):
+        raise PostgresUrlError("database URL is incomplete")
+    if "sslmode" in query and query["sslmode"] not in {
+        "disable",
+        "allow",
+        "prefer",
+        "require",
+        "verify-ca",
+        "verify-full",
+    }:
+        raise PostgresUrlError("database URL query is invalid")
+    if "target_session_attrs" in query and query["target_session_attrs"] not in {
+        "any",
+        "read-write",
+        "read-only",
+        "primary",
+        "standby",
+        "prefer-standby",
+    }:
+        raise PostgresUrlError("database URL query is invalid")
+    timeout = query.get("connect_timeout")
+    if timeout is not None and (not timeout.isascii() or not timeout.isdigit()):
+        raise PostgresUrlError("database URL query is invalid")
+    return PostgresCliConnection(
+        database_name=database_name,
+        host=host,
+        port=port,
+        username=username,
+        password=password,
+        libpq_environment={LIBPQ_QUERY_ENV[key]: value for key, value in query.items()},
+    )
+
+
+def _safe_connection_value(value: str) -> bool:
+    return bool(value) and len(value) <= 4096 and all(
+        ord(character) >= 32 and ord(character) != 127 for character in value
     )
 
 
