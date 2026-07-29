@@ -303,7 +303,7 @@ def _build_staging_image(
     for name, value in build_args.items():
         command.extend(["--build-arg", f"{name}={value}"])
     command.append(str(context_dir))
-    _run_checked(command, cwd=context_dir, timeout=900, env={"SOURCE_DATE_EPOCH": "1735689600"})
+    _run_checked(command, cwd=context_dir, timeout=1800, env={"SOURCE_DATE_EPOCH": "1735689600"})
 
 
 def _safe_staging_image_snapshot(
