@@ -138,8 +138,8 @@ def _canonical_release_snapshot_for_image(
         package_lock = json.loads(
             (context_dir / "frontend/package-lock.json").read_text(encoding="utf-8")
         )
-        assert package_lock["packages"]["node_modules/next"]["version"] == "15.5.18"
-        normalization_profile = "next@15.5.18"
+        assert package_lock["packages"]["node_modules/next"]["version"] == "15.5.21"
+        normalization_profile = "next@15.5.21"
     descriptor = check_staging_reproducibility.ReleaseDescriptor(
         schema=check_staging_reproducibility.CANONICAL_RELEASE_SCHEMA,
         platform=f"{os_name}/{architecture}",
