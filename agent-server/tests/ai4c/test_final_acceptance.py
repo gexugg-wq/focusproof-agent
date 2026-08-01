@@ -219,6 +219,81 @@ def test_final_report_has_unique_auditable_requirement_evidence() -> None:
         _validate_evidence(row[2])
 
 
+def _requirements_by_id(text: str) -> dict[str, list[str]]:
+    return {row[0]: row for row in _requirement_rows(text)}
+
+
+def _accepted_evidence_section(locator: str) -> str:
+    revision_path, _, section = locator.partition("#")
+    revision, _, path_text = revision_path.partition(":")
+    result = subprocess.run(
+        ["git", "show", f"{revision}:{path_text}"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
+    lines = result.stdout.splitlines()
+    start = next(
+        index
+        for index, line in enumerate(lines)
+        if section.lower() in _anchors_from_markdown(line)
+    )
+    heading_level = len(lines[start]) - len(lines[start].lstrip("#"))
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if lines[index].startswith("#")
+            and len(lines[index]) - len(lines[index].lstrip("#")) <= heading_level
+        ),
+        len(lines),
+    )
+    return "\n".join(lines[start:end])
+
+
+def test_provider_failures_pass_points_to_the_safe_failure_path() -> None:
+    rows = _requirements_by_id(REPORT.read_text(encoding="utf-8"))
+
+    assert rows["AI4C-PROVIDER-FAILURES"][1:3] == [
+        "pass",
+        "pytest-node: agent-server/tests/openhands_runtime/test_runtime_failure.py::test_run_failure_never_reports_openhands_usage",
+    ]
+
+
+@pytest.mark.parametrize(
+    "requirement_id",
+    ["AI4C-SDK-EQUIVALENCE", "AI4C-CLEAN-STACK"],
+)
+def test_external_artifact_requirements_fail_closed_without_bound_artifacts(
+    requirement_id: str,
+) -> None:
+    rows = _requirements_by_id(REPORT.read_text(encoding="utf-8"))
+    row = rows[requirement_id]
+
+    assert row[1] == "blocked"
+    assert row[2] == (
+        "doc: docs/research/AI4C_PRODUCTION_READINESS_REPORT.md"
+        "#current-external-artifact-blockers"
+    )
+
+
+def test_passed_historical_digest_claims_require_artifact_bound_evidence() -> None:
+    rows = _requirement_rows(REPORT.read_text(encoding="utf-8"))
+
+    for row in rows:
+        prefix, _, locator = row[2].partition(":")
+        if row[1] != "pass" or prefix != "accepted-evidence":
+            continue
+        section = _accepted_evidence_section(locator.strip())
+        if re.search(r"(?:sha256:)?[0-9a-f]{64}", section, re.IGNORECASE):
+            pytest.fail(
+                f"{row[0]} passes from a historical digest claim without a "
+                "recomputable digest: artifact locator"
+            )
+
+
 @pytest.mark.parametrize(
     ("invalid_evidence", "reason"),
     [

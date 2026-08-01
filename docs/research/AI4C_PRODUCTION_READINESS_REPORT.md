@@ -29,15 +29,15 @@ full commit and document anchor.
 | --- | --- | --- | --- | --- | --- |
 | AI4C-RUNTIME-REUSE | pass | pytest-node: agent-server/tests/ai4c/test_openhands_reuse_boundary.py::test_production_package_contains_no_parallel_event_log_or_agent_loop | AI4C.1 | goal: OpenHands Direct-Reuse Gate | Task 5 construction-site audit remains. |
 | AI4C-PROVIDER-BOUNDS | pass | pytest-node: agent-server/tests/ai4c/test_llm_operations.py::test_factory_caps_native_iterations_to_provider_call_limit | AI4C.1 | goal: bounded provider policy | No live-provider observation. |
-| AI4C-PROVIDER-FAILURES | pass | pytest-node: agent-server/tests/ai4c/test_real_provider.py::test_real_provider_guard_rejects_non_exact_marker_selection | AI4C.1 | goal: safe provider failure | External outage unobserved. |
+| AI4C-PROVIDER-FAILURES | pass | pytest-node: agent-server/tests/openhands_runtime/test_runtime_failure.py::test_run_failure_never_reports_openhands_usage | AI4C.1 | goal: safe provider failure | Deterministic exhausted-runtime failure proves no usage or false success; external outage remains unobserved. |
 | AI4C-AUTH-401 | pass | pytest-node: agent-server/tests/ai4c/test_identity_end_to_end.py::test_real_signed_identity_chain_is_owner_isolated_and_identity_material_free | AI4C.2 | goal: verified identity | Browser coverage remains Task 3. |
 | AI4C-AUTH-403 | pass | pytest-node: agent-server/tests/ai4c/test_identity_authorization.py::test_disabled_principal_is_forbidden_before_resource_lookup | AI4C.2 | goal: disabled identity | Browser coverage remains Task 3. |
 | AI4C-AUTH-404 | pass | pytest-node: agent-server/tests/ai4c/test_identity_end_to_end.py::test_real_signed_identity_chain_is_owner_isolated_and_identity_material_free | AI4C.2 | goal: ownership isolation | Browser coverage remains Task 3. |
 | AI4C-SPOOF-RESISTANCE | pass | pytest-node: agent-server/tests/ai4c/test_identity_authorization.py::test_verifier_rejects_wrong_kid_bad_signature_and_disallowed_algorithm | AI4C.2 | goal: sender forgery/replay rejection | Real issuer remains blocked. |
 | AI4C-ANONYMOUS-ISOLATION | pass | pytest-node: agent-server/tests/ai4c/test_identity_persistence.py::test_storage_decision_isolates_anonymous_local_dev | AI4C.2 | goal: anonymous isolation | Anonymous profile remains local-dev only. |
-| AI4C-SDK-EQUIVALENCE | pass | pytest-node: agent-server/tests/ai4c/test_openhands_release_equivalence.py::test_success_path_uses_uv_temp_venv_exact_requirement_arrays_and_minimum_env | AI4C.3 | goal: reproducible SDK source | Exact executable validation node; historical release-probe digests remain recorded below. |
+| AI4C-SDK-EQUIVALENCE | blocked | doc: docs/research/AI4C_PRODUCTION_READINESS_REPORT.md#current-external-artifact-blockers | AI4C.3 | goal: reproducible SDK source | Requires authorization/network and retained artifacts to rerun the exact OpenHands SDK 1.31.0 fresh-venv release probe. |
 | AI4C-POSTGRESQL | pass | pytest-node: agent-server/tests/ai4c/test_postgres_persistence.py::test_postgres_migrations_upgrade_downgrade_reupgrade_constraints_and_types | AI4C.3 | goal: PostgreSQL compatibility | Dedicated disposable PostgreSQL profile only. |
-| AI4C-CLEAN-STACK | pass | accepted-evidence: 76ea0fddd60dc61cc34b3ffe1faad0d84875221e:docs/research/AI4C_PRODUCTION_READINESS_REPORT.md#staging-postgresql-migrations-and-recovery | AI4C.3 | goal: clean staging deployment | Historical accepted run only; local OIDC fixture is not an external issuer. |
+| AI4C-CLEAN-STACK | blocked | doc: docs/research/AI4C_PRODUCTION_READINESS_REPORT.md#current-external-artifact-blockers | AI4C.3 | goal: clean staging deployment | Requires two new clean-stack runs with retained auditable image artifacts and metadata; historical digests are background only. |
 | AI4C-PAIRED-RESTORE | pass | pytest-node: agent-server/tests/ai4c/test_backup_restore.py::test_staging_external_restores_paired_product_and_native_state_idempotently | AI4C.3 | goal: paired recovery | Historical drill used disposable local PostgreSQL and native persistence. |
 | AI4C-REDACTION | pass | pytest-node: agent-server/tests/ai4c/test_security_audit.py::test_authentication_failures_write_exactly_one_minimized_security_audit_row[headers0-missing_credentials-False] | AI4C.2 | goal: secret/content redaction | Fixed sentinel hygiene scan remains at closure. |
 | AI4C-ACCESSIBILITY | pass | accepted-evidence: 76ea0fddd60dc61cc34b3ffe1faad0d84875221e:docs/research/AI4C_PRODUCTION_READINESS_REPORT.md#accessibility | AI4C.4 | goal: keyboard/focus/zoom/automated checks | Historical accepted run only; local issuer fixture only. |
@@ -52,18 +52,40 @@ full commit and document anchor.
 This repair round runs the final-acceptance lint, the permitted AI4-focused
 deterministic suite, Ruff, Mypy, and `git diff --check`. Those results are
 closure evidence for this repair only. Historical external OIDC, PostgreSQL,
-cold-stack, Playwright, and SDK release-probe results are cited as immutable
-accepted evidence and were not rerun. The final-acceptance test is a structure
-and locator-integrity lint: it proves matrix shape, exact pytest collection,
-document anchors, immutable accepted-evidence anchors, and artifact digest
-binding; it does not prove that every mapped gate ran in this round. No real
-LLM is authorized or run.
+cold-stack, Playwright, and SDK release-probe results were not rerun. Historical
+Playwright accessibility and complete deterministic-gate results remain cited
+as accepted evidence because their anchors record auditable runs without relying
+on bare digest claims. Historical SDK and clean-stack digest results are
+background only and cannot establish current passes without their underlying
+artifacts. The final-acceptance test is a structure and locator-integrity lint:
+it proves matrix shape, exact pytest collection, document anchors, immutable
+accepted-evidence anchors, and artifact digest binding; it does not prove that
+every mapped gate ran in this round. No real LLM is authorized or run.
 
 The repair-round marker-policy target passed **5 tests in 7.32s**, and the
 final-acceptance target passed **13 tests in 40.55s**. The complete
 default-marker AI4C directory run covered every test file and reported **403
 passed, 13 deselected, 3 warnings in 225.30s**, with zero failures. Ruff passed,
 and Mypy reported no issues in 159 source files.
+
+## Current External Artifact Blockers
+
+Three evidence classes are intentionally distinct:
+
+1. **Run in this repair:** deterministic semantic acceptance, marker-policy,
+   AI4C regression, Ruff, Mypy, and diff hygiene commands are rerun locally.
+2. **Historical background:** the earlier OpenHands SDK 1.31.0 probe digests
+   and two-round clean-stack image digests describe previously accepted runs,
+   but their wheel/environment and OCI image artifacts are not currently
+   readable, retained, or recomputable. They are not current pass evidence.
+3. **Current blockers:** `AI4C-SDK-EQUIVALENCE` requires authorization, network
+   access, and retained auditable artifacts before rerunning the exact SDK
+   1.31.0 fresh-venv release probe. `AI4C-CLEAN-STACK` requires two new
+   clean-stack executions that retain the actual OCI image artifacts and
+   metadata needed to recompute and compare their digests.
+
+A digest of a summary JSON or Markdown report is not a substitute for an SDK
+wheel/environment or Docker/OCI image and must not be used to clear either row.
 
 ## Red-Green History
 
@@ -184,13 +206,19 @@ and output.
 ## Staging, PostgreSQL, Migrations, and Recovery
 
 Task 4 capability preflight passed on Linux `x86_64`: container CLI, Compose,
-and PostgreSQL client were all `available`. The official OpenHands SDK 1.31.0
-release-equivalence probe passed with signature digest
+and PostgreSQL client were all `available`. As historical background, the Task
+4 report recorded an OpenHands SDK 1.31.0 release-equivalence probe with
+signature digest
 `f0dd4830554f256b605f565304d17221c7d2ad52fb33fa5afd6aa3823da48e3e`,
 lifecycle digest
 `ef16bc0b8164f579ae783b0d845c3947d539c285e426b532cf947b60993f5671`,
 and event digest
 `2fa64b778094febdae107c90c68edd31b8f7c460d08b277418c8811848285c66`.
+This repair did not run that fresh-venv release probe, and the artifacts behind
+those bare digests are unavailable for recomputation, so SDK equivalence is
+currently blocked. Direct SDK import, reuse, and compatibility tests remain
+valid deterministic implementation evidence but do not prove release-artifact
+equivalence.
 
 The explicit PostgreSQL suite passed all 10 selected instances (395
 deselected) in 13.16s. It covered migrations, rollback and ownership,
@@ -206,11 +234,14 @@ native event ID/type lists. Review counts and per-conversation native-event
 counts did not grow after the second restore; no user content was printed.
 
 Per the Task 4 instruction, the accepted Task 3 two-round cold-stack gate at
-`0a4afae` was cited rather than rerun. It passed in 1529.73s with identical
-canonical digests: agent-server
+`0a4afae` was cited rather than rerun. Its historical report recorded 1529.73s
+and identical canonical digests: agent-server
 `sha256:847371add386c19f67b4f017608aef2aac163f33e8bab55ca155ca64ba504e0e`
 and frontend
 `sha256:3f667ff29bff08bdc5ee16db045695ed853bbf4055be2e6ea1b6ab091caf5146`.
+The actual image artifacts are not currently readable or recomputable, so this
+is background rather than a current clean-stack pass. Two fresh runs with
+retained auditable image artifacts and metadata are required to clear the row.
 Both rounds traversed real browser Authorization Code + PKCE through BFF and
 FastAPI, observed real `401`/`403`/`404`, and recovered official
 `LocalConversation`; product events were `4 -> 7 -> 7`, native-source events
@@ -234,10 +265,13 @@ the spec contains no `page.route` or request interception.
 ## External Authorization and Blockers
 
 A real LLM invocation was not authorized; no provider call was made and the
-row remains `not-authorized`. No AI0-approved managed/self-hosted OIDC issuer or
-identified non-public external staging target was supplied, so that row is
-`blocked`. The maximum honest release classification is therefore
-`staging-ready with blockers`.
+row remains `not-authorized`. SDK release-artifact equivalence and clean-stack
+reproducibility are `blocked` until the exact reruns and retained artifacts in
+the current blocker section exist. No AI0-approved managed/self-hosted OIDC
+issuer or identified non-public external staging target was supplied, so that
+row is also `blocked`. Deterministic implementation completion does not clear
+these external release gates. The maximum honest release classification is
+therefore `staging-ready with blockers`.
 
 ## Product Boundary and Explicit Exclusions
 
@@ -307,9 +341,11 @@ repair requires rerunning every later-phase gate. Data rollback must use the
 paired PostgreSQL/OpenHands recovery unit.
 
 Residual blockers and risks are explicit: real LLM smoke is `not-authorized`;
-external OIDC and public/non-public external staging exercise is `blocked`;
-production auth-provider selection/integration is incomplete; real JWKS
-rotation/outage and public ingress have no evidence; local disposable
+SDK fresh-venv release equivalence and two-round clean-stack reproducibility are
+`blocked` without new authorized runs and retained real artifacts; external
+OIDC and public/non-public external staging exercise is `blocked`; production
+auth-provider selection/integration is incomplete; real JWKS rotation/outage
+and public ingress have no evidence; local disposable
 PostgreSQL/Keycloak evidence does not substitute for operated production
 services; OpenHands gap adapters remain version-sensitive; deprecation
 warnings remain; and real provider latency/cost/failure behavior is unobserved.
