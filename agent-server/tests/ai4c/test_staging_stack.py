@@ -1610,7 +1610,6 @@ def test_staging_external_stack_builds_runs_and_preserves_ids(tmp_path: Path) ->
                 [
                     str(PROJECT_ROOT / "frontend/node_modules/.bin/playwright"),
                     "test",
-                    "e2e/ai4c-staging.spec.ts",
                     "--config",
                     "playwright.staging.config.ts",
                 ],
