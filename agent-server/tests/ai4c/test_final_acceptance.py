@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-import ast
+from functools import lru_cache
+import hashlib
+import os
 from pathlib import Path
 import re
 import shlex
+import subprocess
 import sys
 
 import pytest
@@ -34,7 +37,14 @@ REQUIRED_REQUIREMENTS = {
     "AI4C-EXCLUSIONS",
 }
 VALID_STATUSES = {"pass", "fail", "blocked", "not-authorized"}
-EVIDENCE_TYPES = {"pytest-node", "command", "doc", "digest", "artifact"}
+EVIDENCE_TYPES = {
+    "accepted-evidence",
+    "artifact",
+    "command",
+    "digest",
+    "doc",
+    "pytest-node",
+}
 
 
 def _requirement_rows(text: str) -> list[list[str]]:
@@ -53,14 +63,38 @@ def _project_path(value: str) -> Path:
     return path
 
 
-def _python_test_names(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    return {
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name.startswith("test_")
-    }
+@lru_cache(maxsize=None)
+def _collected_pytest_nodes(test_path: str) -> frozenset[str]:
+    env = os.environ.copy()
+    for key in (
+        "DASHSCOPE_API_KEY",
+        "OPENAI_API_KEY",
+        "FOCUSPROOF_LLM_API_KEY",
+        "ANTHROPIC_API_KEY",
+    ):
+        env.pop(key, None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "-m",
+            "real_llm or not real_llm",
+            test_path,
+        ],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, f"pytest collection failed for: {test_path}"
+    return frozenset(
+        line.strip() for line in result.stdout.splitlines() if "::" in line
+    )
 
 
 def _validate_pytest_node(value: str) -> None:
@@ -68,8 +102,9 @@ def _validate_pytest_node(value: str) -> None:
     assert len(parts) >= 2 and all(parts), f"pytest evidence needs an exact node: {value}"
     path = _project_path(parts[0])
     assert path.suffix == ".py", f"pytest node must reference a Python test file: {value}"
-    test_name = re.sub(r"\[.*\]$", "", parts[-1])
-    assert test_name in _python_test_names(path), f"pytest test function does not exist: {value}"
+    assert value in _collected_pytest_nodes(parts[0]), (
+        f"pytest node is not collectable: {value}"
+    )
 
 
 def _validate_command(value: str) -> None:
@@ -102,6 +137,41 @@ def _markdown_anchors(path: Path) -> set[str]:
     return anchors
 
 
+def _anchors_from_markdown(text: str) -> set[str]:
+    anchors: set[str] = set()
+    for line in text.splitlines():
+        if not line.startswith("#"):
+            continue
+        heading = line.lstrip("#").strip().lower()
+        anchor = re.sub(r"[^a-z0-9 _-]", "", heading)
+        anchors.add(re.sub(r"[ _]+", "-", anchor).strip("-"))
+    return anchors
+
+
+def _validate_accepted_evidence(locator: str) -> None:
+    revision_path, marker, section = locator.partition("#")
+    revision, separator, path_text = revision_path.partition(":")
+    assert (
+        marker
+        and section
+        and separator
+        and re.fullmatch(r"[0-9a-f]{40}", revision)
+    ), f"accepted evidence needs full commit, repository path, and section: {locator}"
+    _project_path(path_text)
+    result = subprocess.run(
+        ["git", "show", f"{revision}:{path_text}"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == 0, f"accepted evidence object does not exist: {locator}"
+    assert section.lower() in _anchors_from_markdown(result.stdout), (
+        f"accepted evidence section does not exist: {locator}"
+    )
+
+
 def _validate_evidence(value: str) -> None:
     assert "<" not in value and ">" not in value, f"evidence contains a placeholder: {value}"
     prefix, separator, locator = value.partition(":")
@@ -120,9 +190,15 @@ def _validate_evidence(value: str) -> None:
         assert path.suffix == ".md", f"doc evidence must reference Markdown: {value}"
         assert section.lower() in _markdown_anchors(path), f"document section does not exist: {value}"
     elif prefix == "digest":
-        assert re.fullmatch(r"sha256:[0-9a-fA-F]{64}", locator), (
-            f"digest evidence must be sha256 plus 64 hex characters: {value}"
+        path_text, marker, digest = locator.partition("#")
+        assert marker and re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest), (
+            f"digest evidence needs artifact path and sha256: {value}"
         )
+        path = _project_path(path_text)
+        actual = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        assert digest.lower() == actual, f"digest does not match artifact: {value}"
+    elif prefix == "accepted-evidence":
+        _validate_accepted_evidence(locator)
     else:
         _project_path(locator)
 
@@ -144,18 +220,26 @@ def test_final_report_has_unique_auditable_requirement_evidence() -> None:
 
 
 @pytest.mark.parametrize(
-    "invalid_evidence",
+    ("invalid_evidence", "reason"),
     [
-        'pytest <agent-server/tests/ai4c/test_file.py::test_name> -q',
-        'docs/nonexistent.md#Missing',
-        'pytest-node: agent-server/tests/ai4c/test_final_acceptance.py::test_nonexistent',
-        'pytest agent-server/tests/ai4c/test_final_acceptance.py -q',
+        ('pytest-node: <agent-server/tests/ai4c/test_final_acceptance.py::test_final_report_declares_honest_release_bounds>', "placeholder"),
+        ('artifact: ../outside.json', "escapes project"),
+        ('doc: docs/nonexistent.md#architecture-and-scope', "does not exist"),
+        ('doc: docs/research/AI4C_PRODUCTION_READINESS_REPORT.md#missing-anchor', "document section does not exist"),
+        ('command: .venv/bin/python -m pytest agent-server/tests/ai4c/test_final_acceptance.py -q', "pytest command needs an exact node"),
+        ('pytest-node: agent-server/tests/ai4c/test_final_acceptance.py::test_nonexistent', "pytest node is not collectable"),
+        ('pytest-node: agent-server/tests/ai4c/test_final_acceptance.py::FakeAcceptanceClass::test_final_report_declares_honest_release_bounds', "pytest node is not collectable"),
+        ('pytest-node: agent-server/tests/ai4c/test_openhands_release_equivalence.py::test_parse_probe_payload_fail_closed_for_invalid_pass_payload[payload99]', "pytest node is not collectable"),
+        ('digest: docs/research/AI4C_PRODUCTION_READINESS_REPORT.md#sha256:not-a-digest', "digest evidence needs artifact path and sha256"),
+        ('digest: docs/research/AI4C_PRODUCTION_READINESS_REPORT.md#sha256:0000000000000000000000000000000000000000000000000000000000000000', "digest does not match artifact"),
+        ('digest: docs/research/missing-artifact.json#sha256:0000000000000000000000000000000000000000000000000000000000000000', "does not exist"),
     ],
 )
 def test_evidence_lint_rejects_non_executable_locators(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     invalid_evidence: str,
+    reason: str,
 ) -> None:
     text = REPORT.read_text(encoding="utf-8")
     original = next(
@@ -169,7 +253,7 @@ def test_evidence_lint_rejects_non_executable_locators(
     invalid_report.write_text(text.replace(original, "| " + " | ".join(cells) + " |"), encoding="utf-8")
     monkeypatch.setattr(sys.modules[__name__], "REPORT", invalid_report)
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match=reason):
         test_final_report_has_unique_auditable_requirement_evidence()
 
 

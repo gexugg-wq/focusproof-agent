@@ -20,8 +20,10 @@ runtime. No later-program work is in scope.
 ## Requirement Matrix
 
 Each row has: requirement ID, current status, exact evidence locator, owning
-phase, source requirement, and residual risk. A row is not `pass` until its
-listed gate has actually run in this acceptance round.
+phase, source requirement, and residual risk. `pytest-node` is an exactly
+collectable executable locator; it does not by itself claim a run in this
+repair round. `accepted-evidence` pins historical run evidence to an immutable
+full commit and document anchor.
 
 | Requirement ID | Status | Evidence | Owning phase | Source | Residual risk |
 | --- | --- | --- | --- | --- | --- |
@@ -33,23 +35,49 @@ listed gate has actually run in this acceptance round.
 | AI4C-AUTH-404 | pass | pytest-node: agent-server/tests/ai4c/test_identity_end_to_end.py::test_real_signed_identity_chain_is_owner_isolated_and_identity_material_free | AI4C.2 | goal: ownership isolation | Browser coverage remains Task 3. |
 | AI4C-SPOOF-RESISTANCE | pass | pytest-node: agent-server/tests/ai4c/test_identity_authorization.py::test_verifier_rejects_wrong_kid_bad_signature_and_disallowed_algorithm | AI4C.2 | goal: sender forgery/replay rejection | Real issuer remains blocked. |
 | AI4C-ANONYMOUS-ISOLATION | pass | pytest-node: agent-server/tests/ai4c/test_identity_persistence.py::test_storage_decision_isolates_anonymous_local_dev | AI4C.2 | goal: anonymous isolation | Anonymous profile remains local-dev only. |
-| AI4C-SDK-EQUIVALENCE | pass | digest: sha256:f0dd4830554f256b605f565304d17221c7d2ad52fb33fa5afd6aa3823da48e3e | AI4C.3 | goal: reproducible SDK source | Official release availability remains an external dependency. |
+| AI4C-SDK-EQUIVALENCE | pass | pytest-node: agent-server/tests/ai4c/test_openhands_release_equivalence.py::test_success_path_uses_uv_temp_venv_exact_requirement_arrays_and_minimum_env | AI4C.3 | goal: reproducible SDK source | Exact executable validation node; historical release-probe digests remain recorded below. |
 | AI4C-POSTGRESQL | pass | pytest-node: agent-server/tests/ai4c/test_postgres_persistence.py::test_postgres_migrations_upgrade_downgrade_reupgrade_constraints_and_types | AI4C.3 | goal: PostgreSQL compatibility | Dedicated disposable PostgreSQL profile only. |
-| AI4C-CLEAN-STACK | pass | pytest-node: agent-server/tests/ai4c/test_staging_stack.py::test_staging_external_stack_builds_runs_and_preserves_ids | AI4C.3 | goal: clean staging deployment | Historical run owned by commit `0a4afae`; local OIDC fixture is not an external issuer. |
+| AI4C-CLEAN-STACK | pass | accepted-evidence: 76ea0fddd60dc61cc34b3ffe1faad0d84875221e:docs/research/AI4C_PRODUCTION_READINESS_REPORT.md#staging-postgresql-migrations-and-recovery | AI4C.3 | goal: clean staging deployment | Historical accepted run only; local OIDC fixture is not an external issuer. |
 | AI4C-PAIRED-RESTORE | pass | pytest-node: agent-server/tests/ai4c/test_backup_restore.py::test_staging_external_restores_paired_product_and_native_state_idempotently | AI4C.3 | goal: paired recovery | Historical drill used disposable local PostgreSQL and native persistence. |
-| AI4C-REDACTION | pass | pytest-node: agent-server/tests/ai4c/test_security_audit.py::test_authentication_failures_write_exactly_one_minimized_security_audit_row | AI4C.2 | goal: secret/content redaction | Fixed sentinel hygiene scan remains at closure. |
-| AI4C-ACCESSIBILITY | pass | pytest-node: agent-server/tests/ai4c/test_staging_stack.py::test_staging_external_stack_builds_runs_and_preserves_ids | AI4C.4 | goal: keyboard/focus/zoom/automated checks | Historical run owned by commit `0a4afae`; local issuer fixture only. |
-| AI4C-DETERMINISTIC-GATES | pass | pytest-node: agent-server/tests/ai4c/test_final_acceptance.py::test_final_report_has_unique_auditable_requirement_evidence | AI4C.4 | goal: full deterministic regression | Historical full-gate counts remain documented below. |
+| AI4C-REDACTION | pass | pytest-node: agent-server/tests/ai4c/test_security_audit.py::test_authentication_failures_write_exactly_one_minimized_security_audit_row[headers0-missing_credentials-False] | AI4C.2 | goal: secret/content redaction | Fixed sentinel hygiene scan remains at closure. |
+| AI4C-ACCESSIBILITY | pass | accepted-evidence: 76ea0fddd60dc61cc34b3ffe1faad0d84875221e:docs/research/AI4C_PRODUCTION_READINESS_REPORT.md#accessibility | AI4C.4 | goal: keyboard/focus/zoom/automated checks | Historical accepted run only; local issuer fixture only. |
+| AI4C-DETERMINISTIC-GATES | pass | accepted-evidence: 76ea0fddd60dc61cc34b3ffe1faad0d84875221e:docs/research/AI4C_PRODUCTION_READINESS_REPORT.md#deterministic-gates-and-versions | AI4C.4 | goal: full deterministic regression | Historical accepted full-gate record; structure lint proves only report integrity. |
 | AI4C-REAL-PROVIDER | not-authorized | pytest-node: agent-server/tests/ai4c/test_real_provider.py::test_dashscope_smoke_uses_native_bounded_conversation | AI4C.1 | goal: authorized real-provider acceptance | Node was not run; no live call, cost, token, or latency evidence. |
 | AI4C-EXTERNAL-OIDC-STAGING | blocked | doc: docs/superpowers/plans/2026-07-17-ai4c4-final-acceptance.md#task-4-external-capability-recovery-and-cost-gates | AI4C.4 | goal: real external identity/staging | No approved issuer or non-public target. |
 | AI4C-PROTOCOL-FREEZE | pass | pytest-node: agent-server/tests/ai4c/test_openhands_reuse_boundary.py::test_build_metadata_excludes_deleted_runtime_and_tracks_projection_stores | AI4C.1-3 | design: protocol freeze | SDK gaps remain version-sensitive and retain explicit deletion conditions. |
 | AI4C-EXCLUSIONS | pass | doc: docs/project-management/goals/AI4C_PRODUCTION_READINESS_CODEX_GOAL.md#product-boundary | AI4C.4 | goal: exclusions | Baseline intentionally spans accepted AI4A/AI4B foundations and AI4C. |
+
+## Evidence Provenance for This Repair Round
+
+This repair round runs the final-acceptance lint, the permitted AI4-focused
+deterministic suite, Ruff, Mypy, and `git diff --check`. Those results are
+closure evidence for this repair only. Historical external OIDC, PostgreSQL,
+cold-stack, Playwright, and SDK release-probe results are cited as immutable
+accepted evidence and were not rerun. The final-acceptance test is a structure
+and locator-integrity lint: it proves matrix shape, exact pytest collection,
+document anchors, immutable accepted-evidence anchors, and artifact digest
+binding; it does not prove that every mapped gate ran in this round. No real
+LLM is authorized or run.
+
+The repair-round marker-policy target passed **5 tests in 7.32s**, and the
+final-acceptance target passed **13 tests in 40.55s**. The complete
+default-marker AI4C directory run covered every test file and reported **403
+passed, 13 deselected, 3 warnings in 225.30s**, with zero failures. Ruff passed,
+and Mypy reported no issues in 159 source files.
 
 ## Red-Green History
 
 - Evidence-lint RED: missing closure report, 2 failed in 0.06s. GREEN: 2 passed in 0.03s; commit `20eca49`.
 - Collection-policy RED: default E2E produced 16 passed and 4 failed; named owning-phase node failed in 2.24s. GREEN: named node 1 passed in 2.13s and default E2E 16 passed in 1.1m; commit `8df1324`.
 - Dependency RED: Next 15.5.18 and sharp 0.34.5 produced 2 high advisories. Next 15.5.21 plus scoped sharp 0.35.0 override produced `found 0 vulnerabilities`; commit `aa087c7`.
+- This repair's locator RED was **6 failed, 7 passed in 0.47s**: nonexistent,
+  fabricated-class and wrong-parameter nodes plus bad/mismatched/missing digest
+  evidence failed for their named reasons. The inherited marker-policy RED was
+  **1 failed in 0.54s** at the exact starting HEAD because it bound collection
+  to `1/75`; its GREEN asserts the sole selected full node ID and passed **5
+  tests in 7.32s**. Final-acceptance GREEN was **13 passed in 40.55s**
+  after exact pytest collection, artifact-bound digest verification, immutable
+  accepted-evidence validation, and report locator corrections.
 
 ## Deterministic Gates and Versions
 
@@ -62,6 +90,10 @@ Linux versions: Python 3.12.3, OpenHands SDK 1.31.0, pytest 9.1.1, Ruff 0.15.21,
 - `npm audit --omit=dev`: found 0 vulnerabilities.
 
 Warnings were Starlette/httpx, cookie and SQLite datetime deprecations plus the Vitest Vite CJS API warning. No gate warning contained a secret value.
+
+These counts are immutable historical accepted evidence from commit
+`76ea0fddd60dc61cc34b3ffe1faad0d84875221e`, not reruns performed by this
+repair round.
 
 ## OpenHands APIs Reused and SDK Gaps
 

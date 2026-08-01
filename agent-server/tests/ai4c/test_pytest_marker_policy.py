@@ -63,8 +63,10 @@ def test_explicit_staging_external_marker_overrides_default_for_collection_only(
     result = _collect(STAGING_FILE, "-m", "staging_external")
 
     assert result.returncode == 0, result.stderr
-    assert EXTERNAL_NODE in result.stdout
-    assert "1/75 tests collected" in result.stdout
+    collected_nodes = [
+        line for line in result.stdout.splitlines() if line.startswith(f"{STAGING_FILE}::")
+    ]
+    assert collected_nodes == [EXTERNAL_NODE]
 
 
 def test_marker_policy_uses_pytest_configuration_without_collection_hooks() -> None:
