@@ -365,7 +365,14 @@ explicitly outside the accepted AI4B baseline.
 
 ## 10. AI4C: Production Readiness
 
-Status: AI4C.0 accepted; AI4C.1 is implemented locally and awaits AI0 acceptance.
+Status: AI4C.0-4 engineering implementation and deterministic local acceptance
+are complete and AI0 has issued final acceptance. This closes the AI4C
+engineering phase; it does not authorize public production release.
+
+The highest honest release classification remains staging-ready with
+blockers. External release gates remain SDK-EQUIVALENCE blocked,
+CLEAN-STACK blocked, external OIDC/staging blocked, and real-provider
+execution not-authorized.
 
 Goal:
 
@@ -407,16 +414,19 @@ Constraints:
 | 4 | frontend MVP and general-learning acceptance correction | AI3 | done |
 | 5 | general verification tool framework: registry, text and URL | AI4A | done |
 | 6 | general integration, security and release-readiness baseline | AI4B | done |
-| 7 | production identity, real-LLM operations and reproducible staging | AI4C | AI4C.1 awaiting AI0 |
+| 7 | production identity, real-LLM operations and reproducible staging | AI4C | done / AI0 accepted (engineering phase complete; not public production release) |
 | 8 | multimodal evidence expansion | AI2 + AI3 + AI4 | later |
 | P1 | optional Web3 specialization and on-chain proof | domain plugin owners | backlog |
 
 ## 12. Next Execution Task
 
-The next decision is AI0 acceptance of the local AI4C.1 implementation and
-report. AI4C.2 remains blocked until that explicit acceptance.
+AI4C.0-4 engineering implementation and deterministic local acceptance are
+complete, and AI0 has issued final acceptance. This is engineering-phase
+closure only: public production release remains unauthorized while
+SDK-EQUIVALENCE, CLEAN-STACK, and external OIDC/staging are blocked and
+real-provider execution is not-authorized. The maximum current classification
+is staging-ready with blockers.
 
-AI4C.0 design and plans are accepted. AI4C.1 now stops after local verification
-and commit for AI0 review. AI0 must accept, reject or issue a narrow repair
-instruction before AI4C.2 identity and authorization work begins; later gates
-retain the same explicit stop rule.
+The next program phase is AI5 multimodal evidence expansion. AI5 requires an
+independent design and explicit approval before implementation; no AI5 work is
+part of this task.
