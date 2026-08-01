@@ -39,7 +39,7 @@ listed gate has actually run in this acceptance round.
 | AI4C-DETERMINISTIC-GATES | pass | `pytest agent-server/tests -q -m "not real_llm and not postgres and not staging_external"`; `npm test`; `npm run test:e2e`; `npm audit --omit=dev` | AI4C.4 | goal: full deterministic regression | 16 deprecation warnings and Vite CJS warning remain. |
 | AI4C-REAL-PROVIDER | not-authorized | `agent-server/tests/ai4c/test_real_provider.py` live node not authorized | AI4C.1 | goal: authorized real-provider acceptance | No live call, cost, token, or latency evidence. |
 | AI4C-EXTERNAL-OIDC-STAGING | blocked | `docs/superpowers/plans/2026-07-17-ai4c4-final-acceptance.md` Task 4 | AI4C.4 | goal: real external identity/staging | No approved issuer or non-public target. |
-| AI4C-PROTOCOL-FREEZE | blocked | `agent-server/tests/ai4c/test_openhands_reuse_boundary.py` pending | AI4C.1-3 | design: protocol freeze | Audit not yet run. |
+| AI4C-PROTOCOL-FREEZE | pass | `pytest <12 focused reuse/protocol/auth test files> -q`: 168 passed, 1 deselected, 3 warnings in 22.62s; construction and duplicate scans below | AI4C.1-3 | design: protocol freeze | SDK gaps remain version-sensitive and retain explicit deletion conditions. |
 | AI4C-EXCLUSIONS | blocked | `docs/project-management/goals/AI4C_PRODUCTION_READINESS_CODEX_GOAL.md` Product Boundary | AI4C.4 | goal: exclusions | Final changed-path audit not yet run. |
 
 ## Red-Green History
@@ -62,7 +62,66 @@ Warnings were Starlette/httpx, cookie and SQLite datetime deprecations plus the 
 
 ## OpenHands APIs Reused and SDK Gaps
 
-Pending Task 5 public import/construction-site audit.
+Task 5 audited the installed official `openhands-sdk==1.31.0`. The public
+imports, installed implementation locations and FocusProof construction/use
+sites are:
+
+| SDK surface | Public import | Installed implementation | FocusProof construction/use |
+| --- | --- | --- | --- |
+| `Agent` | `from openhands.sdk import Agent` | `openhands.sdk.agent.agent` | `openhands_runtime/factory.py:177` |
+| `LLM` | `from openhands.sdk import LLM` | `openhands.sdk.llm.llm` | `openhands_adapter/llm_config.py:23` |
+| `LocalConversation` | `from openhands.sdk.conversation import LocalConversation` | `openhands.sdk.conversation.impl.local_conversation` | `openhands_runtime/factory.py:215`; public `Conversation` factory at line 202 |
+| `EventLog` | `from openhands.sdk.conversation import EventLog` | `openhands.sdk.conversation.event_store` | SDK-owned `conversation.state.events`, read by `manager.py:207,245,281,392,563` |
+| `View` | `from openhands.sdk.context.view import View` | `openhands.sdk.context.view.view` | SDK-owned `ConversationState.view`; no product reimplementation |
+| `ToolDefinition` / `ToolExecutor` | `from openhands.sdk.tool import ToolDefinition, ToolExecutor` | `openhands.sdk.tool.tool` | `tool_registry.py` and the learner-input, review-draft, text, URL and verification tool modules |
+| `ActionEvent` / `ObservationEvent` | `from openhands.sdk.event import ActionEvent, ObservationEvent` | `openhands.sdk.event.llm_convertible.action` / `.observation` | `manager.py`, `projector.py` and `result_extractor.py` consume native events |
+| metrics | `ConversationState.stats.get_combined_metrics()` | SDK conversation stats/metrics | sanitized aggregate projection in `openhands_runtime/handle.py:49` |
+| `interrupt()` / `close()` | public `LocalConversation` lifecycle | SDK local conversation | `manager.py:239,276,325,349,528`; construction-failure close at `factory.py:233,236` |
+| `TestLLM` | `from openhands.sdk.testing import TestLLM` | `openhands.sdk.testing.test_llm` | deterministic factory/runtime and acceptance fixtures only |
+
+The production-tree and package-metadata scan found no second Conversation,
+runtime, EventLog, agent loop, Action/Observation/Tool protocol, provider HTTP
+client, scheduler, or default programming-tool set. The deleted legacy adapter
+agent/learning-conversation, runtime/persistence EventLog and fake/Web3 tool
+paths remain absent from package metadata. `factory.py` sets
+`include_default_tools=[]`. Its `httpx.Client` is the bounded URL-evidence
+fetcher, not an LLM/provider client; provider construction remains the official
+SDK `LLM` only. Product `audit_projection` stores are explicitly query
+projections of native event IDs, not native fact stores.
+
+The accepted SDK-gap records remain minimum-surface additions with deletion
+conditions: select public `LocalConversation` directly only because the SDK
+`Conversation` factory does not forward `max_budget_per_run`; delete that
+branch when it does. Keep the process-wide provider `BoundedSemaphore` only
+until the SDK supplies equivalent paid-provider admission. Keep the sanitized
+metrics projection only until the SDK exposes an equivalent stable projection.
+Keep the single-call URL deadline adapter only until the SDK provides a hard
+deadline for synchronous `ToolExecutor`; it introduces no runtime, event log,
+loop, cancellation token or tool protocol.
+
+Protocol comparison used the accepted AI4B API/session tests and current
+serialized responses. No success-response issuer or subject field was added.
+`ownerUserId` remains the opaque resolver-generated `principal_*` identifier;
+raw issuer/subject remain confined to the product principal-mapping boundary.
+The only AI4C identity-boundary response differences are missing/invalid token
+`401`, disabled identity `403`, and cross-owner/nonexistent indistinguishable
+`404` responses.
+
+Provider admission remains the product-owned process-wide bounded semaphore
+around official `LocalConversation.arun()`. `VerifiedIdentity` is created only
+after issuer, audience, signature, time and subject verification; authorization
+binds product Session/Evidence/Answer/Review queries to the opaque principal.
+Audit and operations rows are minimized product projections keyed to native
+OpenHands event IDs. Paired backup/restore coordinates the product database and
+OpenHands persistence as one recoverable unit and is idempotent on replay.
+
+The focused Task 5 command removed all provider-key variables and ran reuse,
+LLM operations, identity authorization/persistence/end-to-end, security audit,
+operational telemetry, paired backup/restore, AI4B API session contract, native
+tool contract and manager lifecycle tests: **168 passed, 1 deselected, 3
+warnings in 22.62s**. The deselected node was the explicitly unauthorized live
+provider test; warnings were one Starlette/httpx and two SQLite datetime
+deprecations. No real LLM or external OIDC call ran.
 
 ## Identity, Threat Model, and Redaction
 
