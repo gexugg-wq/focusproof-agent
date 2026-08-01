@@ -116,3 +116,38 @@ def test_compatibility_executor_redacts_url_before_native_observation() -> None:
     ):
         assert secret not in serialized
     assert repository.evidence.sourceUrl == source_url
+
+
+def test_compatibility_executor_treats_transaction_type_as_domain_neutral() -> None:
+    from focusproof.openhands_runtime.tools.evidence_verification import (
+        EvidenceVerificationAction,
+        EvidenceVerificationExecutor,
+    )
+
+    repository = RecordingEvidenceRepository(
+        Evidence(
+            evidenceId="ev_historical_type",
+            evidenceType="transaction",
+            contentHash="sha256:historical",
+            textContent="0xdeadbeef",
+        )
+    )
+
+    observation = EvidenceVerificationExecutor(repository, "sess_1")(
+        EvidenceVerificationAction(evidence_id="ev_historical_type")
+    )
+
+    serialized = observation.model_dump_json().lower()
+    assert observation.verified is True
+    assert observation.findings == ["Repository evidence contains 1 text words."]
+    assert "text evidence is short" in observation.weak_signals[0].lower()
+    for web3_term in (
+        "transaction-shaped",
+        "valid hash",
+        "tx hash",
+        "nonce",
+        "gas",
+        "wallet",
+        "contract",
+    ):
+        assert web3_term not in serialized

@@ -30,7 +30,11 @@ stores only a read/query audit projection through `AuditProjection` and
 `AuditQuery`; neither the in-memory nor persistent projection store can run an
 Agent, execute a tool or restore native runtime state.
 
-## 1. Why This Changes the Plan
+## 1. Historical/Superseded Plan Context
+
+This section records the v0.1 design transition only. Product, runtime, and
+plugin statements here are not current requirements; sections 2.1, 4, and 5
+are authoritative where they conflict.
 
 The original v0.1 plan treated OpenHands mainly as an architecture reference and planned a TypeScript-first runtime. That is still viable for a quick web demo, but it wastes the main advantage of OpenHands SDK: its existing Python agent runtime concepts and tool protocol.
 
@@ -41,7 +45,8 @@ FocusProof should therefore use a hybrid architecture:
 - Runtime: Python, directly integrating OpenHands SDK Conversation/State/Event mechanics.
 - Tools: Python tool executors.
 - Database: SQLite for demo, PostgreSQL-compatible schema later.
-- Smart contract: Solidity on Monad Testnet.
+- Domain-specific plugins: optional and separately approved; none is part of
+  the default runtime.
 
 ## 2. What We Must Reuse From OpenHands
 
@@ -197,7 +202,10 @@ FocusProof AuditProjectionStore is a read/query projection of that ledger.
 
 ## 6. General Learning Requirement
 
-FocusProof is not a Web3-only verifier. Web3 is the first plugin because it has strong external evidence such as transaction hashes and contract addresses.
+FocusProof is a general knowledge learning verifier. The default runtime has
+no Web3-specific verifier or executable semantics. Any future domain plugin
+must be explicitly enabled, isolated outside the general runtime, and approved
+as separate scope.
 
 The core runtime must support any knowledge domain:
 
@@ -206,7 +214,6 @@ The core runtime must support any knowledge domain:
 - Language learning.
 - Reading.
 - Research.
-- Web3.
 - Course study.
 - Exam preparation.
 

@@ -339,3 +339,28 @@ def test_final_report_declares_honest_release_bounds() -> None:
     assert "| AI4C-REAL-PROVIDER | not-authorized |" in text
     assert "| AI4C-EXTERNAL-OIDC-STAGING | blocked |" in text
     assert "public-launch-ready" not in text
+
+
+def test_reported_acceptance_counts_match_current_collected_nodes() -> None:
+    text = REPORT.read_text(encoding="utf-8")
+    expected = {
+        "final-acceptance": len(
+            _collected_pytest_nodes(
+                "agent-server/tests/ai4c/test_final_acceptance.py"
+            )
+        ),
+        "marker-policy": len(
+            _collected_pytest_nodes(
+                "agent-server/tests/ai4c/test_pytest_marker_policy.py"
+            )
+        ),
+    }
+    reported = {
+        name: int(count)
+        for name, count in re.findall(
+            r"Current (final-acceptance|marker-policy) collected nodes: (\d+)",
+            text,
+        )
+    }
+
+    assert reported == expected

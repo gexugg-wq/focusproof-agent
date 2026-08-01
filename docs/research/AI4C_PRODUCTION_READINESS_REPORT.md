@@ -8,8 +8,9 @@ The authoritative audit baseline is
 `23a1a96460389147e6d477378f1d855a9a6a7187` (`docs: add AI4A Codex goal`).
 Task 6 began on branch `ai4c-production-readiness` at accepted Task 5 HEAD
 `59306c8afb15c65fc7dcec1151b9ff6ccc105fea`, with a clean worktree and only
-the main worktree at `/home/holy/web3/focusproof-agent`. The complete 97-commit
-chain from the baseline through Task 5 is recorded in the audit appendix.
+the main worktree at `/home/holy/web3/focusproof-agent`. Before this Round 5
+repair, the baseline-to-HEAD distance was 101 commits. This Round 5 repair is
+delivered as one commit, making the final baseline-to-HEAD distance 102 commits.
 
 ## Architecture and Scope
 
@@ -62,11 +63,22 @@ it proves matrix shape, exact pytest collection, document anchors, immutable
 accepted-evidence anchors, and artifact digest binding; it does not prove that
 every mapped gate ran in this round. No real LLM is authorized or run.
 
-The repair-round marker-policy target passed **5 tests in 7.32s**, and the
-final-acceptance target passed **13 tests in 40.55s**. The complete
-default-marker AI4C directory run covered every test file and reported **403
-passed, 13 deselected, 3 warnings in 225.30s**, with zero failures. Ruff passed,
-and Mypy reported no issues in 159 source files.
+Current final-acceptance collected nodes: 18
+Current marker-policy collected nodes: 5
+
+The fresh combined marker-policy and final-acceptance gate passed **23 tests**;
+its dynamically checked current split is 5 marker-policy nodes and 18
+final-acceptance nodes. The complete default-marker AI4C directory run covered
+every test file and reported **410 passed, 13 deselected, 3 warnings in
+228.85s**, with zero failures. The non-AI4C agent-server regression reported
+**365 passed, 14 warnings in 42.16s**. The affected OpenHands runtime suite
+reported **165 passed in 6.59s**. Ruff passed, and Mypy reported no issues in
+160 source files. `git diff --check` passed.
+
+No remote LiteLLM cost-map fetch occurred. A cold subprocess collection guard
+blocked and recorded every socket attempt while collecting both previously
+unsafe test trees; both collections passed with no socket-attempt record. No
+real LLM, external OIDC, PostgreSQL, or staging-external gate ran.
 
 ## Current External Artifact Blockers
 
@@ -88,6 +100,19 @@ A digest of a summary JSON or Markdown report is not a substitute for an SDK
 wheel/environment or Docker/OCI image and must not be used to clear either row.
 
 ## Red-Green History
+
+- Round 5 P1 RED: 4 failed, 7 passed proved that compatibility restore mounted
+  a transaction-specialized verifier and its executor recognized hash-shaped
+  input. GREEN retained the historical OpenHands Tool/Action/Observation name
+  required by SDK resume verification, but made its executor repository-backed
+  and domain-neutral; the complete runtime suite passed 165 tests.
+- Round 5 P2 RED: both default OpenHands-runtime and AI4B collection probes
+  attempted outbound sockets before cost-map preflight. GREEN moved the
+  deterministic profile/preflight to the root agent-server test collection
+  boundary and both probes passed without a socket attempt.
+- Round 5 freshness RED: the report exposed no current node counts while the
+  collector found 18 final-acceptance and 5 marker-policy nodes. GREEN adds a
+  dynamic collection comparison and the combined gate passed all 23 tests.
 
 - Evidence-lint RED: missing closure report, 2 failed in 0.06s. GREEN: 2 passed in 0.03s; commit `20eca49`.
 - Collection-policy RED: default E2E produced 16 passed and 4 failed; named owning-phase node failed in 2.24s. GREEN: named node 1 passed in 2.13s and default E2E 16 passed in 1.1m; commit `8df1324`.
@@ -333,6 +358,11 @@ final commit SHA and clean status are closure-time evidence and are recorded in
 the commit/final acceptance handoff rather than preclaimed here.
 
 ## Rollback and Residual Risks
+
+AI4 engineering is technically complete for the deterministic, locally tested
+scope described above. External release remains blocked: engineering closure
+does not authorize or prove a real provider, managed OIDC issuer, retained SDK
+equivalence artifacts, clean external staging, or public deployment.
 
 The report-only Task 6 commit can be reverted independently. The complete
 AI4C.4 rollback revision before Task 6 is

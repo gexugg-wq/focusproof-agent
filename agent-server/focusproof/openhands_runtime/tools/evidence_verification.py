@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Sequence
 from typing import Any, ClassVar, Self
 
@@ -20,7 +19,6 @@ from focusproof.openhands_runtime.tools import (
 from focusproof.openhands_runtime.url_redaction import sanitize_source_refs
 
 _GENERIC_PHRASES = ("learned many things", "studied a lot", "learned a lot")
-_TX_RE = re.compile(r"^0x[a-fA-F0-9]{8,}$")
 
 
 class EvidenceVerificationAction(Action):
@@ -67,23 +65,17 @@ class EvidenceVerificationExecutor(
         weak_signals: list[str] = []
         findings: list[str] = []
 
-        if evidence.evidenceType == "transaction":
-            verified = bool(_TX_RE.fullmatch(text))
-            findings.append("Transaction-shaped evidence has a valid hash shape." if verified else "Transaction evidence does not have a valid hash shape.")
-            if verified:
-                weak_signals.append("A transaction artifact does not establish learner understanding.")
-        else:
-            verified = bool(text or evidence.sourceUrl)
-            findings.append(
-                f"Repository evidence contains {len(words)} text words."
-                if text
-                else "Repository evidence contains a source reference without text."
-            )
-            lowered = text.lower()
-            if len(words) < 9:
-                weak_signals.append("Text evidence is short and may lack specificity.")
-            if any(phrase in lowered for phrase in _GENERIC_PHRASES):
-                weak_signals.append("Text evidence contains generic learning claims.")
+        verified = bool(text or evidence.sourceUrl)
+        findings.append(
+            f"Repository evidence contains {len(words)} text words."
+            if text
+            else "Repository evidence contains a source reference without text."
+        )
+        lowered = text.lower()
+        if len(words) < 9:
+            weak_signals.append("Text evidence is short and may lack specificity.")
+        if any(phrase in lowered for phrase in _GENERIC_PHRASES):
+            weak_signals.append("Text evidence contains generic learning claims.")
 
         source_refs = [evidence.evidenceId]
         if evidence.sourceUrl:

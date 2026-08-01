@@ -1,7 +1,6 @@
 import pytest
 
 from focusproof.openhands_runtime.capabilities import (
-    VerificationCapability,
     VerificationCapabilityRegistry,
     build_builtin_capabilities,
 )
@@ -103,22 +102,8 @@ def test_toolset_version_is_stable_and_tracks_selected_capabilities() -> None:
     assert first != text_only
 
 
-def test_compatibility_restore_deduplicates_registered_legacy_tool() -> None:
-    capabilities = (*build_builtin_capabilities(), VerificationCapability(
-        registry_name="legacy",
-        tool_class_name="FocusProofEvidenceVerificationTool",
-        supported_evidence_types=frozenset({"legacy"}),
-        supported_domains=frozenset({"*"}),
-        priority=30,
-        read_only=True,
-        requires_network=False,
-        timeout_seconds=5.0,
-        enabled=True,
-        version="1",
-    ))
-    tools = SessionToolAssembler(
-        VerificationCapabilityRegistry(capabilities)
-    ).assemble(
+def test_compatibility_restore_keeps_protocol_name_for_generic_verifier() -> None:
+    tools = assembler().assemble(
         "sess_1",
         "general",
         None,
@@ -126,6 +111,10 @@ def test_compatibility_restore_deduplicates_registered_legacy_tool() -> None:
         compatibility_mode=True,
     )
 
-    assert [tool.name for tool in tools].count(
-        "FocusProofEvidenceVerificationTool"
-    ) == 1
+    assert [tool.name for tool in tools] == [
+        "FocusProofLearnerInputTool",
+        "FocusProofReviewDraftTool",
+        "FocusProofTextEvidenceVerificationTool",
+        "FocusProofUrlEvidenceVerificationTool",
+        "FocusProofEvidenceVerificationTool",
+    ]

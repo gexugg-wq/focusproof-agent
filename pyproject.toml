@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "focusproof-agent"
 version = "0.1.0"
-description = "OpenHands-inspired Python Agent Server scaffold for FocusProof learning verification."
+description = "Official OpenHands SDK-backed Agent Server for general learning verification."
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.13,<2",

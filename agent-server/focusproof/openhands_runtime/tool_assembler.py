@@ -16,7 +16,7 @@ _CONTROL_TOOL_CLASSES = (
     "FocusProofLearnerInputTool",
     "FocusProofReviewDraftTool",
 )
-_LEGACY_VERIFIER_TOOL_CLASS = "FocusProofEvidenceVerificationTool"
+_COMPATIBILITY_VERIFIER_TOOL_CLASS = "FocusProofEvidenceVerificationTool"
 
 
 class SessionToolAssembler:
@@ -47,12 +47,12 @@ class SessionToolAssembler:
             Tool(name=item.tool_class_name, params=dict(verifier_params))
             for item in self._registry.select(domain, selected_evidence_types)
         )
-        if compatibility_restore and _LEGACY_VERIFIER_TOOL_CLASS not in {
+        if compatibility_restore and _COMPATIBILITY_VERIFIER_TOOL_CLASS not in {
             tool.name for tool in tools
         }:
             tools.append(
                 Tool(
-                    name=_LEGACY_VERIFIER_TOOL_CLASS,
+                    name=_COMPATIBILITY_VERIFIER_TOOL_CLASS,
                     params=dict(verifier_params),
                 )
             )
@@ -67,16 +67,16 @@ class SessionToolAssembler:
     ) -> str:
         selected_evidence_types = None if compatibility_restore else evidence_types or None
         selected = self._registry.select(domain, selected_evidence_types)
-        has_legacy = any(
-            item.tool_class_name == _LEGACY_VERIFIER_TOOL_CLASS for item in selected
+        has_compatibility_verifier = any(
+            item.tool_class_name == _COMPATIBILITY_VERIFIER_TOOL_CLASS
+            for item in selected
         )
         extra_identities = (
-            ("legacy:1",) if compatibility_restore and not has_legacy else ()
+            ("repository-compatibility:2",)
+            if compatibility_restore and not has_compatibility_verifier
+            else ()
         )
-        return toolset_version(
-            selected,
-            extra_identities=extra_identities,
-        )
+        return toolset_version(selected, extra_identities=extra_identities)
 
 
 def toolset_version(

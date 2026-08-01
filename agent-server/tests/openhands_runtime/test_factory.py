@@ -258,7 +258,7 @@ def test_empty_conversation_persistence_directory_is_not_a_restore(
         handle.conversation.close()
 
 
-def test_ai4a_restore_uses_legacy_compatibility_superset(tmp_path: Path) -> None:
+def test_ai4a_restore_preserves_protocol_with_generic_compatibility_verifier(tmp_path: Path) -> None:
     from focusproof.openhands_runtime.factory import ConversationFactory
 
     factory = ConversationFactory(

@@ -222,3 +222,27 @@ else:
     )
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize(
+    "test_path",
+    ("agent-server/tests/openhands_runtime", "agent-server/tests/ai4b"),
+)
+def test_default_pytest_collection_preflights_cost_map_without_network(
+    tmp_path: Path,
+    test_path: str,
+) -> None:
+    completed = _run_probe(
+        tmp_path,
+        profile="deterministic-test",
+        cost_map_value=None,
+        source=f"""
+import os
+import pytest
+
+os.environ.pop("FOCUSPROOF_PROFILE", None)
+raise SystemExit(pytest.main(["--collect-only", "-q", {test_path!r}]))
+""",
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr

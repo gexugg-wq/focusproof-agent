@@ -43,7 +43,9 @@ AI0 must reject duplicated runtime semantics even when tests pass. Each phase ac
 
 ## 2. Current Architecture Decision
 
-FocusProof is a general learning verification product. Web3 is only the first domain plugin.
+FocusProof is a general knowledge learning verification product. Web3 is a
+deferred optional-plugin concept, not the first required plugin and not part of
+the default runtime.
 
 Current decision:
 
@@ -51,8 +53,14 @@ Current decision:
 - Agent runtime uses Python.
 - Agent API uses FastAPI.
 - Tool executors use Python.
-- Contracts use Solidity.
+- Domain-specific plugins require separate approval and explicit enablement.
 - OpenHands SDK should be used directly, with OpenHands Conversation/ConversationState/EventLog acting as the official agent runtime path.
+
+AI4 engineering completion means the accepted deterministic technical scope is
+implemented and green. It is distinct from external release authorization.
+Real-provider, managed OIDC, retained SDK-equivalence artifacts, external
+staging, and public deployment remain blocked until their explicit gates are
+authorized and evidenced.
 
 The project should not be split into too many worker AIs during the demo stage.
 Five logical worker roles are enough; AI4 is split into sequential AI4A, AI4B
@@ -62,7 +70,7 @@ work cannot be confused:
 - AI0: controller and architect.
 - AI1: project scaffold and OpenHands reuse investigation.
 - AI2: Python Agent Server, OpenHands SDK integration, Conversation-backed runtime, learning agent logic and tools.
-- AI3: frontend, wallet UX and user flows after AI2 promotes Conversation into the official review path.
+- AI3: frontend and general learning user flows after AI2 promotes Conversation into the official review path.
 - AI4A: general verification tool framework on the existing OpenHands runtime.
 - AI4B: general integration tests, security and release-readiness baseline.
 - AI4C: production identity, real-LLM operations and reproducible staging deployment.
@@ -104,7 +112,7 @@ Acceptance:
 
 Status: done.
 
-Goal:
+Historical AI2 goal (superseded by the accepted status above):
 
 Create a runnable monorepo skeleton in `/home/holy/web3/focusproof-agent` and investigate how OpenHands SDK can be directly reused.
 
@@ -154,7 +162,7 @@ acceptance and remains deferred; Web3 is not assumed by the general runtime.
 
 Goal:
 
-Build the backend brain of FocusProof: FastAPI API, direct OpenHands SDK integration, Conversation-backed learning review runtime, database/product projections, evidence tools and first Web3 plugin.
+Build the backend brain of FocusProof: FastAPI API, direct OpenHands SDK integration, Conversation-backed learning review runtime, database/product projections, and general evidence tools. The former first-Web3-plugin wording is superseded and was not accepted.
 
 Must first implement OpenHands SDK integration:
 

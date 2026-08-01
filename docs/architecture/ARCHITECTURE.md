@@ -3,7 +3,7 @@
 Version: Architecture Baseline v0.7
 Primary runtime: Python Agent Server
 Frontend: Next.js and TypeScript
-Optional domain plugin backlog: Web3 learning, deferred
+Optional domain plugin backlog: domain-specific verification, deferred
 Long-term scope: general knowledge learning verification
 
 ## 1. Product Goal
@@ -18,10 +18,9 @@ FocusProof Agent verifies whether a learning session produced credible, reviewab
 - learning output,
 - reflection and next-step plan.
 
-The historical plan selected Web3 as a first plugin because some evidence can
-be checked externally. The accepted MVP is now the domain-general text/URL
-learning flow. Web3 remains an optional plugin backlog and is not part of
-AI4C production readiness.
+The accepted product is the domain-general text/URL learning flow. Web3 was
+considered in an early design, but is not a current architecture dependency,
+runtime capability, or AI4C production-readiness deliverable.
 
 Accepted implementation baseline: AI4B at `bf5c9a8`. Next design gate: AI4C.0
 Production Readiness.
@@ -60,7 +59,20 @@ Agent loop, Conversation or EventLog. Its in-memory and persistent
 projections and cannot schedule Agent steps, execute tools or replace native
 OpenHands restoration.
 
-## 2. What Changes From v0.1
+The product database owns sessions, evidence metadata, authorization,
+reviews, build logs, and a read/query audit projection. It does not restore or
+drive the Agent runtime. Native OpenHands persistence and EventLog own runtime
+events, ordering, replay, and Conversation restoration.
+
+## 2. Historical/Superseded v0.1 Design Archive
+
+Everything in this section through the end of the document is retained only
+as historical planning context. References to TypeScript runtime mirrors,
+wallet UX, Monad, contracts, on-chain proof, transaction verifiers, or a
+FocusProof-owned EventLog are superseded by sections 1 and 1.1 above and must
+not be implemented as current architecture.
+
+### 2.1 What Changed in the Historical v0.1 Plan
 
 The previous plan used a TypeScript-first runtime. The v0.2 plan changes the runtime to Python so the project can directly use OpenHands SDK agent-runtime abstractions.
 

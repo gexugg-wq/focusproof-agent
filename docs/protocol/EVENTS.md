@@ -2,7 +2,7 @@
 
 Version: v0.4
 Primary implementation language: Python
-Frontend mirror language: TypeScript
+Frontend API projection language: TypeScript
 
 Accepted protocol baseline: AI4A.3.1. The protocol is frozen for AI4B.0 design;
 any proof-recording event or API change requires explicit AI0 approval before
@@ -12,10 +12,11 @@ implementation.
 
 重要边界：
 
-- Python Agent Server 是协议事实来源。
+- OpenHands SDK 原生 EventLog 是运行时事件、顺序、重放与恢复的事实来源。
+- 产品数据库只拥有 session/evidence/review/build-log 与只读审计投影；不得用于恢复或驱动 Agent runtime。
 - Frontend 只消费 API 返回的数据，不拥有最终评分协议。
 - OpenHands SDK 可以影响 Agent、Conversation 和 Tool 的实现方式，但不能改变本协议中的学习证据和评分语义。
-- Web3 是领域插件，不是协议核心。
+- Web3 不属于当前通用 runtime；任何未来 optional plugin 必须显式启用并与本协议投影隔离。
 - 本文件中的 TypeScript 风格接口用于描述 FocusProof 产品/API 投影，不是要求实现第二套 Agent、Conversation、EventLog、Action、Observation 或 Tool Runtime。
 - 运行时存在 OpenHands SDK 公共类型或生命周期 API 时必须直接复用；产品投影通过适配器从原生事件派生，不得替代原生运行事实。
 
@@ -23,9 +24,9 @@ implementation.
 
 本协议定义 FocusProof Runtime 的公共消息架构。所有实现 AI 必须遵守本文件；修改公共 Event、Action 或 Observation 前必须更新本文件。
 
-核心流：
+以下是产品/API 投影流，不是第二套 runtime loop：
 
-    Event -> EventLog -> View -> Agent.step() -> Action -> Tool -> Observation -> EventLog
+    OpenHands native EventLog -> FocusProof product projection -> API/frontend
 
 ## 2. Event 基础结构
 
@@ -117,8 +118,8 @@ implementation.
       | "video"
       | "code"
       | "url"
-      | "transaction"
-      | "contract"
+      | "transaction" // historical reserved value; no default verifier
+      | "contract" // historical reserved value; no default verifier
       | "pdf"
 
 ## 6. 审查结果事件
@@ -154,7 +155,9 @@ implementation.
       scoreEventId: string
     }> & { type: "review.completed" }
 
-## 7. EventLog 接口
+## 7. Historical Product Projection Interface (Superseded as Runtime EventLog)
+
+下列接口只保留为早期产品查询投影的历史记录。当前实现不得把它命名或实现为第二套 runtime EventLog；运行时事实、顺序、重放和恢复全部由 OpenHands native EventLog 负责。
 
     interface EventLog {
       append(event: Event): Promise<void>
