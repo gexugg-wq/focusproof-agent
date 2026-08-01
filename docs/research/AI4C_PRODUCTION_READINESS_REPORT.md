@@ -10,7 +10,8 @@ Task 6 began on branch `ai4c-production-readiness` at accepted Task 5 HEAD
 `59306c8afb15c65fc7dcec1151b9ff6ccc105fea`, with a clean worktree and only
 the main worktree at `/home/holy/web3/focusproof-agent`. Before this Round 5
 repair, the baseline-to-HEAD distance was 101 commits. This Round 5 repair is
-delivered as one commit, making the final baseline-to-HEAD distance 102 commits.
+delivered as two independent commits, making the final baseline-to-HEAD
+distance 103 commits.
 
 ## Architecture and Scope
 
