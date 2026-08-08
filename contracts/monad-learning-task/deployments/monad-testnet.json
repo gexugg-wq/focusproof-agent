@@ -1,0 +1,60 @@
+{
+  "contractAddress": "0xa2f67973ce679a361b7bade60e664b5a3a44b470",
+  "deploymentTransactionHash": "0x372553297ebca997d29e2171e0a56fd8f34d886b180ee830c50cfed68d682ed7",
+  "chainId": 10143,
+  "compilerVersion": "0.8.24",
+  "sourceCommit": "9e7fc3403fcf9d2428f4bb08c43d4efca1f5467e",
+  "abi": [
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "learner",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "previousValue",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "newValue",
+          "type": "uint256"
+        }
+      ],
+      "name": "Incremented",
+      "type": "event"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "learner",
+          "type": "address"
+        }
+      ],
+      "name": "counts",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "count",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "increment",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ]
+}
