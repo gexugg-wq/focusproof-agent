@@ -51,6 +51,27 @@ export type RuntimeReviewResult = {
   eventsCount?: number;
 };
 
+export type PluginCapability = {
+  pluginId: string;
+  capabilityId: string;
+  enabled: boolean;
+  metadata: Record<string, unknown>;
+};
+
+export type MonadPluginCapabilityMetadata = {
+  chainId: number | string;
+  chainName: string;
+  contractAddress: string;
+  explorerTxBaseUrl?: string | null;
+  operationLabel?: string | null;
+  taskDescription?: string | null;
+};
+
+export type SessionView = {
+  pluginCapabilities?: PluginCapability[];
+  [key: string]: unknown;
+};
+
 export type SessionDetail = {
   sessionId: string;
   state: {
@@ -67,7 +88,7 @@ export type SessionDetail = {
     conversationId: string;
     runtimeMode: string;
   };
-  view: Record<string, unknown>;
+  view: SessionView;
 };
 
 export type FocusProofEvent = {

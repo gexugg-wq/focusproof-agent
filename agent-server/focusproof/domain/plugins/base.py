@@ -37,6 +37,10 @@ class PublicCapabilityProvider(Protocol):
     def public_capabilities(self) -> Sequence[PublicPluginCapability]: ...
 
 
+class EvidenceSubmissionNormalizer(Protocol):
+    def normalize_evidence_submission(self, request: object) -> object: ...
+
+
 class SessionRepositoryBinder(Protocol):
     def bind_session_repository(
         self,
@@ -58,6 +62,20 @@ def collect_public_plugin_capabilities(
         if callable(method):
             public_capabilities.extend(method())
     return tuple(public_capabilities)
+
+
+def normalize_evidence_submission_plugins(
+    request: object,
+    *,
+    providers: Iterable[EvidencePluginProvider],
+) -> object:
+    normalized = request
+    for provider in providers:
+        normalizer = cast(EvidenceSubmissionNormalizer | None, provider)
+        method = getattr(normalizer, "normalize_evidence_submission", None)
+        if callable(method):
+            normalized = method(normalized)
+    return normalized
 
 
 def bind_session_repository_plugins(

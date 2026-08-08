@@ -3,27 +3,44 @@ from __future__ import annotations
 from datetime import datetime
 from hashlib import sha256
 import json
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Protocol, cast
 
-from openhands.sdk.tool import Action, Observation, ToolExecutor
+from openhands.sdk.tool import Action, ToolExecutor
 
 from focusproof.domain.plugins.monad.models import MonadEvidence, MonadVerificationStatus
 from focusproof.domain.plugins.monad.repository import MonadClaimConflict
 from focusproof.domain.plugins.monad.verifier import MonadEvidenceVerifier
+from focusproof.openhands_runtime.tools.verification import VerificationObservation, utc_now
 from focusproof.runtime.evidence import Evidence
+
+_CAPABILITY = "monad_learning_transaction"
+_VERIFIER_VERSION = "1"
+_STATUS_MAP: dict[MonadVerificationStatus, str] = {
+    "verified": "success",
+    "rejected": "failed",
+    "pending": "inconclusive",
+    "unavailable": "inconclusive",
+}
+_SAFE_MESSAGES = {
+    "evidence_not_found": "Evidence was not found.",
+    "invalid_evidence_metadata": "Evidence metadata is incomplete for Monad verification.",
+    "receipt_pending": "The transaction is not finalized yet. You can retry later.",
+    "rpc_unavailable": "Monad verification is temporarily unavailable. You can retry later.",
+    "deadline_exhausted": "Monad verification timed out before all checks completed. You can retry later.",
+    "malformed_response": "The chain provider returned malformed data. You can retry later.",
+    "wrong_chain": "The transaction was not found on the configured Monad network.",
+    "wrong_sender": "The transaction sender does not match the submitted wallet address.",
+    "wrong_contract": "The transaction did not target the configured learning contract.",
+    "wrong_selector": "The transaction did not call the required learning method.",
+    "missing_event": "The required learning event was not emitted by the transaction.",
+    "missing_transition": "The transaction did not prove the required counter increment.",
+    "stale_transaction": "The transaction happened outside the allowed session window.",
+    "reused_transaction": "This transaction was already claimed by another learning evidence submission.",
+}
 
 
 class MonadVerificationAction(Action):
     evidence_id: str
-
-
-class MonadVerificationObservation(Observation):
-    evidence_id: str
-    status: Literal["verified", "rejected", "pending", "unavailable"]
-    facts: dict[str, int | str]
-    findings: list[str]
-    block_number: int | None
-    retryable: bool
 
 
 class MonadToolRepository(Protocol):
@@ -33,7 +50,7 @@ class MonadToolRepository(Protocol):
 
 
 class MonadVerificationExecutor(
-    ToolExecutor[MonadVerificationAction, MonadVerificationObservation]
+    ToolExecutor[MonadVerificationAction, VerificationObservation]
 ):
     def __init__(self, repository: MonadToolRepository | None, session_id: str) -> None:
         self._repository = repository
@@ -41,7 +58,8 @@ class MonadVerificationExecutor(
 
     def __call__(
         self, action: MonadVerificationAction, conversation: Any | None = None
-    ) -> MonadVerificationObservation:
+    ) -> VerificationObservation:
+        started_at = utc_now()
         repository = self._repository
         if repository is None:
             from focusproof.openhands_runtime.tool_registry import get_repository_provider
@@ -51,13 +69,25 @@ class MonadVerificationExecutor(
             stored = repository.get_evidence(self._session_id, action.evidence_id)
         except KeyError:
             return _observation(
-                action.evidence_id, "unavailable", {}, ("evidence_not_found",), None, False
+                action.evidence_id,
+                "unavailable",
+                {},
+                ("evidence_not_found",),
+                None,
+                False,
+                started_at=started_at,
             )
         try:
             evidence, session_started_at = _load_monad_evidence(stored)
         except (KeyError, TypeError, ValueError):
             return _observation(
-                action.evidence_id, "unavailable", {}, ("invalid_evidence_metadata",), None, False
+                action.evidence_id,
+                "unavailable",
+                {},
+                ("invalid_evidence_metadata",),
+                None,
+                False,
+                started_at=started_at,
             )
         result = repository.get_monad_verifier().verify(evidence, session_started_at)
         status = result.status
@@ -84,6 +114,7 @@ class MonadVerificationExecutor(
             findings,
             result.block_number,
             result.retryable,
+            started_at=started_at,
         )
 
 
@@ -94,18 +125,41 @@ def _observation(
     findings: tuple[str, ...],
     block_number: int | None,
     retryable: bool,
-) -> MonadVerificationObservation:
-    return MonadVerificationObservation.from_text(
+    *,
+    started_at: datetime,
+) -> VerificationObservation:
+    error_code = findings[0] if findings and status != "verified" else None
+    safe_error_message = _SAFE_MESSAGES.get(error_code) if error_code is not None else None
+    payload_facts: dict[str, Any] = dict(facts)
+    payload_facts["verification_status"] = status
+    payload_facts["retryable"] = retryable
+    if block_number is not None:
+        payload_facts["block_number"] = block_number
+    if findings:
+        payload_facts["findings"] = list(findings)
+    return VerificationObservation.from_text(
         json.dumps(
-            {"status": status, "facts": facts, "findings": findings, "retryable": retryable},
+            {
+                "capability": _CAPABILITY,
+                "status": _STATUS_MAP[status],
+                "facts": payload_facts,
+                "weak_signals": list(findings),
+                "error_code": error_code,
+                "retryable": retryable,
+            },
             sort_keys=True,
         ),
         evidence_id=evidence_id,
-        status=status,
-        facts=facts,
-        findings=list(findings),
-        block_number=block_number,
-        retryable=retryable,
+        capability=_CAPABILITY,
+        status=_STATUS_MAP[status],
+        facts=payload_facts,
+        weak_signals=list(findings),
+        source_refs=[evidence_id],
+        verifier_version=_VERIFIER_VERSION,
+        started_at=started_at,
+        completed_at=utc_now(),
+        error_code=error_code,
+        safe_error_message=safe_error_message,
     )
 
 

@@ -14,15 +14,18 @@ export function EvidencePanel({
   domain,
   walletAddress,
   submittedEvidence = [],
+  includeWeb3Mode = true,
   onSubmitEvidence
 }: {
   sessionId: string;
   domain: string;
   walletAddress: string | null;
   submittedEvidence?: Evidence[];
+  includeWeb3Mode?: boolean;
   onSubmitEvidence: (payload: SubmitEvidenceRequest) => Promise<Pick<SyncResponse, "syncPending">>;
 }) {
-  const [mode, setMode] = useState<EvidenceMode>(domain.toLowerCase() === "web3" ? "web3" : "text");
+  const defaultMode: EvidenceMode = domain.toLowerCase() === "web3" && includeWeb3Mode ? "web3" : "text";
+  const [mode, setMode] = useState<EvidenceMode>(defaultMode);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -59,7 +62,7 @@ export function EvidencePanel({
       <div role="tablist" aria-label="Evidence type" className="flex flex-wrap gap-2">
         <button className={"btn secondary " + (mode === "text" ? "border-ink" : "")} role="tab" aria-selected={mode === "text"} onClick={() => setMode("text")} type="button"><FileText size={16} />Text</button>
         <button className={"btn secondary " + (mode === "url" ? "border-ink" : "")} role="tab" aria-selected={mode === "url"} onClick={() => setMode("url")} type="button"><Link size={16} />URL</button>
-        <button className={"btn secondary " + (mode === "web3" ? "border-ink" : "")} role="tab" aria-selected={mode === "web3"} onClick={() => setMode("web3")} type="button"><WalletCards size={16} />Web3</button>
+        {includeWeb3Mode ? <button className={"btn secondary " + (mode === "web3" ? "border-ink" : "")} role="tab" aria-selected={mode === "web3"} onClick={() => setMode("web3")} type="button"><WalletCards size={16} />Web3</button> : null}
       </div>
       <form onSubmit={submit} className="grid gap-3">
         {mode === "text" ? (

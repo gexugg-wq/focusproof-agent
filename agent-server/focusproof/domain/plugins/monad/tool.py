@@ -9,11 +9,11 @@ from focusproof.domain.plugins.monad.executor import (
     MonadToolRepository,
     MonadVerificationAction,
     MonadVerificationExecutor,
-    MonadVerificationObservation,
 )
+from focusproof.openhands_runtime.tools.verification import VerificationObservation
 
 
-class MonadVerificationTool(ToolDefinition[MonadVerificationAction, MonadVerificationObservation]):
+class MonadVerificationTool(ToolDefinition[MonadVerificationAction, VerificationObservation]):
     name: ClassVar[str] = "verify_monad_learning_transaction"
 
     @classmethod
@@ -32,7 +32,7 @@ class MonadVerificationTool(ToolDefinition[MonadVerificationAction, MonadVerific
                     "Never provide wallet, transaction, RPC, contract, ABI, or explanation."
                 ),
                 action_type=MonadVerificationAction,
-                observation_type=MonadVerificationObservation,
+                observation_type=VerificationObservation,
                 executor=MonadVerificationExecutor(repository, session_id),
                 annotations=ToolAnnotations(
                     title="Verify Monad learning transaction",
@@ -45,4 +45,4 @@ class MonadVerificationTool(ToolDefinition[MonadVerificationAction, MonadVerific
         ]
 
 
-__all__ = ["MonadVerificationAction", "MonadVerificationObservation", "MonadVerificationTool"]
+__all__ = ["MonadVerificationAction", "MonadVerificationTool"]

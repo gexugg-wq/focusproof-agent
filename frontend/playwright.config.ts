@@ -6,6 +6,7 @@ const repositoryDir = path.resolve(frontendDir, "..");
 const runtimeDir = path.join(frontendDir, "test-results/ai4b-runtime");
 const databasePath = path.join(runtimeDir, "focusproof.sqlite3");
 const pythonPath = path.join(repositoryDir, ".venv/bin/python3.12");
+const scenario = process.env.FOCUSPROOF_E2E_SCENARIO ?? "general-flow";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -27,7 +28,7 @@ export default defineConfig({
         "--port 8000",
         `--database-url sqlite+pysqlite:///${databasePath}`,
         `--data-dir ${runtimeDir}`,
-        "--scenario general-flow"
+        `--scenario ${scenario}`
       ].join(" "),
       cwd: repositoryDir,
       env: { LITELLM_LOCAL_MODEL_COST_MAP: "true" },

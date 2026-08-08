@@ -70,14 +70,17 @@ def test_tool_definition_binds_executor_and_loads_authoritative_evidence() -> No
     observation = definition.executor(MonadVerificationAction(evidence_id="ev_1"))
     assert repository.loaded == [("sess_1", "ev_1")]
     assert repository.claims
-    assert observation.status == "verified"
+    assert observation.status == "success"
     serialized = observation.model_dump_json().lower()
     assert all(secret not in serialized for secret in ("rpc", "receipt", "score"))
 
 
-def test_pending_observation_is_retryable_and_not_claimed() -> None:
+def test_pending_observation_is_inconclusive_retryable_and_not_claimed() -> None:
     repository = Repository(Verifier("pending"))
     definition = MonadVerificationTool.create(session_id="sess_1", repository=repository)[0]
     observation = definition.executor(MonadVerificationAction(evidence_id="ev_1"))
-    assert (observation.status, observation.retryable) == ("pending", True)
+    assert observation.status == "inconclusive"
+    assert observation.facts["verification_status"] == "pending"
+    assert observation.facts["retryable"] is True
+    assert observation.error_code == "receipt_pending"
     assert repository.claims == []

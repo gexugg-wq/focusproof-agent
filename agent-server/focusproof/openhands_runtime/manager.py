@@ -14,7 +14,10 @@ from openhands.sdk.event.base import Event as OpenHandsEvent
 
 from focusproof.domain.review import ReviewResult
 from focusproof.config.profiles import RuntimeSettings
-from focusproof.domain.plugins.base import EvidencePluginProvider
+from focusproof.domain.plugins.base import (
+    EvidencePluginProvider,
+    bind_session_repository_plugins,
+)
 from focusproof.openhands_runtime.evidence_messages import runtime_evidence_payload
 from focusproof.openhands_runtime.factory import (
     ConversationFactory,
@@ -60,6 +63,29 @@ class _AsyncRunnableConversation(Protocol):
     def arun(self) -> Awaitable[None]: ...
 
 
+class _PluginBoundScopedEvidenceProvider:
+    def __init__(
+        self,
+        repository: UowEvidenceProvider,
+        *,
+        plugin_providers: tuple[EvidencePluginProvider, ...],
+        uow_factory: UnitOfWorkFactoryLike,
+    ) -> None:
+        self._repository = repository
+        self._plugin_providers = plugin_providers
+        self._uow_factory = uow_factory
+
+    def scope(self, session_id: str, principal_id: str) -> SessionEvidenceRepository:
+        repository = self._repository.scope(session_id, principal_id)
+        return bind_session_repository_plugins(
+            repository,
+            providers=self._plugin_providers,
+            session_id=session_id,
+            principal_id=principal_id,
+            uow_factory=self._uow_factory,
+        )
+
+
 class ConversationManager:
     def __init__(
         self,
@@ -98,11 +124,20 @@ class ConversationManager:
         )
         self._result_extractor = RuntimeResultExtractor(audit_log, uow_factory)
         self._review_timeout_seconds = review_timeout_seconds
-        factory_repository = (
-            UowEvidenceProvider(uow_factory)
-            if uow_factory is not None
-            else repository
-        )
+        factory_repository: SessionEvidenceRepository | _PluginBoundScopedEvidenceProvider
+        if uow_factory is not None:
+            base_repository = UowEvidenceProvider(uow_factory)
+            factory_repository = (
+                _PluginBoundScopedEvidenceProvider(
+                    base_repository,
+                    plugin_providers=plugin_providers,
+                    uow_factory=uow_factory,
+                )
+                if plugin_providers
+                else base_repository
+            )
+        else:
+            factory_repository = repository
         tool_assembler = SessionToolAssembler(
             VerificationCapabilityRegistry(build_builtin_capabilities()),
             plugin_providers=plugin_providers,
@@ -180,9 +215,7 @@ class ConversationManager:
         call_id = review_call_id or uuid4().hex
         with self._lifecycle_lock:
             if not self._accepting_reviews:
-                raise RuntimeUnavailableError(
-                    "Conversation manager is shutting down"
-                )
+                raise RuntimeUnavailableError("Conversation manager is shutting down")
             self._active_reviews.setdefault(session_id, set()).add(call_id)
         try:
             return self._run_review(session_id, verified_user_id, call_id)
@@ -206,9 +239,7 @@ class ConversationManager:
         with self._run_lock.acquire(session_id):
             with self._lifecycle_lock:
                 if not self._accepting_reviews:
-                    raise RuntimeUnavailableError(
-                        "Conversation manager is shutting down"
-                    )
+                    raise RuntimeUnavailableError("Conversation manager is shutting down")
                 self._running_reviews[session_id] = review_call_id
             if self._uow_factory is not None:
                 if verified_user_id is None:
@@ -244,15 +275,11 @@ class ConversationManager:
                 answers = list(self._answers[session_id].values())
             with self._lifecycle_lock:
                 closing = not self._accepting_reviews
-                interrupted = (
-                    session_id, review_call_id
-                ) in self._interrupted_reviews
+                interrupted = (session_id, review_call_id) in self._interrupted_reviews
             if closing or interrupted:
                 handle.conversation.interrupt()
                 if closing:
-                    raise RuntimeUnavailableError(
-                        "Conversation manager is shutting down"
-                    )
+                    raise RuntimeUnavailableError("Conversation manager is shutting down")
                 return self._failure_result(handle, "CancelledError")
             native_events = list(handle.conversation.state.events)
             recovered = self._result_extractor.extract(
@@ -276,9 +303,7 @@ class ConversationManager:
                     with self._provider_admission.acquire():
                         asyncio.run(
                             asyncio.wait_for(
-                                cast(
-                                    _AsyncRunnableConversation, handle.conversation
-                                ).arun(),
+                                cast(_AsyncRunnableConversation, handle.conversation).arun(),
                                 timeout=self._review_timeout_seconds,
                             )
                         )
@@ -322,16 +347,12 @@ class ConversationManager:
         with self._lifecycle_lock:
             active_calls = self._active_reviews.get(session_id, set())
             if review_call_id is None:
-                self._interrupted_reviews.update(
-                    (session_id, call_id) for call_id in active_calls
-                )
+                self._interrupted_reviews.update((session_id, call_id) for call_id in active_calls)
                 should_interrupt = session_id in self._running_reviews
             else:
                 if review_call_id in active_calls:
                     self._interrupted_reviews.add((session_id, review_call_id))
-                should_interrupt = (
-                    self._running_reviews.get(session_id) == review_call_id
-                )
+                should_interrupt = self._running_reviews.get(session_id) == review_call_id
             handle = self._handles.get(session_id) if should_interrupt else None
         if handle is not None:
             handle.conversation.interrupt()
@@ -502,9 +523,7 @@ class ConversationManager:
                 {
                     "kind": "evidence",
                     "session_id": session_id,
-                    "evidence": runtime_evidence_payload(
-                        evidence.model_dump(mode="json")
-                    ),
+                    "evidence": runtime_evidence_payload(evidence.model_dump(mode="json")),
                 },
                 sort_keys=True,
             ),

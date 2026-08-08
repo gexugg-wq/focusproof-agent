@@ -51,7 +51,8 @@ class Facade:
 def test_claim_conflict_maps_to_bounded_reused_transaction_finding() -> None:
     definition = MonadVerificationTool.create(session_id="sess_2", repository=Facade())[0]
     observation = definition.executor(MonadVerificationAction(evidence_id="ev_2"))
-    assert observation.status == "rejected"
-    assert observation.findings == ["reused_transaction"]
-    assert observation.facts == {}
-    assert observation.retryable is False
+    assert observation.status == "failed"
+    assert observation.weak_signals == ["reused_transaction"]
+    assert observation.facts["verification_status"] == "rejected"
+    assert observation.facts["retryable"] is False
+    assert observation.error_code == "reused_transaction"
