@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from typing import Literal
 
 
+MonadVerificationStatus = Literal["verified", "rejected", "pending", "unavailable"]
+
+
 @dataclass(frozen=True, slots=True)
 class MonadEvidence:
     wallet_address: str
@@ -13,7 +16,7 @@ class MonadEvidence:
 
 @dataclass(frozen=True, slots=True)
 class MonadVerificationObservation:
-    status: Literal["verified", "rejected", "pending", "unavailable"]
+    status: MonadVerificationStatus
     facts: dict[str, int | str]
     findings: tuple[str, ...]
     block_number: int | None

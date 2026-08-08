@@ -9,22 +9,22 @@ class FakeMonadRpc:
     responses: dict[str, Any]
     calls: list[str] = field(default_factory=list)
 
-    def chain_id(self) -> int:
+    def chain_id(self, *, deadline: float) -> int:
         self.calls.append("chain_id")
         return self.responses["chain_id"]
 
-    def transaction(self, tx_hash: str) -> dict[str, Any] | None:
+    def transaction(self, tx_hash: str, *, deadline: float) -> dict[str, Any] | None:
         self.calls.append("transaction")
         return self.responses["transaction"]
 
-    def receipt(self, tx_hash: str) -> dict[str, Any] | None:
+    def receipt(self, tx_hash: str, *, deadline: float) -> dict[str, Any] | None:
         self.calls.append("receipt")
         return self.responses["receipt"]
 
-    def code(self, address: str, block_number: int) -> bytes:
+    def code(self, address: str, block_number: int, *, deadline: float) -> bytes:
         self.calls.append("code")
         return self.responses["code"]
 
-    def block_timestamp(self, block_number: int) -> int:
+    def block_timestamp(self, block_number: int, *, deadline: float) -> int:
         self.calls.append("block_timestamp")
         return self.responses["block_timestamp"]
