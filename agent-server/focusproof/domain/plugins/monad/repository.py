@@ -10,7 +10,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from focusproof.persistence.models import MonadEvidenceClaimModel
+from focusproof.domain.plugins.monad.claim_model import MonadEvidenceClaimModel
 
 
 class MonadClaimConflict(RuntimeError):

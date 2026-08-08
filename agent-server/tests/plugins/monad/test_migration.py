@@ -25,7 +25,7 @@ def test_upgrade_downgrade_reupgrade_claim_table(alembic_config: Config, databas
 
 
 def test_claim_table_compiles_for_postgresql() -> None:
-    from focusproof.persistence.models import MonadEvidenceClaimModel
+    from focusproof.domain.plugins.monad.claim_model import MonadEvidenceClaimModel
 
     ddl = str(CreateTable(MonadEvidenceClaimModel.__table__).compile(
         dialect=postgresql.dialect()))  # type: ignore[no-untyped-call]
