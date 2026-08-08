@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAllowedFocusProofRequest } from "@/lib/api/errors";
+import { getProxyTimeoutMs } from "@/lib/api/proxy-timeout";
 import { getForwardableBearer } from "@/lib/auth/server";
 
 type RouteContext = {
@@ -7,8 +8,6 @@ type RouteContext = {
     path: string[];
   }>;
 };
-
-const timeoutMs = 15000;
 
 async function proxy(request: NextRequest, context: RouteContext): Promise<NextResponse> {
   const { path = [] } = await context.params;
@@ -24,7 +23,7 @@ async function proxy(request: NextRequest, context: RouteContext): Promise<NextR
   const authorization = getForwardableBearer(request.headers);
   if (authorization) headers.set("authorization", authorization);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const timeout = setTimeout(() => controller.abort(), getProxyTimeoutMs(request.method, path));
   let upstream: Response;
   try {
     upstream = await fetch(target, {

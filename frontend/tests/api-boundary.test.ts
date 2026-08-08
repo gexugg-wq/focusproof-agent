@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { focusProofApi, isApiError } from "@/lib/api/client";
 import { ApiError, isAllowedFocusProofRequest, mapApiError, sortEventsBySequence } from "@/lib/api/errors";
+import { getProxyTimeoutMs } from "@/lib/api/proxy-timeout";
 import { GET } from "@/app/api/focusproof/[...path]/route";
 
 const allowed = [
@@ -24,6 +25,11 @@ describe("FocusProof BFF policy", () => {
     expect(isAllowedFocusProofRequest("GET", ["debug", "openhands", "env-status"])).toBe(false);
     expect(isAllowedFocusProofRequest("GET", ["sessions", "sess_1", "../../debug"])).toBe(false);
     expect(isAllowedFocusProofRequest("POST", ["sessions", "sess_1", "proof"])).toBe(false);
+  });
+
+  it("allows real review requests to outlive the backend review budget", () => {
+    expect(getProxyTimeoutMs("GET", ["health"])).toBe(15_000);
+    expect(getProxyTimeoutMs("POST", ["sessions", "sess_1", "review"])).toBeGreaterThan(60_000);
   });
 });
 
