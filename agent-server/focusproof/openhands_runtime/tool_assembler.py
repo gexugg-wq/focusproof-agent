@@ -4,8 +4,9 @@ from collections.abc import Collection, Iterable
 from hashlib import sha256
 from typing import Any
 
-from openhands.sdk.tool import Tool
+from openhands.sdk.tool import Tool, register_tool
 
+from focusproof.domain.plugins.base import EvidencePluginProvider
 from focusproof.openhands_runtime.capabilities import (
     VerificationCapability,
     VerificationCapabilityRegistry,
@@ -20,8 +21,23 @@ _COMPATIBILITY_VERIFIER_TOOL_CLASS = "FocusProofEvidenceVerificationTool"
 
 
 class SessionToolAssembler:
-    def __init__(self, registry: VerificationCapabilityRegistry) -> None:
+    def __init__(
+        self,
+        registry: VerificationCapabilityRegistry,
+        *,
+        plugin_providers: Iterable[EvidencePluginProvider] = (),
+    ) -> None:
         self._registry = registry
+        plugin_ids: set[str] = set()
+        for provider in plugin_providers:
+            plugin_id = provider.plugin_id.strip()
+            if not plugin_id or plugin_id in plugin_ids:
+                raise ValueError("plugin_id must be non-empty and unique")
+            plugin_ids.add(plugin_id)
+            for name, definition in provider.tool_definitions().items():
+                register_tool(name, definition)
+            for capability in provider.capability_definitions():
+                self._registry.register(capability)
 
     def assemble(
         self,
@@ -68,8 +84,7 @@ class SessionToolAssembler:
         selected_evidence_types = None if compatibility_restore else evidence_types or None
         selected = self._registry.select(domain, selected_evidence_types)
         has_compatibility_verifier = any(
-            item.tool_class_name == _COMPATIBILITY_VERIFIER_TOOL_CLASS
-            for item in selected
+            item.tool_class_name == _COMPATIBILITY_VERIFIER_TOOL_CLASS for item in selected
         )
         extra_identities = (
             ("repository-compatibility:2",)

@@ -53,7 +53,9 @@
 - Test: `agent-server/tests/plugins/monad/test_configuration.py`
 
 **Interfaces:**
-- Produces: `EvidencePluginProvider.plugin_id`, `tool_definitions()`, and `executors()`.
+- Produces: `EvidencePluginProvider.plugin_id`, `tool_definitions()`, and neutral capability definitions.
+- Correction: there is no public `executors()` or FocusProof executor registry;
+  each official OpenHands `ToolDefinition.create(...)` binds its plugin-owned `ToolExecutor`.
 - Produces: `MonadPluginSettings.from_environ(environ)` returning disabled settings or a fully validated enabled configuration.
 - Consumes: existing OpenHands `ToolDefinition` and `ToolExecutor` types already used by the runtime.
 
