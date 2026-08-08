@@ -27,6 +27,9 @@ dev = [
     "pytest",
     "ruff",
 ]
+monad = [
+    "web3>=7.16,<8",
+]
 
 [tool.setuptools.packages.find]
 where = ["agent-server"]

@@ -2,13 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Mapping
-import re
 from urllib.parse import urlsplit
 
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES = frozenset({"", "0", "false", "no", "off"})
-_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,11 +38,7 @@ class MonadPluginSettings:
             "FOCUSPROOF_MONAD_CONTRACT_ADDRESS",
             "contract address",
         )
-        address_body = contract_address[2:]
-        if not _ADDRESS_RE.fullmatch(contract_address) or not (
-            address_body.islower() or address_body.isupper()
-        ):
-            raise ValueError("Monad contract address must be checksummed")
+        contract_address = _trusted_checksum_address(contract_address)
         deployment_block = _non_negative_integer(
             environ,
             "FOCUSPROOF_MONAD_DEPLOYMENT_BLOCK",
@@ -105,3 +99,17 @@ def _validate_url(url: str, label: str, *, allow_credentials: bool) -> None:
         raise ValueError(f"Monad {label} must be an absolute HTTPS URL")
     if not allow_credentials and (parsed.username is not None or parsed.password is not None):
         raise ValueError(f"Monad {label} must not contain credentials")
+
+
+def _trusted_checksum_address(value: str) -> str:
+    try:
+        from web3 import Web3
+    except ImportError as exc:
+        raise RuntimeError(
+            "Monad plugin requires the optional 'monad' dependency"
+        ) from exc
+    if not Web3.is_checksum_address(value):
+        raise ValueError(
+            "Monad contract address must be a valid EIP-55 checksummed address"
+        )
+    return str(Web3.to_checksum_address(value))
