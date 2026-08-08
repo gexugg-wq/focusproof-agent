@@ -79,7 +79,13 @@ beforeEach(() => {
 
 describe("Monad plugin workspace", () => {
   it("keeps the Monad panel hidden when no capability is exposed", async () => {
-    workspaceApi.getSession.mockResolvedValue(baseSession);
+    workspaceApi.getSession.mockResolvedValue({
+      ...baseSession,
+      state: {
+        ...baseSession.state,
+        goal: { ...baseSession.state.goal, domain: "general" }
+      }
+    });
     render(wrap(<SessionWorkspace sessionId="sess_monad" />));
     await screen.findByRole("heading", { name: /monad increment demo/i });
     expect(screen.queryByText(/MonadLearningCounter/i)).not.toBeInTheDocument();
@@ -92,10 +98,24 @@ describe("Monad plugin workspace", () => {
     });
     render(wrap(<SessionWorkspace sessionId="sess_monad" />));
     await screen.findByText(/Submit a wallet transaction/i);
+    expect(screen.getByRole("button", { name: /connect wallet/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/wallet address/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/transaction hash/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/contract address/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/operation explanation/i)).toBeInTheDocument();
+  });
+
+  it("keeps the wallet connect entry hidden when the Monad capability is not enabled", async () => {
+      workspaceApi.getSession.mockResolvedValue({
+      ...baseSession,
+      state: {
+        ...baseSession.state,
+        goal: { ...baseSession.state.goal, domain: "general" }
+      }
+    });
+    render(wrap(<SessionWorkspace sessionId="sess_monad" />));
+    await screen.findByRole("heading", { name: /monad increment demo/i });
+    expect(screen.queryByRole("button", { name: /connect wallet/i })).not.toBeInTheDocument();
   });
 
   it("submits manual Monad evidence through the existing evidence API", async () => {

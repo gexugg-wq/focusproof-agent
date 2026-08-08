@@ -84,7 +84,7 @@ export function SessionWorkspace({ sessionId }: { sessionId: string }) {
           <div><dt className="font-medium">Expected output</dt><dd>{session.state.goal.expectedOutput || "Not specified"}</dd></div>
           <div><dt className="font-medium">Planned minutes</dt><dd>{session.state.goal.plannedMinutes ?? "Not specified"}</dd></div>
         </dl>
-        {web3Context && !monadCapability ? <WalletPanel onWalletChange={setWalletAddress} /> : null}
+        {web3Context || monadCapability ? <WalletPanel onWalletChange={setWalletAddress} /> : null}
       </aside>
       <div className="grid content-start gap-4">
         {monadCapability ? <MonadEvidencePanel capability={monadCapability} onSubmitEvidence={(payload) => evidence.mutateAsync(payload)} /> : null}
