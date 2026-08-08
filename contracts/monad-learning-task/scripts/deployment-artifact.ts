@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
+export const MONAD_TESTNET_CHAIN_ID = 10_143;
 export type PublicDeployment = {
   contractAddress: string;
   deploymentTransactionHash: string;
@@ -16,6 +17,9 @@ export async function writeVerifiedDeploymentArtifact(
   deployment: PublicDeployment,
   deployedBytecode: string,
 ): Promise<void> {
+  if (deployment.chainId !== MONAD_TESTNET_CHAIN_ID) {
+    throw new Error("unexpected Monad Testnet chain ID");
+  }
   if (deployedBytecode === "0x" || deployedBytecode === "0x0") {
     throw new Error("deployed bytecode verification failed");
   }

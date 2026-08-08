@@ -3,7 +3,10 @@ import { resolve } from "node:path";
 
 import hre from "hardhat";
 
-import { writeVerifiedDeploymentArtifact } from "./deployment-artifact.js";
+import {
+  MONAD_TESTNET_CHAIN_ID,
+  writeVerifiedDeploymentArtifact,
+} from "./deployment-artifact.js";
 
 async function main(): Promise<void> {
   const { viem, networkName } = await hre.network.create();
@@ -11,6 +14,10 @@ async function main(): Promise<void> {
     throw new Error("deployment requires --network monad");
   }
   const publicClient = await viem.getPublicClient();
+  const chainId = await publicClient.getChainId();
+  if (chainId !== MONAD_TESTNET_CHAIN_ID) {
+    throw new Error("deployment requires Monad Testnet chain ID 10143");
+  }
   const { contract, deploymentTransaction } =
     await viem.sendDeploymentTransaction("MonadLearningCounter");
   const receipt = await publicClient.waitForTransactionReceipt({
@@ -31,7 +38,6 @@ async function main(): Promise<void> {
   const artifact = await hre.artifacts.readArtifact(
     "MonadLearningCounter",
   );
-  const chainId = await publicClient.getChainId();
   const sourceCommit = execFileSync(
     "git",
     ["rev-parse", "HEAD"],

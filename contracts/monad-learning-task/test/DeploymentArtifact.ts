@@ -10,7 +10,7 @@ const PUBLIC_DEPLOYMENT = {
   contractAddress: "0x1111111111111111111111111111111111111111",
   deploymentTransactionHash:
     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  chainId: 1234,
+  chainId: 10143,
   compilerVersion: "0.8.24",
   sourceCommit: "0123456789abcdef",
   abi: [],
@@ -25,6 +25,14 @@ describe("deployment artifact", () => {
       await assert.rejects(
         writeVerifiedDeploymentArtifact(output, PUBLIC_DEPLOYMENT, "0x"),
         /bytecode/,
+      );
+      await assert.rejects(
+        writeVerifiedDeploymentArtifact(
+          output,
+          { ...PUBLIC_DEPLOYMENT, chainId: 1 },
+          PUBLIC_DEPLOYMENT.deploymentTransactionHash.slice(0, 6),
+        ),
+        /chain ID/,
       );
       await assert.rejects(stat(output), { code: "ENOENT" });
     } finally {
