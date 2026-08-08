@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from focusproof.domain.review import Finding
@@ -38,3 +40,4 @@ class AgentView(BaseModel):
     unansweredQuestions: list[QuestionView] = Field(default_factory=list)
     availableTools: list[ToolDescription] = Field(default_factory=list)
     previousActions: list[Action] = Field(default_factory=list)
+    pluginCapabilities: list[dict[str, Any]] = Field(default_factory=list)

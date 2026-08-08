@@ -14,12 +14,18 @@ from openhands.sdk.event.base import Event as OpenHandsEvent
 
 from focusproof.domain.review import ReviewResult
 from focusproof.config.profiles import RuntimeSettings
+from focusproof.domain.plugins.base import EvidencePluginProvider
 from focusproof.openhands_runtime.evidence_messages import runtime_evidence_payload
 from focusproof.openhands_runtime.factory import (
     ConversationFactory,
     LLMFactory,
     RuntimeUnavailableError,
 )
+from focusproof.openhands_runtime.capabilities import (
+    VerificationCapabilityRegistry,
+    build_builtin_capabilities,
+)
+from focusproof.openhands_runtime.tool_assembler import SessionToolAssembler
 from focusproof.openhands_runtime.handle import ConversationHandle, RuntimeReviewResult
 from focusproof.openhands_runtime.locks import SessionRunLock
 from focusproof.openhands_runtime.projector import OpenHandsEventProjector
@@ -68,6 +74,7 @@ class ConversationManager:
         run_lock: SessionRunLock | None = None,
         provider_admission: ProviderAdmission | None = None,
         runtime_settings: RuntimeSettings | None = None,
+        plugin_providers: tuple[EvidencePluginProvider, ...] = (),
     ) -> None:
         self._audit_log = audit_log
         self._lifecycle_lock = RLock()
@@ -96,6 +103,10 @@ class ConversationManager:
             if uow_factory is not None
             else repository
         )
+        tool_assembler = SessionToolAssembler(
+            VerificationCapabilityRegistry(build_builtin_capabilities()),
+            plugin_providers=plugin_providers,
+        )
         self._factory = ConversationFactory(
             repository=factory_repository,
             project_root=project_root,
@@ -103,6 +114,7 @@ class ConversationManager:
             llm_factory=llm_factory,
             callback_factory=self._create_projector_callback,
             runtime_settings=runtime_settings,
+            tool_assembler=tool_assembler,
             compatibility_mode=uow_factory is None,
         )
         self._accepting_reviews = True

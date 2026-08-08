@@ -49,6 +49,8 @@ from focusproof.api.models import (
 )
 from focusproof.config.identity import load_oidc_settings
 from focusproof.config.profiles import load_runtime_settings
+from focusproof.domain.plugins.base import collect_public_plugin_capabilities
+from focusproof.domain.plugins.loader import load_evidence_plugin_providers
 from focusproof.domain.review import ReviewResult
 from focusproof.openhands_adapter.capabilities import get_openhands_capabilities
 from focusproof.openhands_runtime.factory import (
@@ -556,6 +558,7 @@ def create_app(
                 resolved_data_dir,
                 timeout_seconds=configured_lock_timeout,
             )
+            plugin_providers = load_evidence_plugin_providers(os.environ)
             runtime_settings = (
                 load_runtime_settings(os.environ) if llm_factory is None else None
             )
@@ -587,6 +590,7 @@ def create_app(
                 ),
                 provider_admission=provider_admission,
                 runtime_settings=runtime_settings,
+                plugin_providers=plugin_providers,
             )
             application.state.engine = engine
             application.state.uow_factory = uow_factory
@@ -598,6 +602,7 @@ def create_app(
             )
             application.state.audit_projection_store = audit_projection_store
             application.state.evidence_provider = evidence_provider
+            application.state.plugin_capabilities = collect_public_plugin_capabilities(plugin_providers)
             application.state.run_lock = run_lock
             application.state.conversation_manager = manager
         except ValidationError:
@@ -1132,6 +1137,7 @@ def _install_routes(
             answers = uow.answers.list_for_session(session_id)
         goal = _goal(session)
         runtime_evidence = [_runtime_evidence(item) for item in evidence]
+        plugin_capabilities = list(getattr(request.app.state, "plugin_capabilities", ()))
         review = (
             ReviewResult.model_validate(session.review_result)
             if session.status == "reviewed" and session.review_result is not None
@@ -1153,7 +1159,7 @@ def _install_routes(
                 "conversationId": session.conversation_id,
                 "runtimeMode": session.runtime_mode,
             },
-            "view": _view(session_id, session.status, goal, runtime_evidence, review),
+            "view": _view(session_id, session.status, goal, runtime_evidence, review, plugin_capabilities),
         }
 
     @application.get("/sessions/{session_id}/events")
@@ -1397,6 +1403,7 @@ def _view(
     goal: LearningGoal,
     evidence: list[Evidence],
     review: ReviewResult | None,
+    plugin_capabilities: list[object],
 ) -> dict[str, Any]:
     return AgentView(
         session=SessionView(id=session_id, status=status),
@@ -1407,6 +1414,15 @@ def _view(
         unansweredQuestions=[],
         availableTools=_available_tools(),
         previousActions=[],
+        pluginCapabilities=[
+            {
+                "pluginId": item.plugin_id,
+                "capabilityId": item.capability_id,
+                "enabled": item.enabled,
+                "metadata": dict(item.metadata),
+            }
+            for item in plugin_capabilities
+        ],
     ).model_dump(mode="json")
 
 
