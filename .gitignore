@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 .idea/
 .env
+.local/
 node_modules/
 .next/
 dist/
@@ -12,6 +13,7 @@ build/
 out/
 coverage/
 var/
+.*.focusproof-recovery/
 *.db
 *.sqlite
 *.sqlite3

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any
 from uuid import uuid4
 
 from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
@@ -17,32 +17,24 @@ from focusproof.openhands_runtime.handle import (
     RuntimeReviewResult,
     RuntimeReviewStatus,
 )
-from focusproof.openhands_runtime.tools.evidence_verification import (
-    EvidenceVerificationObservation,
-)
 from focusproof.openhands_runtime.tools.learner_input import (
     LearnerInputAction,
     LearnerInputObservation,
 )
 from focusproof.openhands_runtime.tools.review_draft import ReviewDraftObservation
+from focusproof.openhands_runtime.url_redaction import (
+    sanitize_source_refs,
+    sanitize_verification_facts,
+)
+from focusproof.openhands_runtime.tools.verification import VerificationObservation
+from focusproof.openhands_runtime.tools.evidence_verification import (
+    EvidenceVerificationObservation,
+)
 from focusproof.persistence.repositories import StoredReview
 from focusproof.persistence.unit_of_work import UnitOfWorkFactoryLike
 from focusproof.runtime.evidence import Evidence, LearningGoal
-from focusproof.runtime.events import Actor, Event, EventType
 from focusproof.runtime.observations import Observation
-
-
-class AuditQuery(Protocol):
-    def list(self, session_id: str) -> list[Any]: ...
-    def append_final(
-        self,
-        session_id: str,
-        event_type: EventType,
-        actor: Actor,
-        payload: dict[str, object],
-        *,
-        event_id: str,
-    ) -> Event: ...
+from focusproof.runtime.audit_projection import AuditQuery
 
 
 class RuntimeResultExtractor:
@@ -120,7 +112,10 @@ class RuntimeResultExtractor:
 
         if drafts:
             draft_event = drafts[-1][1]
-            observations = _focusproof_observations(native_events)
+            observations = _focusproof_observations(
+                native_events,
+                after_index=last_answer_index,
+            )
             review = score_learning_session(
                 goal=goal,
                 evidence=evidence,
@@ -313,23 +308,55 @@ def _message_kind(event: MessageEvent) -> str | None:
 
 def _focusproof_observations(
     native_events: Sequence[OpenHandsEvent],
+    *,
+    after_index: int = -1,
 ) -> list[Observation]:
     observations: list[Observation] = []
-    for event in native_events:
+    for index, event in enumerate(native_events):
+        if index <= after_index:
+            continue
         if not isinstance(event, ObservationEvent):
             continue
         native_observation = event.observation
-        if not isinstance(native_observation, EvidenceVerificationObservation):
+        if isinstance(native_observation, EvidenceVerificationObservation):
+            observations.append(
+                Observation(
+                    toolName=event.tool_name,
+                    status="inconclusive",
+                    facts={
+                        "capability": "legacy",
+                        "evidence_type": native_observation.evidence_type,
+                        "findings": native_observation.findings,
+                        "weak_signals": native_observation.weak_signals,
+                        "verifier_version": "legacy",
+                    },
+                    sourceRefs=sanitize_source_refs(native_observation.source_refs),
+                    error=None,
+                )
+            )
             continue
+        if not isinstance(native_observation, VerificationObservation):
+            continue
+        status = (
+            native_observation.status
+            if native_observation.status in {"success", "failed", "inconclusive"}
+            else "inconclusive"
+        )
         observations.append(
             Observation(
-                toolName="FocusProofEvidenceVerificationTool",
-                status="success" if native_observation.verified else "inconclusive",
-                facts=native_observation.model_dump(
-                    mode="json",
-                    exclude={"content", "is_error"},
-                ),
-                sourceRefs=native_observation.source_refs,
+                toolName=event.tool_name,
+                status=status,
+                facts={
+                    **sanitize_verification_facts(
+                        native_observation.capability,
+                        native_observation.facts,
+                    ),
+                    "capability": native_observation.capability,
+                    "weak_signals": native_observation.weak_signals,
+                    "verifier_version": native_observation.verifier_version,
+                },
+                sourceRefs=sanitize_source_refs(native_observation.source_refs),
+                error=native_observation.safe_error_message,
             )
         )
     return observations

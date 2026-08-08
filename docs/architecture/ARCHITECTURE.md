@@ -1,9 +1,9 @@
 # FocusProof Agent Architecture
 
-Version: Architecture Baseline v0.4
+Version: Architecture Baseline v0.7
 Primary runtime: Python Agent Server
 Frontend: Next.js and TypeScript
-First domain plugin: Web3 learning on Monad Testnet
+Optional domain plugin backlog: domain-specific verification, deferred
 Long-term scope: general knowledge learning verification
 
 ## 1. Product Goal
@@ -18,11 +18,63 @@ FocusProof Agent verifies whether a learning session produced credible, reviewab
 - learning output,
 - reflection and next-step plan.
 
-The first demo focuses on Web3 learning because Web3 evidence can be externally checked through transaction hashes, contract addresses and block explorers. The architecture, however, must support any knowledge domain.
+The accepted product is the domain-general text/URL learning flow. Web3 was
+considered in an early design, but is not a current architecture dependency,
+runtime capability, or AI4C production-readiness deliverable.
 
-## 2. What Changes From v0.1
+Accepted implementation baseline: AI4B at `bf5c9a8`. Next design gate: AI4C.0
+Production Readiness.
 
-The previous plan used a TypeScript-first runtime. The v0.2 plan changes the runtime to Python because we want to directly learn from, and potentially reuse, OpenHands SDK-style agent abstractions.
+### 1.1 AI4C Production-Readiness Boundary
+
+AI4C keeps the accepted domain-general text/URL product and executes four
+strictly sequential implementation gates after its design is accepted:
+
+1. real-LLM operations through the OpenHands SDK LLM/LiteLLM integration;
+2. FastAPI OIDC identity verification and product authorization;
+3. reproducible single-host OCI staging with PostgreSQL and paired OpenHands
+   persistence recovery;
+4. final production-readiness acceptance.
+
+DashScope is the first real-provider acceptance instance, not an architecture
+dependency. The FastAPI OIDC verifier is the only authoritative application
+identity boundary. AI4C does not add Web3, contracts, wallets, on-chain proof,
+multimodal evidence or a second OpenHands runtime.
+
+AI4C is not a public-deployment authorization. If only a local OIDC test issuer
+or isolated staging substitutes are exercised, the strongest result is
+`staging-ready with blockers`.
+
+Staging and production require the explicit deployment setting
+`LITELLM_LOCAL_MODEL_COST_MAP=true`. A standard-library preflight validates the
+exact value before importing OpenHands or LiteLLM, so missing, false, whitespace,
+or malicious values fail closed before any pricing-map network path. Local-dev
+and deterministic-test set the bundled-map invariant only when entering the
+OpenHands package boundary; ordinary FocusProof imports do not mutate it.
+
+The official OpenHands SDK `Conversation` and native EventLog are the sole
+runtime loop and runtime fact source. FocusProof does not implement a fallback
+Agent loop, Conversation or EventLog. Its in-memory and persistent
+`AuditProjectionStore` implementations retain only product-approved query
+projections and cannot schedule Agent steps, execute tools or replace native
+OpenHands restoration.
+
+The product database owns sessions, evidence metadata, authorization,
+reviews, build logs, and a read/query audit projection. It does not restore or
+drive the Agent runtime. Native OpenHands persistence and EventLog own runtime
+events, ordering, replay, and Conversation restoration.
+
+## 2. Historical/Superseded v0.1 Design Archive
+
+Everything in this section through the end of the document is retained only
+as historical planning context. References to TypeScript runtime mirrors,
+wallet UX, Monad, contracts, on-chain proof, transaction verifiers, or a
+FocusProof-owned EventLog are superseded by sections 1 and 1.1 above and must
+not be implemented as current architecture.
+
+### 2.1 What Changed in the Historical v0.1 Plan
+
+The previous plan used a TypeScript-first runtime. The v0.2 plan changes the runtime to Python so the project can directly use OpenHands SDK agent-runtime abstractions.
 
 Changed:
 
@@ -113,6 +165,8 @@ FocusProof owns the learning-specific protocol:
 - Review statuses.
 - Build Log generation.
 - On-chain proof payload.
+
+Direct reuse is a project-level constraint, not an implementation preference. If the pinned OpenHands SDK exposes a public capability for Agent, Conversation, EventLog/View, Message/Action/Observation events, tools, cancellation, recovery or callbacks, the implementation must use that capability. FocusProof adapters may add product semantics and projections, but must not recreate an equivalent runtime mechanism. Any exception requires the SDK gap record defined in `docs/architecture/OPENHANDS_REUSE_STRATEGY.md`.
 
 See `docs/architecture/OPENHANDS_REUSE_STRATEGY.md`.
 
@@ -295,7 +349,7 @@ Frontend:
 
 Agent Server:
 
-- Python 3.11+
+- Python 3.12
 - FastAPI
 - Pydantic
 - pytest
@@ -308,7 +362,7 @@ Agent Runtime:
 
 - OpenHands SDK direct import.
 - FocusProof adapters around OpenHands Conversation, Event, Tool and Agent objects.
-- Local fallback shims only when a specific SDK object cannot be safely adapted.
+- FocusProof-owned runtime additions only for a documented SDK gap, with tests and a removal plan.
 
 Tools:
 
@@ -320,7 +374,7 @@ Contracts:
 
 - Solidity
 - Foundry preferred in WSL/Linux
-- Monad Testnet deployment later.
+- Optional proof recording is designed in AI4B.0, verified locally before any Monad Testnet deployment.
 
 ## 12. Security Boundaries
 

@@ -1,12 +1,28 @@
 import React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EvidencePanel } from "@/features/evidence/EvidencePanel";
 import { ReviewPanel } from "@/features/review/ReviewPanel";
 import { BuildLog } from "@/features/build-log/BuildLog";
+import { SessionWorkspace } from "@/features/session/SessionWorkspace";
 import type { FocusProofEvent, RuntimeReviewResult, SessionDetail } from "@/lib/api/contracts";
+
+const workspaceApi = vi.hoisted(() => ({
+  getEvents: vi.fn(),
+  getReviews: vi.fn(),
+  getSession: vi.fn(),
+  requestReview: vi.fn(),
+  submitAnswer: vi.fn(),
+  submitEvidence: vi.fn()
+}));
+
+vi.mock("@/lib/api/client", () => ({
+  focusProofApi: workspaceApi,
+  getSafeErrorMessage: (error: unknown) => error instanceof Error ? error.message : "Request failed.",
+  isApiError: () => false
+}));
 
 const session: SessionDetail = {
   sessionId: "sess_1",
@@ -30,6 +46,28 @@ const session: SessionDetail = {
 function wrap(children: React.ReactNode) {
   return <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}>{children}</QueryClientProvider>;
 }
+
+function workspaceWrap(client: QueryClient, children: React.ReactNode) {
+  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
+
+const awaitingReview: RuntimeReviewResult = {
+  sessionId: "sess_1",
+  conversationMode: "openhands-local-real",
+  usedOpenHandsConversation: true,
+  reviewStatus: "awaiting_user",
+  agentQuestions: [{ questionId: "q1", question: "What changed in your understanding?" }]
+};
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  workspaceApi.getSession.mockResolvedValue(session);
+  workspaceApi.getEvents.mockResolvedValue({ events: [] });
+  workspaceApi.getReviews.mockResolvedValue({ reviews: [] });
+  workspaceApi.requestReview.mockResolvedValue(awaitingReview);
+  workspaceApi.submitAnswer.mockResolvedValue({ syncPending: false });
+  workspaceApi.submitEvidence.mockResolvedValue({ syncPending: false });
+});
 
 describe("EvidencePanel", () => {
   it("shows structured evidence submission errors", async () => {
@@ -122,5 +160,41 @@ describe("BuildLog", () => {
     render(<BuildLog events={events} />);
     expect(screen.getAllByRole("listitem")[0]).toHaveTextContent(/session created/i);
     expect(screen.getByText(/new.event/)).toBeInTheDocument();
+  });
+});
+
+describe("SessionWorkspace recovery query refresh", () => {
+  it("invalidates session, events, and reviews after a successful answer", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const invalidateQueries = vi.spyOn(client, "invalidateQueries");
+    render(workspaceWrap(client, <SessionWorkspace sessionId="sess_1" />));
+    await screen.findByRole("heading", { name: /event logs/i });
+    await userEvent.click(screen.getByRole("button", { name: /end learning/i }));
+    await screen.findByLabelText(/answer for q1/i);
+    invalidateQueries.mockClear();
+
+    await userEvent.type(screen.getByLabelText(/answer for q1/i), "Native events retain their identity.");
+    await userEvent.click(screen.getByRole("button", { name: /submit answer/i }));
+
+    await waitFor(() => {
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session", "sess_1"] });
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["events", "sess_1"] });
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviews", "sess_1"] });
+    });
+  });
+
+  it("invalidates session, events, and reviews after a successful review request", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const invalidateQueries = vi.spyOn(client, "invalidateQueries");
+    render(workspaceWrap(client, <SessionWorkspace sessionId="sess_1" />));
+    await screen.findByRole("heading", { name: /event logs/i });
+
+    await userEvent.click(screen.getByRole("button", { name: /end learning/i }));
+
+    await waitFor(() => {
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session", "sess_1"] });
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["events", "sess_1"] });
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviews", "sess_1"] });
+    });
   });
 });

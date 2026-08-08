@@ -17,6 +17,8 @@ EXPECTED_TABLES = {
     "learner_answers",
     "learning_sessions",
     "reviews",
+    "security_audit_events",
+    "verified_principals",
 }
 
 
@@ -155,3 +157,4 @@ def test_schema_compiles_for_postgresql() -> None:
     ]
     assert any("learning_sessions" in statement for statement in statements)
     assert any("source_openhands_event_id" in statement for statement in statements)
+    assert any("security_audit_events" in statement for statement in statements)

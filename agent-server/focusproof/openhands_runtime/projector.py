@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from typing import Any, Protocol
+from typing import Any
 from uuid import UUID
 
 from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
@@ -11,6 +11,10 @@ from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.llm import TextContent
 from openhands.sdk.tool.builtins.finish import FinishAction
 
+from focusproof.openhands_runtime.tools.verification import (
+    EvidenceReferenceAction,
+    VerificationObservation,
+)
 from focusproof.openhands_runtime.tools.evidence_verification import (
     EvidenceVerificationAction,
     EvidenceVerificationObservation,
@@ -19,19 +23,13 @@ from focusproof.openhands_runtime.tools.learner_input import (
     LearnerInputAction,
     question_id_for,
 )
+from focusproof.openhands_runtime.url_redaction import (
+    safe_evidence_payload,
+    sanitize_source_refs,
+    sanitize_verification_facts,
+)
 from focusproof.runtime.events import Actor, Event, EventType
-
-
-class AuditProjection(Protocol):
-    def append(
-        self,
-        session_id: str,
-        event_type: EventType,
-        actor: Actor,
-        payload: dict[str, object],
-    ) -> Event: ...
-
-    def has_source_event(self, session_id: str, source_event_id: str) -> bool: ...
+from focusproof.runtime.audit_projection import AuditProjection
 
 
 class OpenHandsEventProjector:
@@ -102,7 +100,7 @@ class OpenHandsEventProjector:
             product_payload is not None
             or isinstance(envelope.get("evidence"), dict)
         ):
-            payload = dict(product_payload or envelope["evidence"])
+            payload = safe_evidence_payload(product_payload or envelope["evidence"])
             event_type = "evidence.submitted"
             evidence_id = payload.get("evidenceId")
             related = [evidence_id] if isinstance(evidence_id, str) else []
@@ -122,7 +120,7 @@ class OpenHandsEventProjector:
 
     def _project_action(self, native_event: ActionEvent, source_index: int) -> Event | None:
         action = native_event.action
-        if isinstance(action, EvidenceVerificationAction):
+        if isinstance(action, (EvidenceReferenceAction, EvidenceVerificationAction)):
             payload = action.model_dump(mode="json")
             event_type: EventType = "verification.requested"
             related = [action.evidence_id]
@@ -154,10 +152,35 @@ class OpenHandsEventProjector:
         source_index: int,
     ) -> Event | None:
         observation = native_event.observation
-        if isinstance(observation, EvidenceVerificationObservation):
-            payload = observation.model_dump(mode="json")
+        if isinstance(observation, VerificationObservation):
+            payload = observation.model_dump(
+                mode="json",
+                exclude={"content", "is_error"},
+            )
+            payload["source_refs"] = sanitize_source_refs(observation.source_refs)
+            payload["facts"] = sanitize_verification_facts(
+                observation.capability,
+                observation.facts,
+            )
             event_type: EventType = "verification.completed"
             actor: Actor = "tool"
+            related = [observation.evidence_id]
+        elif isinstance(observation, EvidenceVerificationObservation):
+            payload = {
+                "evidence_id": observation.evidence_id,
+                "capability": "legacy",
+                "status": "inconclusive",
+                "facts": {
+                    "evidence_type": observation.evidence_type,
+                    "findings": observation.findings,
+                    "verifier": observation.verifier,
+                },
+                "weak_signals": observation.weak_signals,
+                "source_refs": sanitize_source_refs(observation.source_refs),
+                "verifier_version": "legacy",
+            }
+            event_type = "verification.completed"
+            actor = "tool"
             related = [observation.evidence_id]
         else:
             return None

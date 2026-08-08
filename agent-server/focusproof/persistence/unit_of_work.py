@@ -11,11 +11,15 @@ from focusproof.persistence.repositories import (
     AuditEventRepository,
     EvidenceRepository,
     ReviewRepository,
+    PrincipalRepository,
+    SecurityAuditRepository,
     SessionRepository,
     SqlAnswerRepository,
     SqlAuditEventRepository,
     SqlEvidenceRepository,
     SqlReviewRepository,
+    SqlPrincipalRepository,
+    SqlSecurityAuditRepository,
     SqlSessionRepository,
 )
 
@@ -26,6 +30,8 @@ class UnitOfWork(Protocol):
     answers: AnswerRepository
     audit_events: AuditEventRepository
     reviews: ReviewRepository
+    principals: PrincipalRepository
+    security_audit: SecurityAuditRepository
 
     def __enter__(self) -> Self: ...
     def commit(self) -> None: ...
@@ -44,6 +50,8 @@ class SqlAlchemyUnitOfWork:
     answers: AnswerRepository
     audit_events: AuditEventRepository
     reviews: ReviewRepository
+    principals: PrincipalRepository
+    security_audit: SecurityAuditRepository
 
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
@@ -57,6 +65,8 @@ class SqlAlchemyUnitOfWork:
         self.answers = SqlAnswerRepository(self._session)
         self.audit_events = SqlAuditEventRepository(self._session)
         self.reviews = SqlReviewRepository(self._session)
+        self.principals = SqlPrincipalRepository(self._session)
+        self.security_audit = SqlSecurityAuditRepository(self._session)
         return self
 
     def commit(self) -> None:

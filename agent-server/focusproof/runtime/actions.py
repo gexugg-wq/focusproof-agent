@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 ActionType = Literal[
     "ask_question",
@@ -15,6 +15,8 @@ ActionType = Literal[
 
 
 class Action(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     type: ActionType
     question: str | None = None
     reason: str | None = None

@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict
-from sqlalchemy import CursorResult, func, select, update
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import CursorResult, delete, func, select, update
 from sqlalchemy.orm import Session
 
 from focusproof.persistence.models import (
@@ -14,6 +14,12 @@ from focusproof.persistence.models import (
     LearnerAnswerModel,
     LearningSessionModel,
     ReviewModel,
+    SecurityAuditEventModel,
+    VerifiedPrincipalModel,
+)
+from focusproof.runtime.security_audit import (
+    SecurityAuditOutcome,
+    SecurityAuditReasonCategory,
 )
 
 
@@ -85,9 +91,31 @@ class StoredReview(StoredModel):
     created_at: datetime
 
 
+class StoredPrincipal(StoredModel):
+    principal_id: str
+    issuer: str
+    subject: str
+    active: bool
+    created_at: datetime
+    state_changed_at: datetime
+
+
+class StoredSecurityAuditEvent(StoredModel):
+    id: str = Field(default_factory=lambda: f"audit_{uuid4().hex}")
+    request_id: str
+    principal_id: str | None
+    token_fingerprint: str | None
+    outcome: SecurityAuditOutcome
+    reason_category: SecurityAuditReasonCategory
+    occurred_at: datetime
+
+
 class SessionRepository(Protocol):
     def create(self, record: StoredSession) -> StoredSession: ...
     def get(self, session_id: str) -> StoredSession | None: ...
+    def get_owned(
+        self, session_id: str, owner_user_id: str
+    ) -> StoredSession | None: ...
     def update_status(
         self, session_id: str, status: str, *, expected_version: int
     ) -> bool: ...
@@ -108,6 +136,7 @@ class EvidenceRepository(Protocol):
 
 
 class AnswerRepository(Protocol):
+    def get(self, session_id: str, question_id: str) -> StoredAnswer | None: ...
     def upsert(self, session_id: str, question_id: str, answer: str) -> StoredAnswer: ...
     def list_for_session(self, session_id: str) -> list[StoredAnswer]: ...
     def mark_synced(
@@ -138,6 +167,104 @@ class AuditEventRepository(Protocol):
 class ReviewRepository(Protocol):
     def add_from_native_event(self, record: StoredReview) -> StoredReview: ...
     def list_for_session(self, session_id: str) -> list[StoredReview]: ...
+
+
+class PrincipalRepository(Protocol):
+    def add(self, record: StoredPrincipal) -> StoredPrincipal: ...
+    def get_exact(self, *, issuer: str, subject: str) -> StoredPrincipal | None: ...
+    def set_active(self, principal_id: str, *, active: bool) -> bool: ...
+
+
+class SecurityAuditRepository(Protocol):
+    def add(self, record: StoredSecurityAuditEvent) -> StoredSecurityAuditEvent: ...
+    def delete_expired(self, *, cutoff: datetime, limit: int) -> int: ...
+
+
+class SqlPrincipalRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, record: StoredPrincipal) -> StoredPrincipal:
+        self._session.add(
+            VerifiedPrincipalModel(
+                principal_id=record.principal_id,
+                issuer=record.issuer,
+                subject=record.subject,
+                active=record.active,
+                created_at=record.created_at,
+                state_changed_at=record.state_changed_at,
+            )
+        )
+        self._session.flush()
+        return record
+
+    def get_exact(self, *, issuer: str, subject: str) -> StoredPrincipal | None:
+        model = self._session.scalar(
+            select(VerifiedPrincipalModel).where(
+                VerifiedPrincipalModel.issuer == issuer,
+                VerifiedPrincipalModel.subject == subject,
+            )
+        )
+        return _stored_principal(model) if model is not None else None
+
+    def set_active(self, principal_id: str, *, active: bool) -> bool:
+        changed_at = datetime.now(UTC)
+        result = cast(
+            CursorResult[Any],
+            self._session.execute(
+                update(VerifiedPrincipalModel)
+                .where(
+                    VerifiedPrincipalModel.principal_id == principal_id,
+                    VerifiedPrincipalModel.active != active,
+                )
+                .values(active=active, state_changed_at=changed_at)
+            ),
+        )
+        return bool(result.rowcount)
+
+
+class SqlSecurityAuditRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, record: StoredSecurityAuditEvent) -> StoredSecurityAuditEvent:
+        self._session.add(
+            SecurityAuditEventModel(
+                id=record.id,
+                request_id=record.request_id,
+                principal_id=record.principal_id,
+                token_fingerprint=record.token_fingerprint,
+                outcome=record.outcome,
+                reason_category=record.reason_category,
+                occurred_at=record.occurred_at,
+            )
+        )
+        self._session.flush()
+        return record
+
+    def delete_expired(self, *, cutoff: datetime, limit: int) -> int:
+        expired_ids = list(
+            self._session.scalars(
+                select(SecurityAuditEventModel.id)
+                .where(SecurityAuditEventModel.occurred_at < cutoff)
+                .order_by(
+                    SecurityAuditEventModel.occurred_at,
+                    SecurityAuditEventModel.id,
+                )
+                .limit(limit)
+            )
+        )
+        if not expired_ids:
+            return 0
+        result = cast(
+            CursorResult[Any],
+            self._session.execute(
+                delete(SecurityAuditEventModel).where(
+                    SecurityAuditEventModel.id.in_(expired_ids)
+                )
+            ),
+        )
+        return int(result.rowcount or 0)
 
 
 class SqlSessionRepository:
@@ -172,6 +299,19 @@ class SqlSessionRepository:
         model = self._session.get(LearningSessionModel, session_id)
         return _stored_session(model) if model is not None else None
 
+    def get_owned(
+        self,
+        session_id: str,
+        owner_user_id: str,
+    ) -> StoredSession | None:
+        model = self._session.scalar(
+            select(LearningSessionModel).where(
+                LearningSessionModel.session_id == session_id,
+                LearningSessionModel.owner_user_id == owner_user_id,
+            )
+        )
+        return _stored_session(model) if model is not None else None
+
     def update_status(
         self, session_id: str, status: str, *, expected_version: int
     ) -> bool:
@@ -181,6 +321,7 @@ class SqlSessionRepository:
             update(LearningSessionModel)
             .where(
                 LearningSessionModel.session_id == session_id,
+                LearningSessionModel.status != "reviewed",
                 LearningSessionModel.version == expected_version,
             )
             .values(
@@ -276,6 +417,10 @@ class SqlAnswerRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
+    def get(self, session_id: str, question_id: str) -> StoredAnswer | None:
+        model = self._session.get(LearnerAnswerModel, (session_id, question_id))
+        return _stored_answer(model) if model is not None else None
+
     def upsert(self, session_id: str, question_id: str, answer: str) -> StoredAnswer:
         now = datetime.now(UTC)
         model = self._session.get(LearnerAnswerModel, (session_id, question_id))
@@ -337,6 +482,7 @@ class SqlAuditEventRepository:
         source_openhands_event_id: str | None,
         event_id: str | None = None,
     ) -> StoredAuditEvent:
+        _lock_learning_session(self._session, session_id)
         if event_id is not None:
             existing_model = self._session.get(AuditEventModel, event_id)
             if existing_model is not None:
@@ -396,11 +542,23 @@ class SqlAuditEventRepository:
         return _stored_audit_event(model) if model is not None else None
 
 
+def _lock_learning_session(
+    session: Session,
+    session_id: str,
+) -> LearningSessionModel | None:
+    return session.scalar(
+        select(LearningSessionModel)
+        .where(LearningSessionModel.session_id == session_id)
+        .with_for_update()
+    )
+
+
 class SqlReviewRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
     def add_from_native_event(self, record: StoredReview) -> StoredReview:
+        session = _lock_learning_session(self._session, record.session_id)
         if record.source_openhands_event_id is not None:
             existing = self._session.scalar(
                 select(ReviewModel).where(
@@ -423,8 +581,7 @@ class SqlReviewRepository:
             created_at=record.created_at,
         )
         self._session.add(model)
-        session = self._session.get(LearningSessionModel, record.session_id)
-        if session is not None:
+        if session is not None and session.status != "reviewed":
             session.review_result_json = record.result
             session.status = (
                 "reviewed" if record.review_status == "completed" else record.review_status
@@ -514,4 +671,15 @@ def _stored_review(model: ReviewModel) -> StoredReview:
         native_event_count=model.native_event_count,
         source_openhands_event_id=model.source_openhands_event_id,
         created_at=model.created_at,
+    )
+
+
+def _stored_principal(model: VerifiedPrincipalModel) -> StoredPrincipal:
+    return StoredPrincipal(
+        principal_id=model.principal_id,
+        issuer=model.issuer,
+        subject=model.subject,
+        active=model.active,
+        created_at=model.created_at,
+        state_changed_at=model.state_changed_at,
     )

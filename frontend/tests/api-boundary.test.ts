@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { focusProofApi, isApiError } from "@/lib/api/client";
 import { ApiError, isAllowedFocusProofRequest, mapApiError, sortEventsBySequence } from "@/lib/api/errors";
+import { getProxyTimeoutMs } from "@/lib/api/proxy-timeout";
 import { GET } from "@/app/api/focusproof/[...path]/route";
 
 const allowed = [
@@ -25,15 +26,47 @@ describe("FocusProof BFF policy", () => {
     expect(isAllowedFocusProofRequest("GET", ["sessions", "sess_1", "../../debug"])).toBe(false);
     expect(isAllowedFocusProofRequest("POST", ["sessions", "sess_1", "proof"])).toBe(false);
   });
+
+  it("allows real review requests to outlive the backend review budget", () => {
+    expect(getProxyTimeoutMs("GET", ["health"])).toBe(15_000);
+    expect(getProxyTimeoutMs("POST", ["sessions", "sess_1", "review"])).toBeGreaterThan(60_000);
+  });
 });
 
 describe("API errors", () => {
-  it("returns real Error instances for structured API failures", () => {
+  it("maps session_busy conflicts as temporary and retryable", () => {
     const error = mapApiError(409, { code: "session_busy", retryable: true });
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toBeInstanceOf(Error);
+    expect(error.code).toBe("session_busy");
     expect(error.message).toContain("Session processing");
     expect(error.retryable).toBe(true);
+  });
+
+  it("maps session_finalized conflicts as permanent with a clear message", () => {
+    const error = mapApiError(409, { code: "session_finalized", retryable: false });
+
+    expect(error).toMatchObject({
+      code: "session_finalized",
+      retryable: false,
+      message: "This session is complete. New facts cannot be submitted."
+    });
+  });
+
+  it("keeps unknown conflicts generic and honors explicit retryability", () => {
+    const permanent = mapApiError(409, { code: "unknown_conflict", retryable: false });
+    const temporary = mapApiError(409, { code: "unknown_conflict", retryable: true });
+
+    expect(permanent).toMatchObject({
+      code: "unknown_conflict",
+      retryable: false,
+      message: "FocusProof request failed. Please retry."
+    });
+    expect(temporary).toMatchObject({
+      code: "unknown_conflict",
+      retryable: true,
+      message: "FocusProof request failed. Please retry."
+    });
   });
 
   it("maps access errors without pretending success", () => {

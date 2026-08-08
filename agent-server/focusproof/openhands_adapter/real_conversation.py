@@ -13,7 +13,7 @@ from focusproof.openhands_runtime.factory import (
     RuntimeUnavailableError,
 )
 from focusproof.openhands_runtime.manager import ConversationManager
-from focusproof.runtime.event_log import InMemoryEventLog
+from focusproof.runtime.audit_projection import InMemoryAuditProjectionStore
 from focusproof.runtime.evidence import Evidence, LearningGoal, hash_evidence_content
 
 _ALLOWED_ACTIONS = {"ask_question", "request_evidence", "tentative_review"}
@@ -178,7 +178,7 @@ def run_real_learning_review_spike(
     repository = _DebugEvidenceRepository(session_id, submitted_evidence)
     manager = ConversationManager(
         repository=repository,
-        audit_log=InMemoryEventLog(),
+        audit_log=InMemoryAuditProjectionStore(),
         project_root=project_root,
     )
     created = False

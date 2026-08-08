@@ -27,12 +27,18 @@ export function ReviewPanel({
   const [answerBusy, setAnswerBusy] = useState<Record<string, boolean>>({});
   const answerBusyRef = useRef<Record<string, boolean>>({});
   const [message, setMessage] = useState("");
+  const [reviewState, setReviewState] = useState<"idle" | RuntimeReviewResult["reviewStatus"]>(
+    session.state.reviewResult ? "completed" : "idle"
+  );
   async function reviewAgain() {
     setBusy(true);
     setMessage("");
     try {
-      setResult(await onRequestReview());
+      const nextResult = await onRequestReview();
+      setResult(nextResult);
+      setReviewState(nextResult.reviewStatus);
     } catch (error) {
+      setReviewState("failed");
       setMessage(getSafeErrorMessage(error));
     } finally {
       setBusy(false);
@@ -66,6 +72,9 @@ export function ReviewPanel({
         <RotateCw size={16} />{result?.reviewStatus === "awaiting_user" ? "Request review again" : "End learning and verify"}
       </button>
       <p aria-live="polite" className="text-sm text-slate-700">{message}</p>
+      <p aria-label="Review state" className="text-sm font-medium" role="status">
+        Review state: {reviewState === "awaiting_user" ? "Awaiting user" : reviewState}
+      </p>
       {result?.reviewStatus === "awaiting_user" ? (
         <div className="grid gap-3">
           {(result.agentQuestions ?? []).map((question) => (

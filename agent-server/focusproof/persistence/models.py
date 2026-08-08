@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    Boolean,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -22,6 +23,45 @@ def _utc_now() -> datetime:
 
 class Base(DeclarativeBase):
     pass
+
+
+class VerifiedPrincipalModel(Base):
+    __tablename__ = "verified_principals"
+    __table_args__ = (
+        UniqueConstraint(
+            "issuer",
+            "subject",
+            name="uq_verified_principals_issuer_subject",
+        ),
+    )
+
+    principal_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    issuer: Mapped[str] = mapped_column(String(2048), nullable=False)
+    subject: Mapped[str] = mapped_column(String(1024), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now
+    )
+    state_changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now
+    )
+
+
+class SecurityAuditEventModel(Base):
+    __tablename__ = "security_audit_events"
+    __table_args__ = (
+        Index("ix_security_audit_events_occurred_at_id", "occurred_at", "id"),
+        Index("ix_security_audit_events_principal_id", "principal_id"),
+        UniqueConstraint("request_id", name="uq_security_audit_events_request_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    principal_id: Mapped[str | None] = mapped_column(String(96))
+    token_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason_category: Mapped[str] = mapped_column(String(64), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class LearningSessionModel(Base):

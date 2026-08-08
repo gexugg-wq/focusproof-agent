@@ -46,7 +46,7 @@ def completed_review_llm(session_id: str) -> TestLLM:
     del session_id
     verification_call = MessageToolCall(
         id="call_verify_1",
-        name="focusproof_evidence_verification",
+        name="focusproof_text_evidence_verification",
         arguments=json.dumps({"evidence_id": "ev_1"}),
         origin="completion",
     )

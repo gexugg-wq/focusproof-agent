@@ -15,9 +15,11 @@ class RecordingEvidenceRepository:
 
 
 def test_verification_executor_loads_authoritative_evidence_by_id() -> None:
-    from focusproof.openhands_runtime.tools.evidence_verification import (
-        EvidenceVerificationAction,
-        EvidenceVerificationExecutor,
+    from focusproof.openhands_runtime.tools.text_evidence import (
+        TextEvidenceVerificationExecutor,
+    )
+    from focusproof.openhands_runtime.tools.verification import (
+        EvidenceReferenceAction,
     )
 
     evidence = Evidence(
@@ -27,21 +29,17 @@ def test_verification_executor_loads_authoritative_evidence_by_id() -> None:
         textContent="Append-only events replay into a current immutable learning view.",
     )
     repository = RecordingEvidenceRepository(evidence)
-    executor = EvidenceVerificationExecutor(repository, "sess_1")
+    executor = TextEvidenceVerificationExecutor(repository, "sess_1")
 
-    observation = executor(EvidenceVerificationAction(evidence_id="ev_1"))
+    observation = executor(EvidenceReferenceAction(evidence_id="ev_1"))
 
     assert observation.evidence_id == "ev_1"
-    assert observation.evidence_type == "text"
-    assert observation.source_refs == ["ev_1"]
+    assert observation.capability == "text"
+    assert observation.source_refs == ["ev_1", "sha256:test"]
     assert repository.requested == [("sess_1", "ev_1")]
 
 
 def test_focusproof_tool_models_are_native_openhands_types() -> None:
-    from focusproof.openhands_runtime.tools.evidence_verification import (
-        EvidenceVerificationAction,
-        EvidenceVerificationObservation,
-    )
     from focusproof.openhands_runtime.tools.learner_input import (
         LearnerInputAction,
         LearnerInputObservation,
@@ -50,9 +48,13 @@ def test_focusproof_tool_models_are_native_openhands_types() -> None:
         ReviewDraftAction,
         ReviewDraftObservation,
     )
+    from focusproof.openhands_runtime.tools.verification import (
+        EvidenceReferenceAction,
+        VerificationObservation,
+    )
 
-    assert issubclass(EvidenceVerificationAction, OpenHandsAction)
-    assert issubclass(EvidenceVerificationObservation, OpenHandsObservation)
+    assert issubclass(EvidenceReferenceAction, OpenHandsAction)
+    assert issubclass(VerificationObservation, OpenHandsObservation)
     assert issubclass(LearnerInputAction, OpenHandsAction)
     assert issubclass(LearnerInputObservation, OpenHandsObservation)
     assert issubclass(ReviewDraftAction, OpenHandsAction)
@@ -60,14 +62,14 @@ def test_focusproof_tool_models_are_native_openhands_types() -> None:
 
 
 def test_focusproof_tools_are_declared_read_only() -> None:
-    from focusproof.openhands_runtime.tools.evidence_verification import (
-        FocusProofEvidenceVerificationTool,
-    )
     from focusproof.openhands_runtime.tools.learner_input import FocusProofLearnerInputTool
     from focusproof.openhands_runtime.tools.review_draft import FocusProofReviewDraftTool
+    from focusproof.openhands_runtime.tools.text_evidence import (
+        FocusProofTextEvidenceVerificationTool,
+    )
 
     for tool_class in (
-        FocusProofEvidenceVerificationTool,
+        FocusProofTextEvidenceVerificationTool,
         FocusProofLearnerInputTool,
         FocusProofReviewDraftTool,
     ):
@@ -76,3 +78,76 @@ def test_focusproof_tools_are_declared_read_only() -> None:
         assert annotations.destructiveHint is False
         assert annotations.idempotentHint is True
         assert annotations.openWorldHint is False
+
+
+def test_compatibility_executor_redacts_url_before_native_observation() -> None:
+    from focusproof.openhands_runtime.tools.evidence_verification import (
+        EvidenceVerificationAction,
+        EvidenceVerificationExecutor,
+    )
+
+    source_url = (
+        "https://credential-user:credential-password@example.com:8443/"
+        "private/legacy-secret?token=query-secret#fragment-secret"
+    )
+    repository = RecordingEvidenceRepository(
+        Evidence(
+            evidenceId="ev_legacy_url",
+            evidenceType="url",
+            contentHash="sha256:legacy-url",
+            sourceUrl=source_url,
+        )
+    )
+
+    observation = EvidenceVerificationExecutor(repository, "sess_1")(
+        EvidenceVerificationAction(evidence_id="ev_legacy_url")
+    )
+
+    serialized = observation.model_dump_json()
+    assert observation.source_refs[0] == "ev_legacy_url"
+    assert observation.source_refs[1].startswith("url-sha256:")
+    for secret in (
+        "credential-user",
+        "credential-password",
+        "private",
+        "legacy-secret",
+        "query-secret",
+        "fragment-secret",
+    ):
+        assert secret not in serialized
+    assert repository.evidence.sourceUrl == source_url
+
+
+def test_compatibility_executor_treats_transaction_type_as_domain_neutral() -> None:
+    from focusproof.openhands_runtime.tools.evidence_verification import (
+        EvidenceVerificationAction,
+        EvidenceVerificationExecutor,
+    )
+
+    repository = RecordingEvidenceRepository(
+        Evidence(
+            evidenceId="ev_historical_type",
+            evidenceType="transaction",
+            contentHash="sha256:historical",
+            textContent="0xdeadbeef",
+        )
+    )
+
+    observation = EvidenceVerificationExecutor(repository, "sess_1")(
+        EvidenceVerificationAction(evidence_id="ev_historical_type")
+    )
+
+    serialized = observation.model_dump_json().lower()
+    assert observation.verified is True
+    assert observation.findings == ["Repository evidence contains 1 text words."]
+    assert "text evidence is short" in observation.weak_signals[0].lower()
+    for web3_term in (
+        "transaction-shaped",
+        "valid hash",
+        "tx hash",
+        "nonce",
+        "gas",
+        "wallet",
+        "contract",
+    ):
+        assert web3_term not in serialized

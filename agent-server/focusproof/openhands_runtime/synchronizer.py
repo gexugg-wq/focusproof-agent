@@ -7,6 +7,10 @@ from typing import Any, Literal, cast
 from openhands.sdk.event import MessageEvent
 from openhands.sdk.llm import TextContent
 
+from focusproof.openhands_runtime.evidence_messages import (
+    TEXT_EVIDENCE_CONTEXT_VERSION,
+    runtime_evidence_payload,
+)
 from focusproof.openhands_runtime.handle import ConversationHandle
 from focusproof.persistence.repositories import (
     StoredAnswer,
@@ -15,7 +19,7 @@ from focusproof.persistence.repositories import (
 )
 from focusproof.persistence.unit_of_work import UnitOfWorkFactoryLike
 
-MessageKind = Literal["goal", "evidence", "answer"]
+MessageKind = Literal["goal", "evidence", "evidence_context", "answer"]
 
 
 @dataclass(frozen=True)
@@ -48,15 +52,22 @@ class ConversationSynchronizer:
         if session.owner_user_id != verified_user_id:
             raise PermissionError("Verified identity does not own this session")
 
-        existing_keys = {
-            key
+        existing_envelopes = {
+            key: envelope
             for event in handle.conversation.state.events
             if isinstance(event, MessageEvent)
-            if (key := message_key_from_event(event)) is not None
+            if (envelope := message_envelope_from_event(event)) is not None
+            if isinstance(key := envelope.get("message_key"), str)
         }
+        existing_keys = set(existing_envelopes)
         sent_count = 0
         confirmed_count = 0
-        for pending in _pending_messages(session, evidence, answers):
+        for pending in _pending_messages(
+            session,
+            evidence,
+            answers,
+            existing_envelopes,
+        ):
             if pending.key not in existing_keys:
                 serialized = serialize_message_envelope(
                     schema_version=1,
@@ -89,6 +100,8 @@ class ConversationSynchronizer:
     def _mark_confirmed(self, session_id: str, pending: _PendingMessage) -> None:
         from datetime import UTC, datetime
 
+        if pending.kind == "evidence_context":
+            return
         synced_at = datetime.now(UTC)
         with self._uow_factory() as uow:
             if pending.kind == "goal":
@@ -130,6 +143,14 @@ def serialize_message_envelope(
 
 
 def message_key_from_event(event: MessageEvent) -> str | None:
+    envelope = message_envelope_from_event(event)
+    if envelope is None:
+        return None
+    message_key = envelope.get("message_key")
+    return message_key if isinstance(message_key, str) else None
+
+
+def message_envelope_from_event(event: MessageEvent) -> dict[str, Any] | None:
     if event.source != "user":
         return None
     text = "".join(
@@ -143,15 +164,16 @@ def message_key_from_event(event: MessageEvent) -> str | None:
         return None
     if not isinstance(envelope, dict) or envelope.get("schema_version") != 1:
         return None
-    message_key = envelope.get("message_key")
-    return message_key if isinstance(message_key, str) else None
+    return envelope
 
 
 def _pending_messages(
     session: StoredSession,
     evidence: list[StoredEvidence],
     answers: list[StoredAnswer],
+    existing_envelopes: dict[str, dict[str, Any]] | None = None,
 ) -> list[_PendingMessage]:
+    existing_envelopes = existing_envelopes or {}
     pending = [
         _PendingMessage(
             key=f"goal:{session.session_id}",
@@ -169,18 +191,47 @@ def _pending_messages(
         _PendingMessage(
             key=f"evidence:{record.evidence_id}",
             kind="evidence",
-            payload={
-                "evidenceId": record.evidence_id,
-                "evidenceType": record.evidence_type,
-                "contentHash": record.content_hash,
-                "textContent": record.text_content,
-                "sourceUrl": record.source_url,
-                "metadata": record.metadata,
-            },
+            payload=runtime_evidence_payload(
+                {
+                    "evidenceId": record.evidence_id,
+                    "evidenceType": record.evidence_type,
+                    "contentHash": record.content_hash,
+                    "textContent": record.text_content,
+                    "sourceUrl": record.source_url,
+                }
+            ),
             evidence_id=record.evidence_id,
         )
         for record in evidence
     )
+    for record in evidence:
+        if record.evidence_type != "text":
+            continue
+        evidence_key = f"evidence:{record.evidence_id}"
+        existing = existing_envelopes.get(evidence_key)
+        if existing is None or _has_text_context(existing):
+            continue
+        context_key = (
+            f"evidence-context:{record.evidence_id}:"
+            f"v{TEXT_EVIDENCE_CONTEXT_VERSION}"
+        )
+        if context_key in existing_envelopes:
+            continue
+        context_payload = runtime_evidence_payload(
+            {
+                "evidenceId": record.evidence_id,
+                "evidenceType": record.evidence_type,
+                "contentHash": record.content_hash,
+                "textContent": record.text_content,
+            }
+        )
+        pending.append(
+            _PendingMessage(
+                key=context_key,
+                kind="evidence_context",
+                payload=context_payload,
+            )
+        )
     pending.extend(
         _PendingMessage(
             key=(
@@ -198,3 +249,12 @@ def _pending_messages(
         for record in answers
     )
     return pending
+
+
+def _has_text_context(envelope: dict[str, Any]) -> bool:
+    payload = envelope.get("payload")
+    return (
+        isinstance(payload, dict)
+        and isinstance(payload.get("textContent"), str)
+        and payload.get("contentTrust") == "untrusted"
+    )

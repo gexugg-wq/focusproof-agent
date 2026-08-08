@@ -1,6 +1,6 @@
 # FocusProof AI Task Board
 
-Version: v0.5
+Version: v0.7
 Runtime direction: Python Agent Server with OpenHands Conversation as core runtime
 Project root: `/home/holy/web3/focusproof-agent`
 
@@ -22,12 +22,30 @@ Every AI must report:
 - known limitations,
 - whether public protocol files changed,
 - whether it touched files outside its allowed area.
+- the pinned OpenHands SDK version and dependency source when runtime behavior is involved,
+- OpenHands public APIs inspected and directly reused,
+- every FocusProof-owned adapter or SDK gap, with justification and removal plan.
 
 Only AI0 can approve public protocol changes.
 
+### OpenHands Direct-Reuse Gate
+
+All implementation AIs must treat `docs/architecture/OPENHANDS_REUSE_STRATEGY.md` section 2.1 as a mandatory acceptance gate.
+
+- Search the pinned SDK public API, source and tests before designing runtime infrastructure.
+- Directly use suitable OpenHands public capabilities.
+- Keep FocusProof code at the product boundary: learning semantics, policy, authorization, persistence projections and API translation.
+- Do not create an OpenHands-inspired mirror, compatibility runtime or second protocol when the SDK already provides the behavior.
+- Do not copy OpenHands source into this repository, patch SDK internals or mutate private SDK state.
+- Record a formal SDK gap before implementing missing runtime behavior locally.
+
+AI0 must reject duplicated runtime semantics even when tests pass. Each phase acceptance report must contain two explicit sections: `OpenHands APIs Reused` and `FocusProof-Owned SDK Gaps`. An empty gap section is valid; an undocumented gap is not.
+
 ## 2. Current Architecture Decision
 
-FocusProof is a general learning verification product. Web3 is only the first domain plugin.
+FocusProof is a general knowledge learning verification product. Web3 is a
+deferred optional-plugin concept, not the first required plugin and not part of
+the default runtime.
 
 Current decision:
 
@@ -35,19 +53,27 @@ Current decision:
 - Agent runtime uses Python.
 - Agent API uses FastAPI.
 - Tool executors use Python.
-- Contracts use Solidity.
+- Domain-specific plugins require separate approval and explicit enablement.
 - OpenHands SDK should be used directly, with OpenHands Conversation/ConversationState/EventLog acting as the official agent runtime path.
 
+AI4 engineering completion means the accepted deterministic technical scope is
+implemented and green. It is distinct from external release authorization.
+Real-provider, managed OIDC, retained SDK-equivalence artifacts, external
+staging, and public deployment remain blocked until their explicit gates are
+authorized and evidenced.
+
 The project should not be split into too many worker AIs during the demo stage.
-Five logical worker roles are enough; AI4 is split into sequential AI4A and AI4B
-phases so backend framework work cannot be confused with contract deployment work:
+Five logical worker roles are enough; AI4 is split into sequential AI4A, AI4B
+and AI4C phases so verification-framework, release-baseline and production-readiness
+work cannot be confused:
 
 - AI0: controller and architect.
 - AI1: project scaffold and OpenHands reuse investigation.
 - AI2: Python Agent Server, OpenHands SDK integration, Conversation-backed runtime, learning agent logic and tools.
-- AI3: frontend, wallet UX and user flows after AI2 promotes Conversation into the official review path.
+- AI3: frontend and general learning user flows after AI2 promotes Conversation into the official review path.
 - AI4A: general verification tool framework on the existing OpenHands runtime.
-- AI4B: contract, integration tests, security and deployment.
+- AI4B: general integration tests, security and release-readiness baseline.
+- AI4C: production identity, real-LLM operations and reproducible staging deployment.
 
 ## 3. Directory Ownership
 
@@ -58,7 +84,8 @@ phases so backend framework work cannot be confused with contract deployment wor
 | AI2 | Python Agent Server + OpenHands Conversation Runtime | `agent-server/`, `fixtures/`, dependency config, `docs/research/` runtime reports | Frontend UI ownership, Solidity contract ownership |
 | AI3 | Frontend + Wallet UX | `frontend/` | LLM secrets, database direct writes, server-side scoring |
 | AI4A | General Verification Framework | `agent-server/focusproof/openhands_runtime/`, narrowly affected `agent-server/focusproof/domain/` modules, `agent-server/tests/`, `fixtures/`, `docs/research/`, necessary Python dependency declarations | `frontend/`, `contracts/`, `.env`, `var/`, OpenHands SDK source, public protocol or architecture changes without AI0 approval |
-| AI4B | Contract + QA + Deployment | `contracts/`, `scripts/`, `docs/security/`, `docs/deployment/`, cross-system tests | Product scoring rewrites without AI0 approval |
+| AI4B | General QA + Security + Release Readiness | cross-system tests, narrowly affected backend/frontend fixes, `docs/security/`, `docs/deployment/`, `docs/research/` | New product features, multimodal work, public deployment |
+| AI4C | Production Readiness | identity/runtime/deployment modules approved by AI4C.0, their tests, deployment config and reports | Multimodal work, Web3 specialization, OpenHands mirror implementations, scoring rewrites without AI0 approval |
 
 Two AIs must not edit the same file at the same time.
 
@@ -83,7 +110,9 @@ Acceptance:
 
 ## 5. AI1: Scaffold + OpenHands Feasibility
 
-Goal:
+Status: done.
+
+Historical AI2 goal (superseded by the accepted status above):
 
 Create a runnable monorepo skeleton in `/home/holy/web3/focusproof-agent` and investigate how OpenHands SDK can be directly reused.
 
@@ -127,9 +156,13 @@ Forbidden:
 
 ## 6. AI2: Python Agent Server + OpenHands Conversation Runtime
 
+Status: done for the accepted Conversation runtime, persistence, API and review
+baseline. The original Web3 RPC verifier backlog was not part of final AI2
+acceptance and remains deferred; Web3 is not assumed by the general runtime.
+
 Goal:
 
-Build the backend brain of FocusProof: FastAPI API, direct OpenHands SDK integration, Conversation-backed learning review runtime, database/product projections, evidence tools and first Web3 plugin.
+Build the backend brain of FocusProof: FastAPI API, direct OpenHands SDK integration, Conversation-backed learning review runtime, database/product projections, and general evidence tools. The former first-Web3-plugin wording is superseded and was not accepted.
 
 Must first implement OpenHands SDK integration:
 
@@ -176,7 +209,11 @@ Must implement learning review:
 - final review summary,
 - next-step suggestion.
 
-Must implement tools:
+Accepted general tools and deferred domain backlog:
+
+AI4A subsequently delivered real text and URL verification. Transaction receipt,
+chain identity, wallet relation, contract-address and block-explorer verification
+remain future Web3 plugin work; their presence below does not mark them complete.
 
 - text evidence parser,
 - URL metadata/text reader,
@@ -219,6 +256,8 @@ Required tests:
 - better follow-up answer can improve review confidence.
 
 ## 7. AI3: Frontend + Wallet UX
+
+Status: done for the frontend MVP and general-learning acceptance correction.
 
 Goal:
 
@@ -305,95 +344,89 @@ Deliverable:
 
 AI4A stops after local commits and AI0 review. It must not push or begin AI4B.
 
-## 9. AI4B: Contract + QA + Deployment
+Status: completed and accepted at AI4A.3.1. Accepted commits end at `4387333`.
+
+## 9. AI4B: General QA + Security + Release Readiness
+
+Status: completed and accepted at `bf5c9a8`.
+
+Delivered:
+
+- cross-system backend, frontend and real-BFF browser acceptance,
+- security boundaries for identity ownership, XSS, SSRF and bounded input,
+- restart, recovery, locking and shutdown reliability,
+- four-viewport production visual acceptance,
+- local, staging and operations runbooks,
+- final acceptance matrix and release-readiness report.
+
+AI4B did not deploy publicly, run a Web3 transaction, record an on-chain proof,
+add multimodal input or approve a production identity provider. Those remain
+explicitly outside the accepted AI4B baseline.
+
+## 10. AI4C: Production Readiness
+
+Status: AI4C.0-4 engineering implementation and deterministic local acceptance
+are complete and AI0 has issued final acceptance. This closes the AI4C
+engineering phase; it does not authorize public production release.
+
+The highest honest release classification remains staging-ready with
+blockers. External release gates remain SDK-EQUIVALENCE blocked,
+CLEAN-STACK blocked, external OIDC/staging blocked, and real-provider
+execution not-authorized.
 
 Goal:
 
-Implement lightweight proof recording, then verify the whole system with integration, security and deployment checks.
+Turn the accepted single-user/local MVP into a reproducible staging-ready
+service without changing the domain-general learning-verification boundary.
 
-Contract fields:
+AI4C is split into sequential gates:
 
-- `sessionId`,
-- `learner`,
-- `domain`,
-- `score`,
-- `effectiveMinutes`,
-- `summaryHash`,
-- `proofVersion`,
-- `createdAt`.
+- AI4C.0: architecture/specification, OpenHands reuse audit, threat model,
+  provider decisions, migration boundaries and acceptance matrix.
+- AI4C.1: real-LLM provider runtime, schema enforcement, bounded retries,
+  deadlines, rate/cost controls, redaction and deterministic test separation.
+- AI4C.2: verified identity, authorization, resource ownership, revocation and
+  audit attribution, while retaining an explicitly isolated local-dev identity.
+- AI4C.3: reproducible SDK/dependency packaging, PostgreSQL/staging validation,
+  secrets/configuration, observability, backup/restore and deployment smoke.
+- AI4C.4: end-to-end production-readiness acceptance and AI0 closure report.
 
-Contract must support:
+Constraints:
 
-- authorized proof recorder,
-- duplicate session rejection,
-- score bounds,
-- `ProofRecorded` event,
-- read proof by session.
+- Reuse suitable public OpenHands SDK APIs directly; do not create equivalent
+  FocusProof-owned Agent, Conversation, EventLog, Action, Observation or Tool
+  runtime semantics.
+- Every local runtime addition requires a documented SDK gap and removal plan.
+- AI4C must not add OCR, ASR, image, audio or PDF input; those belong to AI5.
+- AI4C must not make Web3, wallets, Monad or contracts part of the core path.
+- No public deployment, merge or push is authorized by the design gate.
+- Production code starts only after AI0 accepts the AI4C.0 written design and
+  implementation plan.
 
-Contract must not store:
-
-- full notes,
-- images,
-- audio,
-- code,
-- full conversations,
-- raw private evidence.
-
-Integration tests:
-
-- only generic summary submitted,
-- notes plus code,
-- notes plus error log,
-- valid transaction but weak explanation,
-- invalid transaction,
-- wrong chain transaction,
-- wallet mismatch,
-- evidence-goal mismatch,
-- contradictory evidence,
-- score improves after good follow-up answer,
-- proof recording blocked before review completion.
-
-Security checks:
-
-- prompt injection,
-- XSS,
-- SSRF,
-- oversized files,
-- unauthorized session read,
-- forged wallet address,
-- replay request,
-- unreviewed proof recording,
-- LLM output forging tool observations.
-
-Deployment docs:
-
-- local WSL development,
-- frontend dev server,
-- agent-server dev server,
-- environment variables,
-- database setup,
-- Monad Testnet deployment,
-- production deployment notes.
-
-## 10. Development Phases
+## 11. Development Phases
 
 | Phase | Content | Owner | Status |
 |---|---|---|---|
-| 0 | v0.5 architecture and task-control docs | AI0 | in progress |
+| 0 | architecture and task-control baseline | AI0 | done |
 | 1 | scaffold and OpenHands SDK feasibility | AI1 | done |
 | 2 | direct OpenHands SDK import and adapter spike | AI2 | done |
 | 3 | OpenHands Conversation core integration and persistence hardening | AI2 | done |
 | 4 | frontend MVP and general-learning acceptance correction | AI3 | done |
-| 5 | general verification tool framework: registry, text and URL | AI4A | next |
-| 6 | contract, integration, security and deployment | AI4B | pending |
-| 7 | multimodal expansion | AI2 + AI3 + AI4B | later |
+| 5 | general verification tool framework: registry, text and URL | AI4A | done |
+| 6 | general integration, security and release-readiness baseline | AI4B | done |
+| 7 | production identity, real-LLM operations and reproducible staging | AI4C | done / AI0 accepted (engineering phase complete; not public production release) |
+| 8 | multimodal evidence expansion | AI2 + AI3 + AI4 | later |
+| P1 | optional Web3 specialization and on-chain proof | domain plugin owners | backlog |
 
-## 11. First Execution Task
+## 12. Next Execution Task
 
-The next executable task is AI4A.
+AI4C.0-4 engineering implementation and deterministic local acceptance are
+complete, and AI0 has issued final acceptance. This is engineering-phase
+closure only: public production release remains unauthorized while
+SDK-EQUIVALENCE, CLEAN-STACK, and external OIDC/staging are blocked and
+real-provider execution is not-authorized. The maximum current classification
+is staging-ready with blockers.
 
-AI4A must extend the official OpenHands Conversation-backed review path rather
-than build a parallel runtime. It follows the approved design and implementation
-plan, works on a dedicated `ai4a-general-verification-framework` branch, uses
-TDD, commits locally in reviewable increments, writes the required research
-report, and stops for AI0 acceptance without pushing.
+The next program phase is AI5 multimodal evidence expansion. AI5 requires an
+independent design and explicit approval before implementation; no AI5 work is
+part of this task.
