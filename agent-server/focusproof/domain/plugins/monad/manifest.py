@@ -2,15 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-
 from focusproof.domain.plugins.base import ToolDefinitionClass
 from focusproof.domain.plugins.monad.configuration import MonadPluginSettings
+from focusproof.domain.plugins.monad.tool import MonadVerificationTool
 from focusproof.openhands_runtime.capabilities import VerificationCapability
 
 
 class MonadEvidencePluginProvider:
-    """Optional provider populated with its executable tool in Task 5."""
-
     plugin_id = "monad"
 
     def __init__(self, settings: MonadPluginSettings) -> None:
@@ -19,7 +17,20 @@ class MonadEvidencePluginProvider:
         self.settings = settings
 
     def tool_definitions(self) -> Mapping[str, ToolDefinitionClass]:
-        return {}
+        return {"MonadVerificationTool": MonadVerificationTool}
 
     def capability_definitions(self) -> Sequence[VerificationCapability]:
-        return ()
+        return (
+            VerificationCapability(
+                registry_name="monad_learning_transaction",
+                tool_class_name="MonadVerificationTool",
+                supported_evidence_types=frozenset({"monad_transaction"}),
+                supported_domains=frozenset({"*"}),
+                priority=30,
+                read_only=True,
+                requires_network=True,
+                timeout_seconds=8.0,
+                enabled=True,
+                version="1",
+            ),
+        )
