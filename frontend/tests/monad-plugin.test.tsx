@@ -79,13 +79,7 @@ beforeEach(() => {
 
 describe("Monad plugin workspace", () => {
   it("keeps the Monad panel hidden when no capability is exposed", async () => {
-    workspaceApi.getSession.mockResolvedValue({
-      ...baseSession,
-      state: {
-        ...baseSession.state,
-        goal: { ...baseSession.state.goal, domain: "general" }
-      }
-    });
+    workspaceApi.getSession.mockResolvedValue(baseSession);
     render(wrap(<SessionWorkspace sessionId="sess_monad" />));
     await screen.findByRole("heading", { name: /monad increment demo/i });
     expect(screen.queryByText(/MonadLearningCounter/i)).not.toBeInTheDocument();
