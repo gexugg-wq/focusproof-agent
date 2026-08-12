@@ -211,7 +211,7 @@ def _scenario(
         raise BusinessFailure("Monad capability count was not zero")
     return {
         "name": scenario["name"], "status": "PASS", "sessionId": session_id,
-        "conversationId": conversation_id, "question": questions[0],
+        "conversationId": conversation_id, "question": questions[0] if questions else None,
         "questions": questions, "score": result["score"], "reason": reason,
         "confidence": result["confidence"], "findings": result["findings"],
         "summary": result["summary"], "nextStep": result["nextStep"],
@@ -243,7 +243,9 @@ def run_gate(*, base_url: str, scenarios: Sequence[Mapping[str, Any]], request: 
             for item in scenarios
         ]
         if len(scenarios) > 1:
-            questions = [item["question"] for item in report["scenarios"]]
+            questions = [item["question"] for item in report["scenarios"] if item["question"]]
+            if not questions:
+                raise BusinessFailure("no scenario produced a dynamic question")
             if len(set(questions)) != len(questions):
                 raise BusinessFailure("scenario questions were not dynamically different")
         report["overall"] = "PASS"
