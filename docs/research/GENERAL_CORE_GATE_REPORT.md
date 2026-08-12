@@ -1,41 +1,55 @@
 # General Core Gate Report
 
-Status: not passed, externally blocked
+Status: PASS (2026-08-12)
 
 ## Scope
 
 This report records the general knowledge learning-verification closure for FocusProof when Monad is disabled by default and only the official OpenHands Conversation path is used.
 
-## Accepted Deterministic Evidence
+## Formal Real-Provider Gate
+
+The formal General Core Gate passed on 2026-08-12 through the production
+FastAPI review path with the following redacted configuration:
+
+- Provider: `dashscope-openai-compatible`.
+- Model: `openai/qwen3.7-plus`.
+- Monad capability count: `0`.
+- Structured report: `/tmp/focusproof-general-core-gate-qwen37.json`.
+- Secret scan: `true` (no configured secret appeared in the report or captured output).
+
+Both scenarios retained non-empty OpenHands Conversation IDs:
+
+| Scenario | Result | Score | Confidence | Questions | Build Log | Native Actions | Native Observations |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `photosynthesis-text` | PASS | 65 | 0.72 | 0 | 7 | 2 | 2 |
+| `python-closure-url` | PASS | 63 | 0.72 | 1 | 9 | 3 | 3 |
+
+The first scenario completed directly, which is a supported product outcome. The
+second scenario generated a subject-specific learner question before completion,
+so the two-subject gate also demonstrated dynamic follow-up behavior.
+
+## Runtime Evidence and Boundary
+
+The successful path was the formal production chain:
+
+`FastAPI -> OpenHands SDK Conversation -> Agent.step -> native Action/Observation/EventLog`
+
+It did not use `TestLLM`, a fallback runtime, or a debug endpoint. OpenHands is
+reused directly; FocusProof does not implement a second runtime loop, EventLog,
+Action/Observation model, or tool protocol.
+
+## Accepted Supporting Evidence
 
 - Monad plugin source remains in the repository but the default runtime disables it.
 - Wallet, Monad, contract, and transaction-hash entry points render only when the enabled capability is present.
 - Isolated Alembic DB: PASS.
-- Backend deterministic regression: 30 passed.
-- Frontend deterministic regression: 5 passed.
+- Deterministic backend and frontend regressions: PASS.
 - Ruff, Mypy, lint, and diff-check: PASS.
 - Independent review: APPROVED.
 
-## Real-Provider Evidence
+## Next Stage
 
-The official `/sessions/{id}/review` product path was exercised through OpenHands Conversation.
-
-- `qwen-plus` was rejected as an invalid model format for the formal LiteLLM/OpenHands path.
-- `openai/qwen-plus` reached DashScope successfully but failed with free quota exhausted.
-- The OpenAI key was empty.
-
-Because of those blockers, the dual-subject text and URL product acceptance is NOT PASSED / externally blocked.
-
-## Commit Chain
-
-- `2950e14`: restored structured runtime-unavailable responses.
-- `8662a9d`: hid wallet UI when Monad is disabled.
-- `f57c8b5`: corrected the DashScope/OpenAI-compatible model format to `openai/qwen-plus`.
-- `bbd7fc9`: preserved stable API errors while logging a redacted root cause for server-side diagnostics.
-
-## Next Gate
-
-Restore usable real-provider quota or credentials, rerun the two-subject official `/sessions/{id}/review` product path, and only then move to AI5 multimodal work.
+The next stage is AI5 multimodal input foundation. AI5 has not started.
 
 ## Reuse Boundary
 
