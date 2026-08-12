@@ -89,3 +89,9 @@ Provide all `FOCUSPROOF_LLM_*` settings and credentials in the process environme
 does not load `.env`, never falls back to a fake provider, and reports `PASS` (exit 0), `FAIL`
 (exit 1), or `BLOCKED` (exit 2). Reports contain only non-sensitive provider/model identifiers;
 credential values are redacted.
+
+The CLI uses one monotonic total deadline and passes the remaining budget to every request.
+Build Log comes only from the official events endpoint; native Action/Observation counts are
+validated independently from the review response. The helper inherits a pre-bound loopback
+socket and sets LiteLLM's official `LITELLM_MODE=PRODUCTION` switch to prevent implicit `.env`
+loading.

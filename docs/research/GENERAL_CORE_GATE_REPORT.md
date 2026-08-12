@@ -55,3 +55,15 @@ unavailability is `BLOCKED`; acceptance assertion failures are `FAIL`; no fallba
 The server data directory and migrated SQLite database live under an automatically removed
 `/tmp/focusproof-general-core-gate-*` directory. Monad remains source-present but is forced off,
 and its public capability count must remain zero.
+
+The acceptance deadline is shared across capability discovery and both scenarios; every HTTP
+request receives only the remaining monotonic-clock budget. Network/provider timeouts are
+`BLOCKED`, while exhaustion of the bounded learner interaction budget is `FAIL`. Build Log is
+the independent official `/sessions/{id}/events` audit stream. Native OpenHands evidence is
+reported separately from the official review response and requires both Action and Observation
+counts to be positive.
+
+The server inherits a pre-bound IPv4 loopback socket, eliminating the choose-port/release race.
+It runs from the repository root with LiteLLM's official `LITELLM_MODE=PRODUCTION` switch, so a
+caller-controlled working directory `.env` is not loaded. Startup, migration, and socket faults
+are harness `FAIL` results rather than provider `BLOCKED` results.

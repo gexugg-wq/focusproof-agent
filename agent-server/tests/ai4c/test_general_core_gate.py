@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
+import sys
+from io import BytesIO
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
 
 import pytest
 
@@ -19,17 +24,18 @@ def load_gate() -> Any:
     return module
 
 
-def test_fake_http_replays_official_routes_and_passes(tmp_path: Path) -> None:
+def test_fake_http_replays_two_official_scenarios_and_passes(tmp_path: Path) -> None:
     gate = load_gate()
     calls: list[tuple[str, str]] = []
-    responses = iter(
-        [
+    payloads: list[dict[str, Any] | None] = []
+    def scenario_responses(session: str, question: str) -> list[dict[str, Any]]:
+        return [
             {"plugins": []},
-            {"sessionId": "sess-1"},
+            {"sessionId": session},
             {"evidenceId": "ev-1"},
             {
                 "reviewStatus": "awaiting_user",
-                "agentQuestions": [{"questionId": "q-1", "question": "Why chlorophyll?"}],
+                "agentQuestions": [{"questionId": "q-1", "question": question}],
             },
             {"reviewStatus": "awaiting_user"},
             {
@@ -40,22 +46,24 @@ def test_fake_http_replays_official_routes_and_passes(tmp_path: Path) -> None:
                 "findings": ["explained mechanism"],
                 "summary": "independent explanation",
                 "nextStep": "compare limiting factors",
-                "conversationId": "conv-1",
+                "conversationId": f"conv-{session}",
+                "actionEventsCount": 1,
+                "observationEventsCount": 1,
             },
-            {"events": [{"type": "ActionEvent"}, {"type": "ObservationEvent"}]},
-            {"buildLog": [{"type": "review_completed"}]},
+            {"events": [{"type": "review.completed", "sequence": 1}]},
+            {"state": {"conversationId": f"conv-{session}"}, "view": {"pluginCapabilities": []}},
         ]
-    )
+    responses = iter(scenario_responses("sess-1", "Why chlorophyll?") + scenario_responses("sess-2", "What is lexical scope?")[1:])
 
     def fake_request(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
-        del kwargs
         calls.append((method, url.removeprefix("http://127.0.0.1:8765")))
+        payloads.append(kwargs.get("payload"))
         return next(responses)
 
     report_path = tmp_path / "report.json"
     result = gate.run_gate(
         base_url="http://127.0.0.1:8765",
-        scenarios=[gate.SCENARIOS[0]],
+        scenarios=gate.SCENARIOS,
         request=fake_request,
         report_path=report_path,
         environ={"FOCUSPROOF_LLM_API_KEY": "super-secret"},
@@ -63,7 +71,7 @@ def test_fake_http_replays_official_routes_and_passes(tmp_path: Path) -> None:
     )
 
     assert result == 0
-    assert [path for _, path in calls] == [
+    assert [path for _, path in calls][:8] == [
         "/openhands/capabilities",
         "/sessions",
         "/sessions/sess-1/evidence",
@@ -84,8 +92,72 @@ def test_fake_http_replays_official_routes_and_passes(tmp_path: Path) -> None:
         "overall",
     }
     assert report["overall"] == "PASS"
-    assert report["scenarios"][0]["question"] == "Why chlorophyll?"
+    assert [item["question"] for item in report["scenarios"]] == ["Why chlorophyll?", "What is lexical scope?"]
+    assert report["scenarios"][0]["buildLog"][0]["type"] == "review.completed"
+    assert report["scenarios"][1]["conversationId"] == "conv-sess-2"
+    assert calls[9][1] == "/sessions/sess-2/evidence"
+    assert payloads[9] == {
+        "evidenceType": "url",
+        "sourceUrl": "https://docs.python.org/3/tutorial/classes.html#python-scopes-and-namespaces",
+    }
     assert "super-secret" not in report_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("actions,observations", [(0, 1), (1, 0)])
+def test_missing_native_action_or_observation_fails(tmp_path: Path, actions: int, observations: int) -> None:
+    gate = load_gate()
+    responses = iter([
+        {"plugins": []}, {"sessionId": "s"}, {"evidenceId": "e"},
+        {"reviewStatus": "awaiting_user", "agentQuestions": [{"questionId": "q", "question": "dynamic"}]}, {},
+        {"reviewStatus": "completed", "score": 1, "reason": "ok", "confidence": 1, "findings": [], "summary": "s", "nextStep": "n", "conversationId": "c", "actionEventsCount": actions, "observationEventsCount": observations},
+        {"events": [{"type": "review.completed"}]}, {"state": {"conversationId": "c"}, "view": {"pluginCapabilities": []}},
+    ])
+    path = tmp_path / "report.json"
+    assert gate.run_gate(base_url="http://x", scenarios=[gate.SCENARIOS[0]], request=lambda *a, **k: next(responses), report_path=path, environ={}, platform_name="linux") == 1
+    assert json.loads(path.read_text())["overall"] == "FAIL"
+
+
+def test_empty_build_log_fails(tmp_path: Path) -> None:
+    gate = load_gate()
+    responses = iter([
+        {"plugins": []}, {"sessionId": "s"}, {"evidenceId": "e"},
+        {"reviewStatus": "awaiting_user", "agentQuestions": [{"questionId": "q", "question": "dynamic"}]}, {},
+        {"reviewStatus": "completed", "score": 1, "reason": "ok", "confidence": 1, "findings": [], "summary": "s", "nextStep": "n", "conversationId": "c", "actionEventsCount": 1, "observationEventsCount": 1},
+        {"events": []}, {"state": {"conversationId": "c"}, "view": {"pluginCapabilities": []}},
+    ])
+    path = tmp_path / "report.json"
+    assert gate.run_gate(base_url="http://x", scenarios=[gate.SCENARIOS[0]], request=lambda *a, **k: next(responses), report_path=path, environ={}, platform_name="linux") == 1
+
+
+def test_deadline_is_passed_to_http_and_interaction_expiry_fails(tmp_path: Path) -> None:
+    gate = load_gate()
+    ticks = iter([0.0, 1.0, 12.0])
+    timeouts: list[float] = []
+    def request(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        timeouts.append(kwargs["timeout_seconds"])
+        return {"plugins": []} if len(timeouts) == 1 else {"sessionId": "s"}
+    path = tmp_path / "report.json"
+    assert gate.run_gate(base_url="http://x", scenarios=[gate.SCENARIOS[0]], request=request, report_path=path, environ={}, platform_name="linux", clock=lambda: next(ticks), total_timeout_seconds=10) == 1
+    assert timeouts == [9.0]
+
+
+def test_http_500_is_fail_but_structured_503_is_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    gate = load_gate()
+    def error(code: int, body: bytes) -> None:
+        monkeypatch.setattr(gate, "urlopen", lambda *a, **k: (_ for _ in ()).throw(HTTPError("http://x", code, "x", {}, BytesIO(body))))
+    error(500, b'{"code":"internal_error","secret":"do-not-report"}')
+    with pytest.raises(gate.BusinessFailure):
+        gate.request_json("GET", "http://x")
+    error(503, b'{"code":"runtime_unavailable","secret":"do-not-report"}')
+    with pytest.raises(gate.ProviderBlocked, match="runtime_unavailable"):
+        gate.request_json("GET", "http://x")
+
+
+def test_connection_reset_is_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    gate = load_gate()
+    monkeypatch.setattr(gate, "urlopen", lambda *a, **k: (_ for _ in ()).throw(ConnectionResetError()))
+    with pytest.raises(gate.ProviderBlocked, match="network unavailable"):
+        gate.request_json("GET", "http://x")
 
 
 def test_provider_failure_is_blocked_and_redacted(tmp_path: Path) -> None:
@@ -161,6 +233,7 @@ def test_server_environment_is_tmp_isolated_and_monad_disabled(tmp_path: Path) -
     assert child["FOCUSPROOF_DATABASE_URL"].startswith("sqlite:///")
     assert child["DATABASE_URL"] == child["FOCUSPROOF_DATABASE_URL"]
     assert child["FOCUSPROOF_PLUGIN_MONAD_ENABLED"] == "false"
+    assert child["LITELLM_MODE"] == "PRODUCTION"
     assert child["FOCUSPROOF_LLM_API_KEY"] == "secret"
     assert "DOTENV" not in child
 
@@ -177,3 +250,37 @@ def test_blocked_report_can_be_written_before_http_gate(tmp_path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     assert json.loads(text)["overall"] == "BLOCKED"
     assert "super-secret" not in text
+
+
+def test_cli_starts_real_server_migrates_and_blocks_at_official_review(tmp_path: Path) -> None:
+    sentinel = "must-not-load-from-dotenv"
+    (tmp_path / ".env").write_text(
+        f"FOCUSPROOF_LLM_API_KEY={sentinel}\nFOCUSPROOF_LLM_MODEL={sentinel}\n",
+        encoding="utf-8",
+    )
+    report_path = tmp_path / "report.json"
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("FOCUSPROOF_LLM_")
+        and key not in {"OPENAI_API_KEY", "DASHSCOPE_API_KEY", "OPENHANDS_LLM_MODEL"}
+    }
+    env["PYTHONPATH"] = str(SCRIPT.parents[1] / "agent-server")
+
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT), "--report", str(report_path)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=45,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    report_text = report_path.read_text(encoding="utf-8")
+    report = json.loads(report_text)
+    assert report["overall"] == "BLOCKED"
+    assert "HTTP 503" in report["scenarios"][-1]["reason"]
+    assert "failed to start" not in report_text
+    assert sentinel not in report_text + completed.stdout + completed.stderr

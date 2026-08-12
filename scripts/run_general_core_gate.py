@@ -58,12 +58,23 @@ def request_json(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
     request = Request(url, data=body, method=method, headers={"content-type": "application/json"})
     try:
         with urlopen(request, timeout=timeout) as response:
-            value = json.loads(response.read())
+            value = json.loads(response.read(1_048_577))
     except HTTPError as exc:
-        if exc.code in {401, 402, 403, 408, 429, 500, 502, 503, 504}:
-            raise ProviderBlocked(f"provider/API unavailable (HTTP {exc.code})") from None
+        code = "unknown"
+        try:
+            error_value = json.loads(exc.read(16_385))
+            if isinstance(error_value, dict) and isinstance(error_value.get("code"), str):
+                code = error_value["code"][:128]
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            pass
+        blocked_codes = {
+            "runtime_unavailable", "provider_unavailable", "provider_admission_unavailable",
+            "identity_unavailable", "database_unavailable",
+        }
+        if exc.code in {401, 402, 403, 408, 429, 502, 503, 504} or code in blocked_codes:
+            raise ProviderBlocked(f"provider/API unavailable (HTTP {exc.code}, code={code})") from None
         raise BusinessFailure(f"API request failed (HTTP {exc.code})") from None
-    except (TimeoutError, URLError):
+    except (ConnectionError, TimeoutError, URLError):
         raise ProviderBlocked("provider/API network unavailable") from None
     if not isinstance(value, dict):
         raise BusinessFailure("API response was not an object")
@@ -132,6 +143,7 @@ def server_environment(environ: Mapping[str, str], root: Path) -> dict[str, str]
             "FOCUSPROOF_DATABASE_URL": f"sqlite:///{database}",
             "DATABASE_URL": f"sqlite:///{database}",
             "FOCUSPROOF_PLUGIN_MONAD_ENABLED": "false",
+            "LITELLM_MODE": "PRODUCTION",
             "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "agent-server"),
         }
     )
@@ -143,18 +155,27 @@ def _scenario(
     base_url: str,
     scenario: Mapping[str, Any],
     request: RequestFunction,
+    *,
+    deadline: float,
+    clock: Callable[[], float],
 ) -> dict[str, Any]:
-    created = request("POST", _endpoint(base_url, "/sessions"), payload={
+    def call(method: str, path: str, *, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise BusinessFailure("scenario exceeded the total interaction timeout")
+        return request(method, _endpoint(base_url, path), payload=payload, timeout_seconds=remaining)
+
+    created = call("POST", "/sessions", payload={
         "domain": "general", "title": str(scenario["name"]), "goal": str(scenario["goal"]),
         "expectedOutput": "Independent grounded explanation", "plannedMinutes": 10,
     })
     session_id = str(created["sessionId"])
     evidence_payload = {k: v for k, v in scenario.items() if k in {"evidenceType", "textContent", "sourceUrl"}}
-    request("POST", _endpoint(base_url, f"/sessions/{session_id}/evidence"), payload=evidence_payload)
+    call("POST", f"/sessions/{session_id}/evidence", payload=evidence_payload)
     questions: list[str] = []
     completed: dict[str, Any] = {}
     for _ in range(4):
-        review = request("POST", _endpoint(base_url, f"/sessions/{session_id}/review"))
+        review = call("POST", f"/sessions/{session_id}/review")
         status = review.get("reviewStatus")
         if status == "completed":
             completed = review
@@ -166,21 +187,24 @@ def _scenario(
             raise BusinessFailure("awaiting_user omitted a question")
         question = items[0]
         questions.append(str(question.get("question", "")))
-        request("POST", _endpoint(base_url, f"/sessions/{session_id}/answer"), payload={
+        call("POST", f"/sessions/{session_id}/answer", payload={
             "questionId": str(question["questionId"]), "answer": str(scenario["answer"]),
         })
     if not completed:
         raise BusinessFailure("review exceeded the interaction limit")
-    events = request("GET", _endpoint(base_url, f"/sessions/{session_id}/events"))
-    session = request("GET", _endpoint(base_url, f"/sessions/{session_id}"))
+    events = call("GET", f"/sessions/{session_id}/events")
+    session = call("GET", f"/sessions/{session_id}")
     nested_result = completed.get("reviewResult")
     result: dict[str, Any] = nested_result if isinstance(nested_result, dict) else completed
-    native_events = events.get("events")
-    build_log = session.get("buildLog") or native_events
+    build_log = events.get("events")
+    action_count = completed.get("actionEventsCount")
+    observation_count = completed.get("observationEventsCount")
     conversation_id = completed.get("conversationId") or session.get("state", {}).get("conversationId")
     reason = result.get("reason") or result.get("status")
     required = ("score", "confidence", "findings", "summary", "nextStep")
-    if any(key not in result for key in required) or not reason or not conversation_id or not native_events or not build_log:
+    if (any(key not in result for key in required) or not reason or not conversation_id
+            or not build_log or not isinstance(action_count, int) or action_count < 1
+            or not isinstance(observation_count, int) or observation_count < 1):
         raise BusinessFailure("completed review omitted required acceptance evidence")
     capabilities = session.get("view", {}).get("pluginCapabilities", [])
     if any(str(item.get("pluginId", "")).lower() == "monad" for item in capabilities if isinstance(item, dict)):
@@ -191,23 +215,33 @@ def _scenario(
         "questions": questions, "score": result["score"], "reason": reason,
         "confidence": result["confidence"], "findings": result["findings"],
         "summary": result["summary"], "nextStep": result["nextStep"],
-        "buildLog": build_log, "nativeEvents": native_events,
+        "buildLog": build_log,
+        "nativeEvents": {"actionCount": action_count, "observationCount": observation_count},
     }
 
 
 def run_gate(*, base_url: str, scenarios: Sequence[Mapping[str, Any]], request: RequestFunction,
-             report_path: Path, environ: Mapping[str, str], platform_name: str) -> int:
+             report_path: Path, environ: Mapping[str, str], platform_name: str,
+             clock: Callable[[], float] = time.monotonic,
+             total_timeout_seconds: float = 180.0) -> int:
     if platform_name != "linux":
         raise GateConfigurationError("General Core Gate requires Linux/Python 3.12")
     if sys.version_info[:2] != (3, 12):
         raise GateConfigurationError("General Core Gate requires Linux/Python 3.12")
     report = _report_base(environ)
+    deadline = clock() + total_timeout_seconds
     try:
-        capabilities = request("GET", _endpoint(base_url, "/openhands/capabilities"))
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise BusinessFailure("gate exceeded the total interaction timeout")
+        capabilities = request("GET", _endpoint(base_url, "/openhands/capabilities"), timeout_seconds=remaining)
         plugins = capabilities.get("plugins", [])
         if any(str(item.get("name", "")).lower() == "monad" for item in plugins if isinstance(item, dict)):
             raise BusinessFailure("Monad capability count was not zero")
-        report["scenarios"] = [_scenario(base_url, item, request) for item in scenarios]
+        report["scenarios"] = [
+            _scenario(base_url, item, request, deadline=deadline, clock=clock)
+            for item in scenarios
+        ]
         if len(scenarios) > 1:
             questions = [item["question"] for item in report["scenarios"]]
             if len(set(questions)) != len(questions):
@@ -243,28 +277,41 @@ def main(argv: Sequence[str] | None = None) -> int:
             child = server_environment(os.environ, root)
             data_dir = Path(child["FOCUSPROOF_DATA_DIR"])
             data_dir.mkdir(parents=True)
-            with socket.socket() as sock:
-                sock.bind(("127.0.0.1", 0))
-                port = int(sock.getsockname()[1])
+            sock = socket.socket()
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("127.0.0.1", 0))
+            sock.listen(2048)
+            sock.set_inheritable(True)
+            port = int(sock.getsockname()[1])
+            diagnostic_file = (root / "server.stderr").open("wb")
             server = subprocess.Popen(
                 [sys.executable, str(Path(__file__).with_name("run_general_core_gate_server.py")),
-                 "--port", str(port), "--database-url", child["FOCUSPROOF_DATABASE_URL"],
+                 "--fd", str(sock.fileno()), "--database-url", child["FOCUSPROOF_DATABASE_URL"],
                  "--data-dir", str(data_dir)], env=child,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                stdout=diagnostic_file, stderr=subprocess.STDOUT,
+                pass_fds=(sock.fileno(),),
+                cwd=Path(__file__).resolve().parents[1],
             )
+            sock.close()
             base_url = f"http://127.0.0.1:{port}"
             try:
                 deadline = time.monotonic() + 30
                 while time.monotonic() < deadline:
                     if server.poll() is not None:
-                        raise ProviderBlocked("official FastAPI server failed to start")
+                        diagnostic_file.flush()
+                        diagnostic = (root / "server.stderr").read_text(errors="replace")
+                        category = "address in use" if "Address already in use" in diagnostic else "startup error"
+                        lines = [line.strip() for line in diagnostic.splitlines() if line.strip()]
+                        candidates = [line for line in lines if "ERROR" in line or "Traceback" in line or "RuntimeError" in line]
+                        tail = (candidates[-1] if candidates else lines[-1] if lines else "no diagnostic")[:160]
+                        raise BusinessFailure(f"official FastAPI server failed to start ({category}: {tail})")
                     try:
                         request_json("GET", _endpoint(base_url, "/health"), timeout_seconds=1)
                         break
                     except ProviderBlocked:
                         time.sleep(0.1)
                 else:
-                    raise ProviderBlocked("official FastAPI server startup timed out")
+                    raise BusinessFailure("official FastAPI server startup timed out")
                 return run_gate(base_url=base_url, scenarios=SCENARIOS, request=request_json,
                                 report_path=args.report, environ=os.environ, platform_name="linux")
             finally:
@@ -274,8 +321,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 except subprocess.TimeoutExpired:
                     server.kill()
                     server.wait(timeout=5)
+                diagnostic_file.close()
     except ProviderBlocked as exc:
         return write_terminal_report(args.report, "BLOCKED", str(exc), os.environ)
+    except BusinessFailure as exc:
+        return write_terminal_report(args.report, "FAIL", str(exc), os.environ)
     except GateConfigurationError as exc:
         print(str(exc), file=sys.stderr)
         return 2
