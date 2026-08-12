@@ -1434,6 +1434,8 @@ def _view(
 
 
 def _runtime_unavailable(session_id: str, mode: RuntimeMode) -> JSONResponse:
+    from focusproof.openhands_runtime.handle import RuntimeReviewResult
+
     result = RuntimeReviewResult(
         sessionId=session_id,
         conversationMode=mode,
