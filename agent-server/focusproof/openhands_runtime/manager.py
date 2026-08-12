@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import re
 from collections.abc import Awaitable
 from pathlib import Path
 from threading import Condition, RLock
-from typing import Any, ContextManager, Protocol, cast
+from typing import Any, ContextManager, Final, Protocol, cast
 from uuid import UUID, uuid4
 
 from openhands.sdk.conversation.types import ConversationCallbackType
 from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
 from openhands.sdk.event.base import Event as OpenHandsEvent
+from openhands.sdk.utils.redact import redact_text_secrets
 
 from focusproof.domain.review import ReviewResult
 from focusproof.config.profiles import RuntimeSettings
@@ -49,6 +52,15 @@ from focusproof.runtime.audit_projection import AuditProjectionStore
 
 
 DEFAULT_REVIEW_TIMEOUT_SECONDS = 60.0
+LOGGER = logging.getLogger(__name__)
+_MAX_RUNTIME_FAILURE_DIAGNOSTIC_CHARS: Final = 500
+_SECRET_FIELD_PATTERN: Final = re.compile(
+    r"(?i)\b(?:authorization|api[_-]?key|x-api-key|base[_-]?url)\b"
+    r"\s*[:=]\s*(?:bearer\s+)?\S+"
+)
+_BEARER_PATTERN: Final = re.compile(r"(?i)\bbearer\s+\S+")
+_URL_PATTERN: Final = re.compile(r"https?://[^\s\"'<>]+")
+
 
 
 class _NoopSessionRunLock:
@@ -309,11 +321,11 @@ class ConversationManager:
                         )
             except ProviderAdmissionUnavailableError:
                 raise
-            except TimeoutError:
+            except TimeoutError as exc:
                 handle.conversation.interrupt()
-                return self._failure_result(handle, "TimeoutError")
+                return self._failure_result(handle, exc)
             except Exception as exc:
-                return self._failure_result(handle, type(exc).__name__)
+                return self._failure_result(handle, exc)
 
             native_events = list(handle.conversation.state.events)
             projector = self._projectors[session_id]
@@ -589,9 +601,28 @@ class ConversationManager:
     @staticmethod
     def _failure_result(
         handle: ConversationHandle,
-        exception_name: str,
+        exception: BaseException | str,
     ) -> RuntimeReviewResult:
         native_events = list(handle.conversation.state.events)
+        exception_name = (
+            type(exception).__name__
+            if isinstance(exception, BaseException)
+            else exception
+        )
+        if isinstance(exception, BaseException):
+            root_exception = _root_exception(exception)
+            LOGGER.warning(
+                "OpenHands conversation run failed",
+                extra={
+                    "session_id": handle.session_id,
+                    "conversation_id": str(handle.conversation_id),
+                    "exception_type": type(exception).__name__,
+                    "root_exception_type": type(root_exception).__name__,
+                    "root_exception_message": _redact_runtime_failure_message(
+                        str(root_exception)
+                    ),
+                },
+            )
         return RuntimeReviewResult(
             sessionId=handle.session_id,
             conversationMode="failed",
@@ -607,6 +638,25 @@ class ConversationManager:
             reviewStatus="failed",
             error=f"{exception_name}: OpenHands conversation run failed",
         )
+
+
+def _root_exception(exc: BaseException) -> BaseException:
+    root = exc
+    seen: set[int] = set()
+    while True:
+        next_exception = root.__cause__ or root.__context__
+        if next_exception is None or id(next_exception) in seen:
+            return root
+        seen.add(id(root))
+        root = next_exception
+
+
+def _redact_runtime_failure_message(message: str) -> str:
+    redacted = redact_text_secrets(message)
+    redacted = _SECRET_FIELD_PATTERN.sub("[redacted-provider-field]", redacted)
+    redacted = _BEARER_PATTERN.sub("[redacted-provider-token]", redacted)
+    redacted = _URL_PATTERN.sub("[redacted-provider-url]", redacted)
+    return redacted[:_MAX_RUNTIME_FAILURE_DIAGNOSTIC_CHARS]
 
 
 def _learning_goal(session: StoredSession) -> LearningGoal:
