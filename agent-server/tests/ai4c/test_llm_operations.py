@@ -33,7 +33,7 @@ def complete_fake_dashscope_environment() -> dict[str, str]:
     return {
         "FOCUSPROOF_PROFILE": "staging",
         "FOCUSPROOF_LLM_PROVIDER": "openai-compatible",
-        "FOCUSPROOF_LLM_MODEL": "qwen-plus",
+        "FOCUSPROOF_LLM_MODEL": "openai/qwen-plus",
         "FOCUSPROOF_LLM_BASE_URL": (
             "https://dashscope.example.test/compatible-mode/v1"
         ),
@@ -167,6 +167,13 @@ def test_short_context_window_override_is_rejected() -> None:
 
     with pytest.raises(ValidationError, match="ALLOW_SHORT_CONTEXT_WINDOWS"):
         load_runtime_settings(values)
+
+
+def test_fake_dashscope_environment_uses_litellm_openai_provider_prefix() -> None:
+    values = complete_fake_dashscope_environment()
+
+    assert values["FOCUSPROOF_LLM_MODEL"] == "openai/qwen-plus"
+    assert fake_real_llm_policy().model == "openai/qwen-plus"
 
 
 def test_build_openhands_llm_uses_sdk_and_every_bound() -> None:
