@@ -382,3 +382,20 @@ services; OpenHands gap adapters remain version-sensitive; deprecation
 warnings remain; and real provider latency/cost/failure behavior is unobserved.
 These prevent any production or public-launch claim and fix the classification
 at `staging-ready with blockers`.
+
+
+## General Core Gate Status Appendix
+
+This appendix records the general-core closure facts without altering the earlier AI4C report text.
+
+- Monad plugin source is kept, but the default runtime disables it.
+- Wallet, Monad, contract, and transaction-hash entry points only show when the enabled capability is present.
+- Commit chain: `2950e14`, `8662a9d`, `f57c8b5`, `bbd7fc9`.
+- `2950e14` restored structured runtime-unavailable responses.
+- `8662a9d` hid wallet UI when Monad is disabled.
+- `f57c8b5` corrected the DashScope/OpenAI-compatible model format to `openai/qwen-plus`.
+- `bbd7fc9` kept API errors stable while logging a redacted root cause for server-side diagnostics.
+- Deterministic local evidence: isolated Alembic DB PASS, backend `30 passed`, frontend `5 passed`, lint/typecheck/Ruff/Mypy/diff-check PASS, independent review APPROVED.
+- Real-provider acceptance remains NOT PASSED / externally blocked: `qwen-plus` was the wrong model format, `openai/qwen-plus` reached DashScope but failed with free quota exhausted, and the OpenAI key was empty.
+- Next gate: restore usable real-provider quota or credentials and rerun the two-subject official `/sessions/{id}/review` product path before any AI5 multimodal work.
+- OpenHands is reused directly; no mirror loop, EventLog clone, or alternate protocol is introduced.

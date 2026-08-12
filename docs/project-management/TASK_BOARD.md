@@ -430,3 +430,29 @@ is staging-ready with blockers.
 The next program phase is AI5 multimodal evidence expansion. AI5 requires an
 independent design and explicit approval before implementation; no AI5 work is
 part of this task.
+
+
+## 13. General Core Gate Closure Addendum
+
+Monad plugin source is retained in the repository but the default runtime keeps it disabled. Wallet, Monad, contract, and transaction-hash entry points only render when the enabled capability is present.
+
+Accepted implementation commit chain:
+
+- `2950e14`: restored structured runtime-unavailable responses.
+- `8662a9d`: hid wallet UI when Monad is disabled.
+- `f57c8b5`: corrected the DashScope/OpenAI-compatible model format to `openai/qwen-plus`.
+- `bbd7fc9`: preserved stable API errors while logging a redacted root cause for server-side diagnostics.
+
+Deterministic local evidence for the closure:
+
+- isolated Alembic DB PASS
+- backend `30 passed`
+- frontend `5 passed`
+- lint / typecheck / Ruff / Mypy / diff-check PASS
+- independent review APPROVED
+
+Real-provider product acceptance remains NOT PASSED / externally blocked. The official OpenHands Conversation path reached DashScope with `openai/qwen-plus`, but free quota exhausted; the OpenAI key was empty. `qwen-plus` was the wrong model format and was corrected, but the dual-subject text and URL product acceptance still must not be marked completed.
+
+Next gate: restore usable real-provider quota or credentials, rerun the two-subject official `/sessions/{id}/review` product path, then proceed to AI5 multimodal work.
+
+OpenHands is reused directly. No mirror loop, second EventLog, or alternate protocol is introduced.
