@@ -365,14 +365,9 @@ explicitly outside the accepted AI4B baseline.
 
 ## 10. AI4C: Production Readiness
 
-Status: AI4C.0-4 engineering implementation and deterministic local acceptance
-are complete and AI0 has issued final acceptance. This closes the AI4C
-engineering phase; it does not authorize public production release.
+Status: completed. AI4C.0-4 engineering implementation, deterministic local acceptance, and the 2026-08-12 formal real-provider General Core Gate are accepted. The gate passed both official text and URL scenarios through FastAPI, OpenHands SDK Conversation, Agent.step, and native Action/Observation/EventLog with Monad disabled. This closes AI4C; it does not authorize public production release.
 
-The highest honest release classification remains staging-ready with
-blockers. External release gates remain SDK-EQUIVALENCE blocked,
-CLEAN-STACK blocked, external OIDC/staging blocked, and real-provider
-execution not-authorized.
+The highest honest release classification remains staging-ready with blockers. External release gates remain SDK-EQUIVALENCE blocked, CLEAN-STACK blocked, and external OIDC/staging blocked. Real-provider General Core Gate execution is complete and is no longer an outstanding blocker.
 
 Goal:
 
@@ -403,11 +398,17 @@ Constraints:
 - Production code starts only after AI0 accepts the AI4C.0 written design and
   implementation plan.
 
-## 11. Development Phases
+## 12. Development Phases
 
 | Phase | Content | Owner | Status |
 |---|---|---|---|
 | 0 | architecture and task-control baseline | AI0 | done |
+## 11. AI5: Multimodal Input Foundation
+
+Status: not started. This is the next stage after the completed AI4C General Core Gate; this status must not be interpreted as implementation having begun.
+
+AI5 will define the multimodal input foundation for image, audio and PDF evidence while continuing to reuse OpenHands directly. It must not create or imitate a second Agent runtime, Conversation loop, EventLog, Action/Observation model, or tool protocol. Scope, ownership and acceptance gates require AI0 approval before implementation begins.
+
 | 1 | scaffold and OpenHands SDK feasibility | AI1 | done |
 | 2 | direct OpenHands SDK import and adapter spike | AI2 | done |
 | 3 | OpenHands Conversation core integration and persistence hardening | AI2 | done |
@@ -418,7 +419,7 @@ Constraints:
 | 8 | multimodal evidence expansion | AI2 + AI3 + AI4 | later |
 | P1 | optional Web3 specialization and on-chain proof | domain plugin owners | backlog |
 
-## 12. Next Execution Task
+## 13. Next Execution Task
 
 AI4C.0-4 engineering implementation and deterministic local acceptance are
 complete, and AI0 has issued final acceptance. This is engineering-phase
@@ -432,7 +433,7 @@ independent design and explicit approval before implementation; no AI5 work is
 part of this task.
 
 
-## 13. General Core Gate Closure Addendum
+## 14. General Core Gate Closure Addendum
 
 Monad plugin source is retained in the repository but the default runtime keeps it disabled. Wallet, Monad, contract, and transaction-hash entry points only render when the enabled capability is present.
 
