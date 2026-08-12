@@ -31,6 +31,10 @@ SCENARIOS = (
         "goal": "Explain how Python closures retain lexical state.",
         "evidenceType": "url",
         "sourceUrl": "https://docs.python.org/3/tutorial/classes.html#python-scopes-and-namespaces",
+        "textContent": (
+            "The Python documentation explains that a closure keeps access to names "
+            "bound in its enclosing lexical scope after the outer function returns."
+        ),
         "answer": "A closure retains references to bindings from its enclosing lexical scope, so those values remain accessible after the outer call returns.",
     },
 )

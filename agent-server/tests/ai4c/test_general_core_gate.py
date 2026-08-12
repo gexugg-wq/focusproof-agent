@@ -99,6 +99,10 @@ def test_fake_http_replays_two_official_scenarios_and_passes(tmp_path: Path) -> 
     assert payloads[9] == {
         "evidenceType": "url",
         "sourceUrl": "https://docs.python.org/3/tutorial/classes.html#python-scopes-and-namespaces",
+        "textContent": (
+            "The Python documentation explains that a closure keeps access to names "
+            "bound in its enclosing lexical scope after the outer function returns."
+        ),
     }
     assert "super-secret" not in report_path.read_text(encoding="utf-8")
 
