@@ -424,13 +424,14 @@ AI5 will define the multimodal input foundation for image, audio and PDF evidenc
 AI4C.0-4 engineering implementation and deterministic local acceptance are
 complete, and AI0 has issued final acceptance. This is engineering-phase
 closure only: public production release remains unauthorized while
-SDK-EQUIVALENCE, CLEAN-STACK, and external OIDC/staging are blocked and
-real-provider execution is not-authorized. The maximum current classification
-is staging-ready with blockers.
+SDK-EQUIVALENCE, CLEAN-STACK, and external OIDC/staging remain blocked. The
+formal real-provider General Core Gate passed on 2026-08-12; it is no longer an
+outstanding blocker. The maximum current classification is staging-ready with
+public-release blockers.
 
-The next program phase is AI5 multimodal evidence expansion. AI5 requires an
-independent design and explicit approval before implementation; no AI5 work is
-part of this task.
+The next program phase is AI5 multimodal input foundation. AI5 requires an
+independent design and explicit approval before implementation. AI5 has not
+started.
 
 
 ## 14. General Core Gate Closure Addendum
@@ -443,6 +444,10 @@ Accepted implementation commit chain:
 - `8662a9d`: hid wallet UI when Monad is disabled.
 - `f57c8b5`: corrected the DashScope/OpenAI-compatible model format to `openai/qwen-plus`.
 - `bbd7fc9`: preserved stable API errors while logging a redacted root cause for server-side diagnostics.
+- `843531f`: made direct completion report-safe and enforced cross-scenario dynamic-question evidence.
+- `184725a`: supplied valid explanatory text with the URL evidence scenario.
+- `1c5032a`: recorded the formal General Core Gate acceptance report.
+- `0b85b6f`: advanced the task-board roadmap to AI5.
 
 Deterministic local evidence for the closure:
 
@@ -452,8 +457,13 @@ Deterministic local evidence for the closure:
 - lint / typecheck / Ruff / Mypy / diff-check PASS
 - independent review APPROVED
 
-Real-provider product acceptance remains NOT PASSED / externally blocked. The official OpenHands Conversation path reached DashScope with `openai/qwen-plus`, but free quota exhausted; the OpenAI key was empty. `qwen-plus` was the wrong model format and was corrected, but the dual-subject text and URL product acceptance still must not be marked completed.
+Formal real-provider product acceptance passed on 2026-08-12 with
+`openai/qwen3.7-plus` through the official two-scenario text and URL product
+path. The redacted results and native Action/Observation/Build Log evidence are
+recorded in `docs/research/GENERAL_CORE_GATE_REPORT.md`.
 
-Next gate: restore usable real-provider quota or credentials, rerun the two-subject official `/sessions/{id}/review` product path, then proceed to AI5 multimodal work.
+The next stage is AI5 multimodal input foundation. AI5 has not started.
 
-OpenHands is reused directly. No mirror loop, second EventLog, or alternate protocol is introduced.
+OpenHands is reused directly through the official Conversation, `Agent.step`,
+native Action/Observation, and EventLog path. No mirror loop, second EventLog,
+or alternate runtime or tool protocol is introduced.
