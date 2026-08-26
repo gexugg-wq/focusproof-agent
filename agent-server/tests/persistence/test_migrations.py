@@ -671,3 +671,114 @@ def test_database_url_override_fails_closed_without_secret_output(
     assert "secret-user" not in combined
     assert "secret-pass" not in combined
     assert "query-secret" not in combined
+
+
+def test_remove_monad_forward_migration_drops_claim_table_and_preserves_generic_data(
+    alembic_config: Config,
+    database_url: str,
+) -> None:
+    from focusproof.persistence.database import create_database_engine
+
+    command.upgrade(alembic_config, "0006_media_scan_receipts")
+    engine = create_database_engine(database_url)
+    now = datetime.now(UTC)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO learning_sessions (
+                    session_id, owner_user_id, status, adapter_mode, domain,
+                    title, goal, conversation_id, runtime_mode, version,
+                    created_at, updated_at
+                ) VALUES (
+                    :session_id, :owner_user_id, :status, :adapter_mode, :domain,
+                    :title, :goal, :conversation_id, :runtime_mode, :version,
+                    :created_at, :updated_at
+                )
+                """
+            ),
+            {
+                "session_id": "sess_remove_monad",
+                "owner_user_id": "owner",
+                "status": "running",
+                "adapter_mode": "test",
+                "domain": "general",
+                "title": "Generic",
+                "goal": "Preserve data",
+                "conversation_id": "44444444-4444-4444-4444-444444444444",
+                "runtime_mode": "test",
+                "version": 1,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO evidence (
+                    evidence_id, session_id, evidence_type, content_hash,
+                    text_content, metadata_json, created_at
+                ) VALUES (
+                    :evidence_id, :session_id, :evidence_type, :content_hash,
+                    :text_content, :metadata_json, :created_at
+                )
+                """
+            ),
+            {
+                "evidence_id": "ev_remove_monad",
+                "session_id": "sess_remove_monad",
+                "evidence_type": "text",
+                "content_hash": "sha256:remove-monad",
+                "text_content": "Generic evidence remains",
+                "metadata_json": "{}",
+                "created_at": now,
+            },
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO monad_evidence_claims (
+                    claim_id, chain_id, transaction_hash, session_id,
+                    evidence_id, observation_event_id, created_at
+                ) VALUES (
+                    :claim_id, :chain_id, :transaction_hash, :session_id,
+                    :evidence_id, :observation_event_id, :created_at
+                )
+                """
+            ),
+            {
+                "claim_id": "claim_remove_monad",
+                "chain_id": 1234,
+                "transaction_hash": "0x" + "ab" * 32,
+                "session_id": "sess_remove_monad",
+                "evidence_id": "ev_remove_monad",
+                "observation_event_id": "obs_remove_monad",
+                "created_at": now,
+            },
+        )
+    engine.dispose()
+
+    command.upgrade(alembic_config, "head")
+    engine = create_database_engine(database_url)
+    with engine.connect() as connection:
+        tables = set(inspect(connection).get_table_names())
+        assert "monad_evidence_claims" not in tables
+        assert connection.execute(
+            text("SELECT count(*) FROM learning_sessions WHERE session_id = :session_id"),
+            {"session_id": "sess_remove_monad"},
+        ).scalar_one() == 1
+        assert connection.execute(
+            text("SELECT count(*) FROM evidence WHERE evidence_id = :evidence_id"),
+            {"evidence_id": "ev_remove_monad"},
+        ).scalar_one() == 1
+    engine.dispose()
+
+    command.downgrade(alembic_config, "0006_media_scan_receipts")
+    engine = create_database_engine(database_url)
+    assert "monad_evidence_claims" in inspect(engine).get_table_names()
+    engine.dispose()
+
+    command.upgrade(alembic_config, "head")
+    engine = create_database_engine(database_url)
+    assert "monad_evidence_claims" not in inspect(engine).get_table_names()
+    engine.dispose()
