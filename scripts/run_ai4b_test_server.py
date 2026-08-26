@@ -29,6 +29,7 @@ SMOKE_EVIDENCE_TEXT = (
     "sequence, preserving the history needed to reproduce the current view."
 )
 
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -129,6 +130,7 @@ def _scenario_factory(
         return _general_flow_llm_factory
     raise ValueError(f"Unsupported deterministic scenario: {scenario}")
 
+
 def _install_image_unknown_retry_probe(application: FastAPI) -> None:
     first_keys: dict[str, str] = {}
 
@@ -141,9 +143,7 @@ def _install_image_unknown_retry_probe(application: FastAPI) -> None:
         if request.method != "POST" or not request.url.path.endswith("/evidence/image"):
             return await call_next(request)
         payload = await request.body()
-        match = re.search(
-            rb'name="idempotency_key"\r\n\r\n([A-Za-z0-9._:-]{1,255})\r\n', payload
-        )
+        match = re.search(rb'name="idempotency_key"\r\n\r\n([A-Za-z0-9._:-]{1,255})\r\n', payload)
         if match is None:
             return JSONResponse(
                 status_code=422,

@@ -107,9 +107,13 @@ def _imports(source: str, module: str) -> set[str]:
                     dynamic_import_names.add(alias.asname or alias.name)
         elif isinstance(node, ast.Call):
             if _is_exact_dynamic_import_call(node, dynamic_import_names, dynamic_import_modules):
-                argument = node.args[0] if node.args else next(
-                    (keyword.value for keyword in node.keywords if keyword.arg == "name"),
-                    None,
+                argument = (
+                    node.args[0]
+                    if node.args
+                    else next(
+                        (keyword.value for keyword in node.keywords if keyword.arg == "name"),
+                        None,
+                    )
                 )
                 if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
                     found.add(argument.value)
@@ -152,7 +156,11 @@ def _assert_allowed_dependency(dependency: str, chain: tuple[str, ...]) -> None:
 def assert_graph_boundary(start: str, graph: dict[str, set[str]]) -> None:
     def dfs(module: str, chain: tuple[str, ...], seen: set[str]) -> None:
         for dependency in graph.get(module, set()):
-            if dependency.startswith("focusproof.") and dependency in graph and dependency not in seen:
+            if (
+                dependency.startswith("focusproof.")
+                and dependency in graph
+                and dependency not in seen
+            ):
                 dfs(dependency, (*chain, dependency), seen | {dependency})
             _assert_allowed_dependency(dependency, chain)
 
@@ -280,7 +288,9 @@ class ImageSignalVisitor(ast.NodeVisitor):
                 if keyword.value.value == "image" or keyword.value.value.startswith("image/"):
                     self.signals.add(keyword.value.value)
 
-    def _capture_assignment_discriminators(self, node: ast.AST, semantic_target: bool = False) -> None:
+    def _capture_assignment_discriminators(
+        self, node: ast.AST, semantic_target: bool = False
+    ) -> None:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             if (semantic_target and node.value == "image") or node.value == "image/*":
                 self.signals.add(node.value)
@@ -342,7 +352,9 @@ def _is_allowed_image_path(path: PurePosixPath) -> bool:
 
 
 def _is_protected_duty_path(path: PurePosixPath) -> bool:
-    return any(path == protected or path.is_relative_to(protected) for protected in PROTECTED_DUTY_PATHS)
+    return any(
+        path == protected or path.is_relative_to(protected) for protected in PROTECTED_DUTY_PATHS
+    )
 
 
 def _assert_image_branch_location(path: str, source: str) -> None:
@@ -350,8 +362,12 @@ def _assert_image_branch_location(path: str, source: str) -> None:
     identifiers = _image_identifiers(source)
     if normalized in ALLOWED_GENERIC_LLM_VISION_FILES:
         identifiers.discard("supports_vision")
-    if identifiers and (_is_protected_duty_path(normalized) or not _is_allowed_image_path(normalized)):
-        raise AssertionError(f"image-specific identifiers {sorted(identifiers)} outside approved adapter: {normalized.as_posix()}")
+    if identifiers and (
+        _is_protected_duty_path(normalized) or not _is_allowed_image_path(normalized)
+    ):
+        raise AssertionError(
+            f"image-specific identifiers {sorted(identifiers)} outside approved adapter: {normalized.as_posix()}"
+        )
 
 
 def test_imports_resolve_import_and_importfrom_variants() -> None:
@@ -379,9 +395,9 @@ def test_imports_resolve_exact_dynamic_import_constants() -> None:
             'importlib.import_module("sqlalchemy", package="pkg")',
             '__import__("sqlalchemy", globals(), locals(), [], 0)',
             'importlib.import_module(name="sqlalchemy")',
-            'importlib.import_module(module_name)',
-            '__import__(module_name)',
-            'from importlib import import_module as load_module',
+            "importlib.import_module(module_name)",
+            "__import__(module_name)",
+            "from importlib import import_module as load_module",
             'load_module("sqlalchemy", package="pkg")',
         )
     )
@@ -394,8 +410,8 @@ def test_imports_resolve_exact_dynamic_import_constants() -> None:
     "statement",
     [
         "__import__(name=module_name)",
-        'importlib.import_module(name=module_name)',
-        'importlib.import_module(module_name)',
+        "importlib.import_module(name=module_name)",
+        "importlib.import_module(module_name)",
     ],
 )
 def test_dynamic_imports_reject_non_constant_names(statement: str) -> None:
@@ -414,7 +430,10 @@ def test_media_core_allows_only_stdlib_typing_and_media_core() -> None:
     [
         ("import requests", "focusproof.media_core.ingestion -> requests"),
         ("import numpy", "focusproof.media_core.ingestion -> numpy"),
-        ("from focusproof.domain import scoring", "focusproof.media_core.ingestion -> focusproof.domain"),
+        (
+            "from focusproof.domain import scoring",
+            "focusproof.media_core.ingestion -> focusproof.domain",
+        ),
     ],
 )
 def test_media_core_rejects_non_whitelisted_dependencies(statement: str, expected: str) -> None:
@@ -443,7 +462,10 @@ def test_real_media_core_tree_obeys_import_boundary() -> None:
 
 def test_image_branches_allow_only_exact_repo_relative_paths() -> None:
     _assert_image_branch_location("focusproof/media_adapters/codec.py", "class ImageCodec: pass")
-    _assert_image_branch_location("focusproof/api/media_routes.py", "def route(kind: str) -> bool:\n    return kind == 'image'\n")
+    _assert_image_branch_location(
+        "focusproof/api/media_routes.py",
+        "def route(kind: str) -> bool:\n    return kind == 'image'\n",
+    )
     _assert_image_branch_location(
         "focusproof/media_projection/image_narrative_provider.py",
         "def emit(payload: str, vision: bool = False) -> str:\n    return payload\n",
@@ -493,10 +515,15 @@ def test_generic_llm_vision_config_does_not_admit_other_image_signals(source: st
 
 @pytest.fixture
 def media_routes_fixture() -> tuple[str, str]:
-    return "focusproof/api/media_routes.py", "def route(kind: str) -> bool:\n    return kind == 'image'\n"
+    return (
+        "focusproof/api/media_routes.py",
+        "def route(kind: str) -> bool:\n    return kind == 'image'\n",
+    )
 
 
-def test_image_branches_accept_valid_media_routes_fixture(media_routes_fixture: tuple[str, str]) -> None:
+def test_image_branches_accept_valid_media_routes_fixture(
+    media_routes_fixture: tuple[str, str],
+) -> None:
     path, source = media_routes_fixture
     _assert_image_branch_location(path, source)
 
@@ -598,7 +625,6 @@ def test_focusproof_tree_confines_image_specific_identifiers() -> None:
             path.relative_to(REPO_ROOT).as_posix(),
             path.read_text(encoding="utf-8"),
         )
-
 
 
 def test_malware_scanning_duties_do_not_enter_protected_surfaces() -> None:

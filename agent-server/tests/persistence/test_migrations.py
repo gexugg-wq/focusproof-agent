@@ -763,14 +763,20 @@ def test_remove_monad_forward_migration_drops_claim_table_and_preserves_generic_
     with engine.connect() as connection:
         tables = set(inspect(connection).get_table_names())
         assert "monad_evidence_claims" not in tables
-        assert connection.execute(
-            text("SELECT count(*) FROM learning_sessions WHERE session_id = :session_id"),
-            {"session_id": "sess_remove_monad"},
-        ).scalar_one() == 1
-        assert connection.execute(
-            text("SELECT count(*) FROM evidence WHERE evidence_id = :evidence_id"),
-            {"evidence_id": "ev_remove_monad"},
-        ).scalar_one() == 1
+        assert (
+            connection.execute(
+                text("SELECT count(*) FROM learning_sessions WHERE session_id = :session_id"),
+                {"session_id": "sess_remove_monad"},
+            ).scalar_one()
+            == 1
+        )
+        assert (
+            connection.execute(
+                text("SELECT count(*) FROM evidence WHERE evidence_id = :evidence_id"),
+                {"evidence_id": "ev_remove_monad"},
+            ).scalar_one()
+            == 1
+        )
     engine.dispose()
 
     command.downgrade(alembic_config, "0006_media_scan_receipts")

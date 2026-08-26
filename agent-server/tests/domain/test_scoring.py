@@ -285,8 +285,7 @@ def test_exact_english_goal_copy_is_weak_evidence() -> None:
 def test_goal_copy_normalizes_unicode_case_whitespace_and_punctuation() -> None:
     goal = "Explain how an append-only event log rebuilds application state."
     formatted_copy = (
-        "  ＥＸＰＬＡＩＮ, HOW   an APPEND—ONLY event log\n"
-        "rebuilds application state！！！  "
+        "  ＥＸＰＬＡＩＮ, HOW   an APPEND—ONLY event log\nrebuilds application state！！！  "
     )
     result = score_learning_session(
         general_goal("Understand event replay", goal),
