@@ -58,6 +58,23 @@ export type PluginCapability = {
   metadata: Record<string, unknown>;
 };
 
+export type ImageEvidenceCapability = {
+  capabilityId: "image_evidence";
+  enabled: true;
+  formats: string[];
+  maxCount: number;
+  maxOriginalBytes: number;
+  maxNormalizedBytesPerSession: number;
+  explanationRequired: boolean;
+};
+
+export type ImageEvidenceResponse = {
+  evidenceId: string;
+  mediaType: string;
+  normalizedBytes: number;
+  replayed: boolean;
+};
+
 export type MonadPluginCapabilityMetadata = {
   chainId: number | string;
   chainName: string;
@@ -69,6 +86,7 @@ export type MonadPluginCapabilityMetadata = {
 
 export type SessionView = {
   pluginCapabilities?: PluginCapability[];
+  productCapabilities?: unknown[];
   [key: string]: unknown;
 };
 

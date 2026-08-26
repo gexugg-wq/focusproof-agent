@@ -25,6 +25,7 @@ export function isAllowedFocusProofRequest(method: string, path: readonly string
   if (normalized === "POST" && path.length === 1 && path[0] === "sessions") return true;
   if (path.length < 2 || path[0] !== "sessions" || !sessionIdPattern.test(path[1])) return false;
   if (normalized === "GET" && path.length === 2) return true;
+  if (normalized === "POST" && path.length === 4 && path[2] === "evidence" && path[3] === "image") return true;
   if (path.length !== 3) return false;
   if (normalized === "POST" && ["evidence", "answer", "review"].includes(path[2])) return true;
   if (normalized === "GET" && ["events", "reviews"].includes(path[2])) return true;
@@ -37,6 +38,9 @@ export function mapApiError(status: number, payload: unknown): ApiError {
   const retryable = data.retryable === true || status === 503 || status === 0;
   if (code === "session_busy") {
     return new ApiError({ status, code: "session_busy", retryable: true, message: "Session processing is still in progress. Please retry shortly." });
+  }
+  if (status === 413 || code === "media_too_large" || code === "request_too_large") {
+    return new ApiError({ status, code, retryable: false, message: "The selected image is too large." });
   }
   if (code === "session_finalized") {
     return new ApiError({ status, code, retryable: false, message: "This session is complete. New facts cannot be submitted." });

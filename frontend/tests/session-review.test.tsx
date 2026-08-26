@@ -73,20 +73,19 @@ describe("EvidencePanel", () => {
   it("shows structured evidence submission errors", async () => {
     const submit = vi.fn().mockRejectedValue(new Error("Connection failed. Nothing was submitted."));
     render(wrap(<EvidencePanel sessionId="sess_1" domain="general" walletAddress={null} onSubmitEvidence={submit} />));
-    await userEvent.type(screen.getByLabelText(/learning notes/i), "Some notes");
+    await userEvent.type(screen.getByLabelText(/learning evidence/i), "Some notes");
     await userEvent.click(screen.getByRole("button", { name: /submit evidence/i }));
     expect(await screen.findByText(/connection failed/i)).toBeInTheDocument();
   });
 
-  it("submits Web3 evidence without requiring a wallet", async () => {
+  it("does not expose a Web3-specific mode in the general composer", async () => {
     const submit = vi.fn().mockResolvedValue({ syncPending: true });
     render(wrap(<EvidencePanel sessionId="sess_1" domain="web3" walletAddress={null} onSubmitEvidence={submit} />));
-    await userEvent.click(screen.getByRole("tab", { name: /web3/i }));
-    await userEvent.type(screen.getByLabelText(/transaction hash/i), "0xabc");
-    await userEvent.type(screen.getByLabelText(/chain id/i), "10143");
-    await userEvent.type(screen.getByLabelText(/what did this operation complete/i), "called a contract");
+    expect(screen.queryByRole("tab", { name: /web3/i })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/transaction hash|chain id|wallet/i)).not.toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText(/learning evidence/i), "called a contract");
     await userEvent.click(screen.getByRole("button", { name: /submit evidence/i }));
-    expect(submit).toHaveBeenCalledWith({ evidenceType: "web3", textContent: "called a contract", metadata: { txHash: "0xabc", chainId: "10143" } });
+    expect(submit).toHaveBeenCalledWith({ evidenceType: "text", textContent: "called a contract", metadata: {} });
     expect(await screen.findByText(/waiting for Agent sync/i)).toBeInTheDocument();
   });
 });
@@ -196,5 +195,25 @@ describe("SessionWorkspace recovery query refresh", () => {
       expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["events", "sess_1"] });
       expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviews", "sess_1"] });
     });
+  });
+});
+import { getImageCapability } from "@/features/session/SessionWorkspace";
+
+describe("image capability validation", () => {
+  it.each([
+    { formats: [] },
+    { formats: ["image/gif"] },
+    { formats: ["image/png", 7] },
+    { maxCount: 0 },
+    { maxCount: -1 },
+    { maxCount: 1.5 },
+    { maxCount: Number.NaN },
+    { maxOriginalBytes: Number.POSITIVE_INFINITY },
+    { maxNormalizedBytesPerSession: -20 },
+    { explanationRequired: "true" }
+  ])("fails closed for malformed capability %j", (override) => {
+    const malformed = { capabilityId: "image_evidence", enabled: true, formats: ["image/png"], maxCount: 4, maxOriginalBytes: 10_485_760, maxNormalizedBytesPerSession: 20_971_520, explanationRequired: true, ...override };
+    const candidate = { ...session, view: { productCapabilities: [malformed] } };
+    expect(getImageCapability(candidate)).toBeNull();
   });
 });

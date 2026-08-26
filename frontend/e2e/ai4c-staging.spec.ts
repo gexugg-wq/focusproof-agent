@@ -298,7 +298,7 @@ test("browser OIDC code PKCE continues a native Conversation after backend resta
   await expect(page).toHaveURL(/\/sessions\/[^/]+$/);
 
   await page
-    .getByLabel("Learning notes, explanation, code, or error record")
+    .getByLabel("Learning evidence")
     .fill("The native EventLog owns ordered runtime facts while product events are projections.");
   await page.getByRole("button", { name: /submit evidence/i }).click();
   await expect(page.getByText("Evidence submitted.")).toBeVisible();
