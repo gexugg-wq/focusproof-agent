@@ -1,6 +1,6 @@
 # FocusProof AI Task Board
 
-Version: v0.7
+Version: v0.9
 Runtime direction: Python Agent Server with OpenHands Conversation as core runtime
 Project root: `/home/holy/web3/focusproof-agent`
 
@@ -74,6 +74,62 @@ work cannot be confused:
 - AI4A: general verification tool framework on the existing OpenHands runtime.
 - AI4B: general integration tests, security and release-readiness baseline.
 - AI4C: production identity, real-LLM operations and reproducible staging deployment.
+- AI5: multimodal image foundation, owned as a conditional media capability on the existing OpenHands runtime.
+
+### AI5 final status (2026-08-25 authoritative sync)
+
+This section supersedes older AI5 completion wording elsewhere in this board,
+including AI5.7 pending, external-Clamd-blocked, and whole-AI5-incomplete
+statements. Historical sections remain for provenance.
+
+1. The deterministic image foundation and the OpenHands SDK 1.31.0 native
+   `ImageContent` -> `MessageEvent` -> `Conversation` event chain are complete.
+2. The pinned real-PNG acceptance is complete. Its immutable input is
+   `docs/research/assets/ai5/task7/chromium-success.png`, SHA-256
+   `7ee186d8b0efa5ca62039ab97655e811e748c86696fee1752f8c0fc7ef3f468e`.
+   V6 used `openai/qwen3.7-plus`: exactly one visual provider completion,
+   zero agent-decision completions, and no retry. It produced eight structured
+   visual facts with `parseStage=complete`, `errorCategory=none`, review
+   `completed`, and runner `PASS`. Independent review concluded
+   `V6_REAL_IMAGE_GATE_FINAL_ACCEPTED`. The V6 report SHA-256 is
+   `80305ffa837cf42bb79ab3a10f2e14c7ffd83ff426ed95fab01d1037f750afc3`;
+   its sidecar SHA-256 is
+   `80d76c711bb3c168cb0bbc2b992c1734e6201a69e527770bb0f473fca079ae17`.
+3. AI5.7 is complete. Two live Clamd five-case matrices passed; fresh final
+   acceptance again passed clean, EICAR/malicious, timeout, unavailable, and
+   daemon-error. Oversize remains proven at the adapter boundary. Raw media
+   cannot reach LLM/OpenHands events before a clean receipt.
+4. AI5.8 independent audit: initial `REJECTED`; Fix Rounds 1/2/3 completed;
+   final Round 3 independent re-verification `ACCEPTED`.
+5. PostgreSQL revision `0006_media_scan_receipts` passed 0005 -> head ->
+   repeated head -> downgrade -> head. Image final publish and Review reuse one
+   `FileSessionRunLock`; expensive read/scan/validation/normalization/staging is
+   outside it, stage -> publish is cancellation gated, and
+   finalize/reference/confirm is inside it.
+6. The permanent RED oracle rejects Review-lock bypass. The normal
+   publish/review barrier and restart-reconstructed barrier are green.
+7. Round 2 default gate: `1900 passed, 1 skipped, 19 deselected`. Round 3
+   focused evidence: `85/94 passed`; targeted/production strict mypy, Ruff,
+   diff, and cached-empty gates passed.
+8. FocusProof remains general-purpose. Monad is detachable/default-off.
+   Audio/PDF/OCR/ASR are not implemented. Public deployment, managed OIDC, and
+   external long-term operations/SLOs remain unauthorized.
+
+AI5 quality-gate closure is represented by `scripts/run_quality_gate.py`.
+`--tier fast` is the default deterministic no-Docker/no-network/no-real-LLM
+gate. `--tier integration` inherits fast and adds PostgreSQL, recovery,
+deterministic E2E, and Clamd integration without real LLM calls. `--tier
+release` inherits integration but requires explicit `--allow-real-provider`
+before live Clamd, real Qwen/OpenHands, and final manifest steps can execute;
+without that flag it exits closed. Expected cost is none for fast, local
+infrastructure time for integration, and external provider/daemon cost for
+release.
+
+Next phase: **AI6 multimodal expansion requires separate AI0 approval**.
+AI6 voice/audio work has not started.
+Do not announce or begin an audio phase without that approval. Directly reuse
+official OpenHands SDK capabilities; never build imitation Runtime,
+Conversation, EventLog, Message/Action/Observation, or Tool abstractions.
 
 ## 3. Directory Ownership
 
@@ -86,6 +142,7 @@ work cannot be confused:
 | AI4A | General Verification Framework | `agent-server/focusproof/openhands_runtime/`, narrowly affected `agent-server/focusproof/domain/` modules, `agent-server/tests/`, `fixtures/`, `docs/research/`, necessary Python dependency declarations | `frontend/`, `contracts/`, `.env`, `var/`, OpenHands SDK source, public protocol or architecture changes without AI0 approval |
 | AI4B | General QA + Security + Release Readiness | cross-system tests, narrowly affected backend/frontend fixes, `docs/security/`, `docs/deployment/`, `docs/research/` | New product features, multimodal work, public deployment |
 | AI4C | Production Readiness | identity/runtime/deployment modules approved by AI4C.0, their tests, deployment config and reports | Multimodal work, Web3 specialization, OpenHands mirror implementations, scoring rewrites without AI0 approval |
+| AI5 | Multimodal Image Foundation | image media modules under `agent-server/focusproof/media_*`, conditional API/bootstrap/runtime contribution files, scoped media tests, frontend image evidence flow, and AI5 docs/reports | OpenHands SDK source, `.env` or secrets, `var/`, unapproved public protocol changes, second Runtime/Conversation/EventLog/Tool protocol, Monad/Web3 defaults |
 
 Two AIs must not edit the same file at the same time.
 
@@ -398,16 +455,59 @@ Constraints:
 - Production code starts only after AI0 accepts the AI4C.0 written design and
   implementation plan.
 
+## 11. AI5: Multimodal Input Foundation
+
+Status: engineering accepted for the AI5 image foundation on 2026-08-14. Independent strict review returned `VERDICT: APPROVED` with no blocking, important or minor findings.
+
+AI5 defines the image evidence foundation while continuing to reuse OpenHands directly. It does not create or imitate a second Agent runtime, Conversation loop, EventLog, Action/Observation model, or tool protocol.
+
+Accepted AI5 scope:
+
+- Task 1 completed: architecture, SDK and dependency contracts for OpenHands SDK 1.31.0.
+- Task 2 completed: lifecycle ports, two-stage leases, migration and existing synchronous UoW integration.
+- Task 3 completed: codec/store adapters and optional media build contract.
+- Task 4 completed: streaming limits, multipart route and product capability disclosure.
+- Task 5 completed for local/staging real-provider validation through official OpenHands SDK 1.31.0 `LLM`, `ImageContent`, `LocalConversation`, Action/Observation events and Tool surfaces. Visual support is explicit and disabled by default.
+- Task 6 completed: conditional runtime contribution, scoped safe media facts and modality-neutral narratives.
+- Task 7 completed: transparent BFF and server-driven image UI.
+- Task 8 image-foundation engineering evidence completed: backup/restore, report, diff gate, deterministic default tests and a guarded real visual-provider test. Production scanning implementation and acceptance are incomplete; only `fake-clean` isolation is verified with `productionMalwareScanningVerified=false`. AI5.7 owns `ScannerPort`, `ScanResult`, the replaceable production adapter, and the fail-closed production boundary.
+
+Final AI5 evidence:
+
+- focused architecture/product/SDK: `43 passed, 1 skipped`
+- media API/core/adapters/message content: `171 passed`
+- runtime contribution/tool/scoring: `21 passed`
+- default API/general core/Monad default-disabled: `76 passed`
+- persistence/migrations/restart recovery: `114 passed`
+- Alembic upgrade `0005` -> downgrade `0004` -> upgrade head: PASS
+- explicit visual-provider capability tests: `2 passed`; complete LLM operations: `20 passed`
+- real image provider gate: `PASS_LOCAL_STAGING_REAL_PROVIDER`
+- guarded real-image test: `1 passed in 36.00s`
+- `git diff --check` and Ruff: PASS
+
+Disabled fresh imports are clean in all six process-isolated checks: each of
+`focusproof.api.app`, `focusproof.openhands_runtime.manager`, and
+`focusproof.openhands_runtime.synchronizer`, with `FOCUSPROOF_MEDIA_ENABLED`
+either unset or `false`, reported `leaked=[]` for the forbidden media module
+families.
+
+OpenHands is directly reused through official `Message`, `ImageContent`, `Conversation`, and `ToolDefinition` surfaces. AI5 added no second Runtime, Conversation, EventLog, or Tool protocol.
+
+Historical acceptance evidence retained for context:
+
+- backend: `1238 passed, 1 skipped, 19 deselected`
+- PostgreSQL: `5 passed`
+- Docker core/media build: PASS
+- frontend lint/typecheck/`114` Vitest/build: PASS
+- default E2E: `28/28`
+- Monad E2E: `4/4`
+- staging restore: `1 passed`
+
 ## 12. Development Phases
 
 | Phase | Content | Owner | Status |
 |---|---|---|---|
 | 0 | architecture and task-control baseline | AI0 | done |
-## 11. AI5: Multimodal Input Foundation
-
-Status: not started. This is the next stage after the completed AI4C General Core Gate; this status must not be interpreted as implementation having begun.
-
-AI5 will define the multimodal input foundation for image, audio and PDF evidence while continuing to reuse OpenHands directly. It must not create or imitate a second Agent runtime, Conversation loop, EventLog, Action/Observation model, or tool protocol. Scope, ownership and acceptance gates require AI0 approval before implementation begins.
 
 | 1 | scaffold and OpenHands SDK feasibility | AI1 | done |
 | 2 | direct OpenHands SDK import and adapter spike | AI2 | done |
@@ -416,7 +516,7 @@ AI5 will define the multimodal input foundation for image, audio and PDF evidenc
 | 5 | general verification tool framework: registry, text and URL | AI4A | done |
 | 6 | general integration, security and release-readiness baseline | AI4B | done |
 | 7 | production identity, real-LLM operations and reproducible staging | AI4C | done / AI0 accepted (engineering phase complete; not public production release) |
-| 8 | multimodal evidence expansion | AI2 + AI3 + AI4 | later |
+| 8 | AI5 image evidence foundation | AI5 | layered: image foundation + real vision accepted; production scanning implementation and acceptance incomplete; fake-clean isolation only |
 | P1 | optional Web3 specialization and on-chain proof | domain plugin owners | backlog |
 
 ## 13. Next Execution Task
@@ -429,9 +529,20 @@ formal real-provider General Core Gate passed on 2026-08-12; it is no longer an
 outstanding blocker. The maximum current classification is staging-ready with
 public-release blockers.
 
-The next program phase is AI5 multimodal input foundation. AI5 requires an
-independent design and explicit approval before implementation. AI5 has not
-started.
+AI5 image foundation engineering and the local/staging real visual-provider gate
+are accepted. The real gate used a real PNG, official OpenHands LLM, and
+`openai/qwen3.7-plus`; it completed two follow-up rounds and produced concrete
+image facts. The corrected nested `reviewResult.score/summary` consumer and
+fail-closed review state machine are independently `APPROVED_CONTRACT_GATE`
+with 19 tests. The Review API, persistence, and OpenHands path had no defect.
+
+Historical code-gate claim (superseded/non-production): deterministic scanner tests passed, but they established no production implementation or acceptance. Current evidence verifies only `fake-clean` isolation with `productionMalwareScanningVerified=false`; AI5.7 owns `ScannerPort`, `ScanResult`, the replaceable production adapter, and the fail-closed production boundary.
+The separate external clean/EICAR run is `BLOCKED_EXTERNAL_SERVICE_GATE` /
+`REAL_CLAMD_GATE_BLOCKED`: the pinned
+`clamav/clamav:1.5.3-debian@sha256:e6243e...828c` pull timed out to
+`registry-1.docker.io:443`; no probes ran and no container/image remains.
+Network recovery or a reachable clamd endpoint is required. AI5 is therefore
+not fully complete and public production upload remains unauthorized.
 
 
 ## 14. General Core Gate Closure Addendum
@@ -462,8 +573,19 @@ Formal real-provider product acceptance passed on 2026-08-12 with
 path. The redacted results and native Action/Observation/Build Log evidence are
 recorded in `docs/research/GENERAL_CORE_GATE_REPORT.md`.
 
-The next stage is AI5 multimodal input foundation. AI5 has not started.
+AI5 image foundation engineering is accepted. Real visual-provider acceptance,
+public-production malicious-file virus scanning, and future audio/PDF expansion
+remain separate gates.
 
 OpenHands is reused directly through the official Conversation, `Agent.step`,
 native Action/Observation, and EventLog path. No mirror loop, second EventLog,
 or alternate runtime or tool protocol is introduced.
+
+### AI5.3 production media security
+
+- Historical code-gate claim (superseded/non-production): 288 focused and 341 expanded tests passed with Ruff/Mypy clean.
+- This did not implement or accept production scanning; only `fake-clean` isolation is verified with `productionMalwareScanningVerified=false`, and AI5.7 owns the production boundary.
+- Guarded real-clamd clean + EICAR gate:
+  `BLOCKED_EXTERNAL_SERVICE_GATE` / `REAL_CLAMD_GATE_BLOCKED`.
+- External staging clamd endpoint and health gate remain operator-required.
+- Production rollout/acceptance: not authorized.

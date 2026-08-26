@@ -1,6 +1,6 @@
 # FocusProof Agent Architecture
 
-Version: Architecture Baseline v0.7
+Version: Architecture Baseline v0.9 (2026-08-26 P1 repair)
 Primary runtime: Python Agent Server
 Frontend: Next.js and TypeScript
 Optional domain plugin backlog: domain-specific verification, deferred
@@ -18,12 +18,25 @@ FocusProof Agent verifies whether a learning session produced credible, reviewab
 - learning output,
 - reflection and next-step plan.
 
+The v0.9 runtime has one official OpenHands SDK 1.31.0 Conversation/agent loop,
+one capability registry/tool assembler projection, and one production manager.
+`openhands_adapter/real_conversation.py` is authorized gate/debug code and is
+unreachable from the production application import graph. Readiness validates
+the SDK public extension-point contract without provider calls. Media ingestion
+uses bounded upstream spooling and one Clamd absolute deadline. SQL bind values
+are hidden in application and migration engines; operational logs contain only
+identifiers, states, and allowlisted error codes.
 The accepted product is the domain-general text/URL learning flow. Web3 was
 considered in an early design, but is not a current architecture dependency,
 runtime capability, or AI4C production-readiness deliverable.
 
-Accepted implementation baseline: AI4B at `bf5c9a8`. Next design gate: AI4C.0
-Production Readiness.
+Current authoritative status (2026-08-25): AI4C engineering and AI5
+image-foundation/runtime acceptance are complete. The AI5.8 independent audit
+was initially rejected, then accepted after three fix rounds and an independent
+Round 3 re-verification. Media and Monad remain default-off and detachable.
+Real visual-provider use is still default-off; public deployment, managed OIDC,
+and external long-term operations/SLOs are not authorized. Audio/PDF/OCR/ASR
+are not implemented. AI6 multimodal expansion requires separate AI0 approval.
 
 ### 1.1 AI4C Production-Readiness Boundary
 
@@ -58,6 +71,11 @@ Agent loop, Conversation or EventLog. Its in-memory and persistent
 `AuditProjectionStore` implementations retain only product-approved query
 projections and cannot schedule Agent steps, execute tools or replace native
 OpenHands restoration.
+
+Media admission security remains an application-owned boundary outside Agent
+decisions, generic scoring, and Monad. Generic scoring does not branch by
+modality, Monad remains disabled by default, and Web3/Monad plus
+audio/PDF/OCR/ASR remain backlog/deferred pending AI0.
 
 The product database owns sessions, evidence metadata, authorization,
 reviews, build logs, and a read/query audit projection. It does not restore or

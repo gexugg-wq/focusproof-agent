@@ -1,8 +1,33 @@
 # OpenHands Reuse Strategy
 
-Version: v0.7
+Version: v0.8
 Primary runtime language: Python
 Product scope: general learning verification; optional Web3 plugin deferred
+
+## AI5 multimodal baseline: reuse before adaptation
+
+The governing rule is: if an official public OpenHands capability can satisfy
+the requirement, FocusProof uses it directly. We do not create an
+"OpenHands-style" imitation. `test_multimodal_sdk_contracts.py` pins the
+installed 1.31.0 public surface; `test_media_import_boundaries.py` pins the
+one-way product dependency boundary without requiring future AI5 modules.
+
+| Directly reused | FocusProof-owned product semantics | SDK gap / stop condition |
+|---|---|---|
+| `LLM.completion` / `acompletion`, Message `model_dump`/`model_validate` roundtrip, public metrics mutation/read, and process-isolated registration behavior | Scoped artifact URI resolution in copied messages and four-image/20 MiB call policy | **Task 5 HARD STOP GATE:** public inner-LLM composition, wrapper identity across recovery, stats/budget/call accounting, and a `LocalConversation`-typed replacement-Agent negative case remain unproved; stop without an official public extension point |
+| `Message`, `TextContent`, `ImageContent`, deep-copy behavior, and `LocalConversation.send_message(str | Message)`; `TestLLM` completion/acompletion; Agent identity on create/restore; process-isolated tool/model registration; installed dependency versions | Stable `focusproof-artifact://` mapping and authorization | The listed Task1 contracts are proven. The Task5 composition, recovery, accounting, and replacement-Agent cases are not proven; no private message/SDK state |
+| Native Conversation/EventLog lifecycle | FocusProof `ConversationFactory` verifies `conversation.agent` and `conversation.state.agent` are the newly passed Agent on create/restore | Stop if the product gate cannot preserve the server-bound Agent identity through public behavior |
+| Public `openhands.sdk.tool.ToolDefinition` required model fields and concrete `register_tool`/LiteLLM `register_model` behavior | Conditional runtime contributions and safe media evidence facts | Global registry has no unregister: disabled startup must not register VisionInspectTool or media tools. A child process may inherit FocusProof registrations already present in the parent; the isolation claim is only that registrations created in the child do not leak back to the parent |
+| Public `LocalConversation.get_or_create_profile_llm(profile_name, usage_id)` exists for auxiliary calls | AI5.1 does not adopt it; VisionInspectTool remains unregistered | No public wrapper/restore hook is proven. Register only after profile, restore, authorization, wrapper and accounting behavior is proven end to end |
+| OpenHands-declared Pillow dependency and the existing locked `python-multipart` distribution | Codec, quarantine/object storage, quotas, routes, UI, narrative projection | Disabled mode means no FocusProof media imports/instances; it does not mean distributions are absent |
+
+Exact image logic is permitted only in `media_adapters/**`,
+`api/media_routes.py`, `runtime_evidence_message_factory.py`,
+`media_projection/image_narrative_provider.py`, `runtime_contributions.py`,
+`tools/media_evidence.py`, and `bootstrap/media_composition.py`. Media
+core/application must not import OpenHands, FastAPI, SQLAlchemy, Pillow,
+multipart, frontend, scoring, plugins, or Monad. Manager/Agent loop, domain
+scoring, text/URL tools, and Monad contain no image branch.
 
 Accepted runtime baseline: AI4B at `bf5c9a8` on OpenHands SDK 1.31.0. AI4C must
 consume the accepted Conversation/tool/event boundary and must not redesign the
@@ -116,6 +141,11 @@ Prohibited when an SDK equivalent exists:
 FocusProof may own learning-specific behavior that OpenHands does not provide: evidence schemas, learning-domain capability policy, scoring, learner ownership and authorization, database projections, Build Log and proof payloads, and stricter security rules such as URL path redaction. These extensions must compose with the native runtime rather than replace it.
 
 When the pinned SDK is upgraded, all gap records and adapters must be re-audited. Any local behavior now covered by a public SDK API must be deleted and migrated to the SDK implementation.
+
+Task5 is a hard stop: if the required wrapper behavior cannot be established
+through an official public OpenHands extension point, do not implement an
+OpenHands-style wrapper or facade and do not access private state. Task2-4 may
+proceed independently.
 
 ## 3. What We Should Not Reuse Directly
 
