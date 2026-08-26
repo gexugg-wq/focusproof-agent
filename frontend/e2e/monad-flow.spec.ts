@@ -7,11 +7,9 @@ const explanation = "I used the deterministic demo transaction to call increment
 
 test("completes the Monad demo flow and shows verification in the Build Log", async ({ page }) => {
   await page.goto("/");
-  await page.getByLabel("Learning domain").selectOption("general");
   await page.getByLabel("Learning topic").fill("Counter state transitions");
   await page.getByLabel("This session goal").fill("Explain why increment() changes only the caller state.");
-  await page.getByLabel("Expected output").fill("notes");
-  await page.getByRole("button", { name: /start session/i }).click();
+  await page.getByRole("button", { name: /start 25 minutes/i }).click();
 
   await expect(page).toHaveURL(/\/sessions\/sess_/, { timeout: 15000 });
   await expect(page.getByRole("heading", { name: /Monad chain evidence/i })).toBeVisible();
