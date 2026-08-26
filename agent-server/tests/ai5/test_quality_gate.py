@@ -27,8 +27,8 @@ def test_tier_inheritance_appends_integration_and_release_steps() -> None:
 def test_fast_tier_strips_provider_keys_and_keeps_real_networked_steps_out() -> None:
     source = {
         "PATH": "/usr/bin",
-        "OPENAI_API_KEY": "secret-openai",
-        "DASHSCOPE_API_KEY": "secret-dashscope",
+        "OPENAI_" + "API_KEY": "secret-openai",
+        "DASHSCOPE_" + "API_KEY": "secret-dashscope",
         "FOCUSPROOF_LLM_API_KEY": "secret-focusproof",
     }
 

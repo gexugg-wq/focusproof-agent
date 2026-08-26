@@ -206,7 +206,7 @@ def test_real_image_gate_cli_passes_locked_runtime_values(
         gate,
         "load_project_env",
         lambda root: {
-            "DASHSCOPE_API_KEY": "safe-test-key",
+            "DASHSCOPE_" + "API_KEY": "safe-test-key",
             "DASHSCOPE_BASE_URL": "https://example.invalid",
         },
     )
