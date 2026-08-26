@@ -1222,6 +1222,22 @@ def test_staging_test_llm_selects_recovery_script_from_native_sdk_persistence(
     assert restored_response.tool_calls[0].name == "focusproof_review_draft"
 
 
+def test_staging_test_llm_keeps_follow_up_review_draft_in_same_instance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from focusproof.api import app as app_module
+
+    session_id = "staging-native-follow-up-contract"
+    monkeypatch.setenv("FOCUSPROOF_DATA_DIR", str(tmp_path))
+
+    llm = app_module.staging_test_llm(session_id)
+    first_response = llm.completion([]).message
+    second_response = llm.completion([]).message
+
+    assert first_response.tool_calls[0].name == "focusproof_learner_input"
+    assert second_response.tool_calls[0].name == "focusproof_review_draft"
+
+
 def test_reproducibility_comparison_rejects_cross_round_digest_drift() -> None:
     import check_staging_reproducibility
 

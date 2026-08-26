@@ -777,22 +777,20 @@ def staging_test_llm(session_id: str) -> Any:
         ),
         origin="completion",
     )
+    learner_input_message = Message(
+        role="assistant",
+        content=[TextContent(text="Ask for learner confirmation")],
+        tool_calls=[learner_input_call],
+    )
+    review_draft_message = Message(
+        role="assistant",
+        content=[TextContent(text="Submit the staging review draft")],
+        tool_calls=[draft_call],
+    )
     messages: list[Message | Exception] = (
-        [
-            Message(
-                role="assistant",
-                content=[TextContent(text="Ask for learner confirmation")],
-                tool_calls=[learner_input_call],
-            )
-        ]
-        if not restoring_native_conversation
-        else [
-            Message(
-                role="assistant",
-                content=[TextContent(text="Submit the staging review draft")],
-                tool_calls=[draft_call],
-            )
-        ]
+        [review_draft_message]
+        if restoring_native_conversation
+        else [learner_input_message, review_draft_message]
     )
     return TestLLM.from_messages(messages)
 
