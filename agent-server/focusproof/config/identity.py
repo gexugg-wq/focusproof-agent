@@ -118,7 +118,19 @@ def load_oidc_settings(
     profile: str,
 ) -> OidcSettings:
     runtime_profile = _PROFILE_ADAPTER.validate_python(profile)
-    if runtime_profile in {"deterministic-test", "local-dev"}:
+    demo_profiles = {"demo-deterministic", "demo-real-vision"}
+    oidc_configuration_present = any(
+        environ.get(key)
+        for key in (
+            "FOCUSPROOF_OIDC_ISSUER",
+            "FOCUSPROOF_OIDC_AUDIENCE",
+            "FOCUSPROOF_OIDC_JWKS_URI",
+            "FOCUSPROOF_OIDC_FINGERPRINT_KEY",
+        )
+    )
+    if runtime_profile in {"deterministic-test", "local-dev"} or (
+        runtime_profile in demo_profiles and not oidc_configuration_present
+    ):
         return OidcSettings(
             enabled=False,
             issuer=None,

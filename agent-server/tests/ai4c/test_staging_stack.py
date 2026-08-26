@@ -1110,6 +1110,7 @@ def test_compose_consumes_host_port_overrides_and_fails_closed_without_them(
     compose_file = DEPLOY_DIR / "compose.staging.yml"
     required = {
         "FOCUSPROOF_STAGING_POSTGRES_PASSWORD_FILE": str(tmp_path / "postgres"),
+        "FOCUSPROOF_STAGING_CLAMD_ENDPOINT": "tcp://127.0.0.1:3310",
         "FOCUSPROOF_STAGING_OIDC_FINGERPRINT_KEY_FILE": str(tmp_path / "fingerprint"),
         "FOCUSPROOF_STAGING_OIDC_TLS_CERT_FILE": str(tmp_path / "cert"),
         "FOCUSPROOF_STAGING_OIDC_TLS_KEY_FILE": str(tmp_path / "key"),
@@ -1683,7 +1684,8 @@ def test_playwright_configs_separate_deterministic_and_external_staging_suites()
 
     assert deterministic.returncode == 0, deterministic.stderr
     assert "ai4b-real-flow.spec.ts" in deterministic.stdout
-    assert "focusproof-flow.spec.ts" in deterministic.stdout
+    assert "bff-image-retry.spec.ts" in deterministic.stdout
+    assert "focusproof-flow.spec.ts" not in deterministic.stdout
     assert "ai4c-staging.spec.ts" not in deterministic.stdout
     assert staging.returncode == 0, staging.stderr
     assert "ai4c-staging.spec.ts" in staging.stdout

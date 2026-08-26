@@ -171,7 +171,10 @@ def test_non_local_cold_import_accepts_only_explicit_true_without_network(
 
 
 @pytest.mark.parametrize("module_name", IMPORT_TARGETS)
-@pytest.mark.parametrize("profile", ["local-dev", "deterministic-test"])
+@pytest.mark.parametrize(
+    "profile",
+    ["local-dev", "deterministic-test", "demo-deterministic", "demo-real-vision"],
+)
 @pytest.mark.parametrize("external_value", INVALID_VALUES)
 def test_local_and_test_cold_import_force_bundled_map_only_at_openhands_boundary(
     tmp_path: Path,

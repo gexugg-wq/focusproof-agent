@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+import litellm
 from openhands.sdk import LLM
 from pydantic import SecretStr
 
@@ -20,6 +21,20 @@ class OpenHandsLLMConfig:
 
 
 def build_openhands_llm(policy: RealLlmPolicy, usage_id: str) -> LLM:
+    if policy.supports_vision:
+        provider = policy.model.partition("/")[0] or "openai"
+        model_metadata = {
+            "max_tokens": policy.context_window_tokens,
+            "max_input_tokens": policy.context_window_tokens,
+            "max_output_tokens": policy.max_output_tokens,
+            "input_cost_per_token": policy.input_cost_per_token,
+            "output_cost_per_token": policy.output_cost_per_token,
+            "litellm_provider": provider,
+            "mode": "chat",
+            "supports_vision": True,
+        }
+        litellm.register_model({policy.model: model_metadata})
+
     return LLM(
         usage_id=usage_id,
         model=policy.model,
@@ -33,6 +48,7 @@ def build_openhands_llm(policy: RealLlmPolicy, usage_id: str) -> LLM:
         max_output_tokens=policy.max_output_tokens,
         input_cost_per_token=policy.input_cost_per_token,
         output_cost_per_token=policy.output_cost_per_token,
+        **cast(Any, {"disable_vision": not policy.supports_vision}),
         log_completions=False,
         stream=False,
     )

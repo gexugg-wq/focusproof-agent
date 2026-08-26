@@ -5,7 +5,14 @@ import os
 
 
 COST_MAP_ENVIRONMENT_KEY = "LITELLM_LOCAL_MODEL_COST_MAP"
-_LOCAL_PROFILES = frozenset({"local-dev", "deterministic-test"})
+_LOCAL_PROFILES = frozenset(
+    {
+        "local-dev",
+        "deterministic-test",
+        "demo-deterministic",
+        "demo-real-vision",
+    }
+)
 _NON_LOCAL_PROFILES = frozenset({"staging", "production"})
 
 

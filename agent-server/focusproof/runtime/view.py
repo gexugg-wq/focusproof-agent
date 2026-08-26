@@ -41,3 +41,4 @@ class AgentView(BaseModel):
     availableTools: list[ToolDescription] = Field(default_factory=list)
     previousActions: list[Action] = Field(default_factory=list)
     pluginCapabilities: list[dict[str, Any]] = Field(default_factory=list)
+    productCapabilities: list[dict[str, Any]] = Field(default_factory=list)

@@ -44,9 +44,12 @@ def test_failure_result_keeps_client_error_stable_and_logs_redacted_root_cause(
         result = manager._failure_result(cast(ConversationHandle, _FakeHandle()), exc)
 
     client_payload = result.model_dump_json()
+    expected_conversation_id = _FakeHandle.conversation_id.hex
     assert result.error == "RuntimeError: OpenHands conversation run failed"
+    assert result.conversationId == expected_conversation_id
+    assert "-" not in result.conversationId
     assert "Free quota exhausted" not in client_payload
-
+    assert expected_conversation_id in client_payload
     records = [
         record
         for record in caplog.records
