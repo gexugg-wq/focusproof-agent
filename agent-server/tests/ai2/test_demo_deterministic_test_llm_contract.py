@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 
 from openhands.sdk.event import ObservationEvent
@@ -143,6 +144,27 @@ def test_contract_red_recognizes_corrective_strict_visual_prompt() -> None:
 def _demo_llm() -> TestLLM:
     demo_cls = getattr(provider, "DemoDeterministicTestLLM")
     return demo_cls(model="test-model")
+
+
+def test_demo_llm_completion_signature_matches_official_testllm_contract() -> None:
+    demo_cls = getattr(provider, "DemoDeterministicTestLLM")
+    demo_signature = inspect.signature(demo_cls.completion)
+    official_signature = inspect.signature(TestLLM.completion)
+
+    assert list(demo_signature.parameters) == list(official_signature.parameters)
+    for name in official_signature.parameters:
+        assert str(demo_signature.parameters[name].annotation) == str(
+            official_signature.parameters[name].annotation
+        ) or (
+            name == "tools"
+            and str(demo_signature.parameters[name].annotation)
+            == "Sequence[ToolDefinition[Any, Any]] | None"
+            and str(official_signature.parameters[name].annotation)
+            == "Sequence[ToolDefinition] | None"
+        )
+        assert demo_signature.parameters[name].kind == official_signature.parameters[name].kind
+        assert demo_signature.parameters[name].default == official_signature.parameters[name].default
+    assert str(demo_signature.return_annotation) == str(official_signature.return_annotation)
 
 
 def _evidence_message(evidence_id: str, evidence_type: str) -> Message:

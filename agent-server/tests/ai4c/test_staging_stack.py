@@ -1186,15 +1186,28 @@ def test_compose_consumes_host_port_overrides_and_fails_closed_without_them(
     assert any(name in failed.stderr for name in host_port_overrides)
 
 
-def test_staging_test_llm_enters_native_awaiting_learner_input_before_review() -> None:
-    source = _read_required(PROJECT_ROOT / "agent-server/focusproof/api/app.py")
-    staging_factory = source[
-        source.index("def staging_test_llm") : source.index("def create_staging_test_app")
-    ]
+def test_demo_and_staging_test_llm_factories_expose_explicit_official_contracts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from focusproof.api import app as app_module
+    from openhands.sdk.testing import TestLLM
 
-    learner_input = staging_factory.index("focusproof_learner_input")
-    review_draft = staging_factory.index("focusproof_review_draft")
-    assert learner_input < review_draft
+    monkeypatch.setenv("FOCUSPROOF_DATA_DIR", str(tmp_path))
+
+    staging_llm = app_module.staging_test_llm("staging-contract")
+    demo_llm = app_module.demo_deterministic_test_llm("demo-contract")
+
+    assert isinstance(staging_llm, TestLLM)
+    assert isinstance(demo_llm, TestLLM)
+    assert staging_llm is not demo_llm
+
+    first_staging = staging_llm.completion([]).message
+    second_staging = staging_llm.completion([]).message
+    first_demo = demo_llm.completion([], tools=[]).message
+
+    assert first_staging.tool_calls[0].name == "focusproof_learner_input"
+    assert second_staging.tool_calls[0].name == "focusproof_review_draft"
+    assert first_demo.tool_calls[0].name == "focusproof_learner_input"
 
 
 def test_staging_test_llm_selects_recovery_script_from_native_sdk_persistence(

@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 import json
 
 from openhands.sdk.llm import ImageContent, Message, MessageToolCall, TextContent
+from openhands.sdk.llm.llm_response import LLMResponse
+from openhands.sdk.llm.streaming import TokenCallbackType
 from openhands.sdk.testing import TestLLM
+from openhands.sdk.tool import ToolDefinition
 
 from focusproof.openhands_runtime.evidence_messages import FocusProofMessageEnvelope
 from focusproof.openhands_runtime.tools.media_evidence import (
     _CORRECTIVE_VISUAL_FACT_PROMPT,
     _PRIMARY_VISUAL_FACT_PROMPT,
 )
+
+if TYPE_CHECKING:
+    from openhands.sdk.llm.llm import LLMCallContext
 
 _STRICT_VISUAL_PROMPTS = {
     _PRIMARY_VISUAL_FACT_PROMPT,
@@ -124,11 +131,21 @@ class DemoDeterministicTestLLM(TestLLM):
     def completion(
         self,
         messages: list[Message],
-        tools: Sequence[object] | None = None,
-        **kwargs: object,
-    ) -> object:
+        tools: Sequence[ToolDefinition[Any, Any]] | None = None,
+        add_security_risk_prediction: bool = False,
+        on_token: TokenCallbackType | None = None,
+        call_context: LLMCallContext | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
         if self._scripted_responses:
-            return super().completion(messages, tools=tools, **kwargs)
+            return super().completion(
+                messages=messages,
+                tools=tools,
+                add_security_risk_prediction=add_security_risk_prediction,
+                on_token=on_token,
+                call_context=call_context,
+                **kwargs,
+            )
 
         if tools is None and any(is_strict_visual_prompt(message) for message in messages):
             self._scripted_responses.append(
@@ -141,7 +158,14 @@ class DemoDeterministicTestLLM(TestLLM):
                     ],
                 )
             )
-            return super().completion(messages, tools=tools, **kwargs)
+            return super().completion(
+                messages=messages,
+                tools=tools,
+                add_security_risk_prediction=add_security_risk_prediction,
+                on_token=on_token,
+                call_context=call_context,
+                **kwargs,
+            )
 
         evidence_id = extract_latest_image_evidence_id(messages)
         has_answer = _has_answer_envelope(messages)
@@ -192,7 +216,14 @@ class DemoDeterministicTestLLM(TestLLM):
                     ],
                 )
             )
-        return super().completion(messages, tools=tools, **kwargs)
+        return super().completion(
+            messages=messages,
+            tools=tools,
+            add_security_risk_prediction=add_security_risk_prediction,
+            on_token=on_token,
+            call_context=call_context,
+            **kwargs,
+        )
 
 
 def build_demo_deterministic_test_llm(session_id: str) -> DemoDeterministicTestLLM:

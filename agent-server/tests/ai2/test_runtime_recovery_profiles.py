@@ -128,7 +128,7 @@ def test_demo_deterministic_lifespan_is_anonymous_and_uses_official_test_llm(
         tmp_path,
         {"FOCUSPROOF_PROFILE": "demo-deterministic"},
     )
-    official_factory = app_module.staging_test_llm
+    official_factory = app_module.demo_deterministic_test_llm
     produced: list[LLM] = []
 
     def factory_spy(session_id: str) -> LLM:
@@ -136,7 +136,7 @@ def test_demo_deterministic_lifespan_is_anonymous_and_uses_official_test_llm(
         produced.append(llm)
         return llm
 
-    monkeypatch.setattr(app_module, "staging_test_llm", factory_spy)
+    monkeypatch.setattr(app_module, "demo_deterministic_test_llm", factory_spy)
     app = _migrated_app(tmp_path)
     with TestClient(app) as client:
         ready = client.get("/ready")
