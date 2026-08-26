@@ -737,62 +737,12 @@ def create_app(
 
 
 def staging_test_llm(session_id: str) -> Any:
-    """Return the staging-only official TestLLM script for one native conversation."""
-    from openhands.sdk.llm import Message, MessageToolCall, TextContent
-    from openhands.sdk.conversation import LocalConversation
-    from openhands.sdk.testing import TestLLM
+    """Return the credential-free official TestLLM provider for demo/staging flows."""
+    from focusproof.openhands_runtime.demo_deterministic_provider import (
+        build_demo_deterministic_test_llm,
+    )
 
-    data_dir = Path(os.environ["FOCUSPROOF_DATA_DIR"])
-    conversation_id = uuid5(NAMESPACE_URL, f"focusproof:{session_id}")
-    persistence_dir = data_dir / "conversations" / session_id / "persistence"
-    native_store = Path(LocalConversation.get_persistence_dir(persistence_dir, conversation_id))
-    # SDK 1.31.0 exposes get_persistence_dir but no public restored-state
-    # predicate. This staging-only TestLLM selection never consults SQL state.
-    restoring_native_conversation = (native_store / "base_state.json").is_file()
-    learner_input_call = MessageToolCall(
-        id="call_staging_learner_input",
-        name="focusproof_learner_input",
-        arguments=json.dumps(
-            {
-                "question": "Explain why native event continuity matters after restart.",
-                "reason": "Confirm learner understanding after durable recovery.",
-                "requested_evidence_type": "text",
-            }
-        ),
-        origin="completion",
-    )
-    draft_call = MessageToolCall(
-        id="call_staging_review_draft",
-        name="focusproof_review_draft",
-        arguments=json.dumps(
-            {
-                "credibility_findings": ["Evidence is repository-backed."],
-                "understanding_findings": [
-                    "The learner explains that durable IDs survive restart."
-                ],
-                "contradictions": [],
-                "recommended_next_step": "Add one concrete replay example.",
-                "confidence": 0.8,
-            }
-        ),
-        origin="completion",
-    )
-    learner_input_message = Message(
-        role="assistant",
-        content=[TextContent(text="Ask for learner confirmation")],
-        tool_calls=[learner_input_call],
-    )
-    review_draft_message = Message(
-        role="assistant",
-        content=[TextContent(text="Submit the staging review draft")],
-        tool_calls=[draft_call],
-    )
-    messages: list[Message | Exception] = (
-        [review_draft_message]
-        if restoring_native_conversation
-        else [learner_input_message, review_draft_message]
-    )
-    return TestLLM.from_messages(messages)
+    return build_demo_deterministic_test_llm(session_id)
 
 
 def create_staging_test_app() -> FastAPI:

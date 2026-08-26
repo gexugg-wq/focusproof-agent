@@ -101,6 +101,21 @@ def _submit_text_evidence(client: TestClient, session_id: str, text: str) -> Non
     assert response.status_code == 200
 
 
+def _image_fixture_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "fixtures/real-vision/focusproof-general-session.png"
+
+
+def _submit_image_evidence(client: TestClient, session_id: str, *, explanation: str) -> dict[str, object]:
+    with _image_fixture_path().open("rb") as handle:
+        response = client.post(
+            f"/sessions/{session_id}/evidence/image",
+            files={"file": ("focusproof-general-session.png", handle, "image/png")},
+            data={"explanation": explanation, "idempotency_key": "demo-image-1"},
+        )
+    assert response.status_code == 200
+    return response.json()
+
+
 def _native_message_keys(application: FastAPI, session_id: str) -> list[str]:
     handle = application.state.conversation_manager.get(session_id)
     return [
@@ -114,6 +129,15 @@ def _native_message_keys(application: FastAPI, session_id: str) -> list[str]:
 def _native_event_ids(application: FastAPI, session_id: str) -> list[str]:
     handle = application.state.conversation_manager.get(session_id)
     return [str(event.id) for event in handle.conversation.state.events]
+
+
+def _successful_media_observation_count(application: FastAPI, session_id: str) -> int:
+    handle = application.state.conversation_manager.get(session_id)
+    return sum(
+        getattr(event, "tool_name", None) == "focusproof_media_evidence_verification"
+        and getattr(getattr(event, "observation", None), "status", None) == "success"
+        for event in handle.conversation.state.events
+    )
 
 
 def test_demo_deterministic_completes_second_review_in_same_native_conversation(
@@ -229,3 +253,161 @@ def test_demo_deterministic_restores_awaiting_user_and_finishes_without_duplicat
         assert event_types.count("score.calculated") == 1
         assert "TestLLMExhaustedError" not in json.dumps(events.json(), sort_keys=True)
 
+
+def test_demo_deterministic_completes_image_review_without_sql_or_hardcoded_visual_facts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application, _ = _migrated_app(tmp_path, monkeypatch, media_enabled=True)
+    explanation = "The uploaded PNG preserves the session capture, and the explanation ties it back to deterministic replay evidence."
+    answer_text = "The same conversation keeps the uploaded image evidence and my explanation attached to the durable history before the final review completes."
+
+    with TestClient(application, raise_server_exceptions=False) as client:
+        session_id = _create_session(client, title="Demo deterministic image")
+        image = _submit_image_evidence(client, session_id, explanation=explanation)
+        assert image["mediaType"] == "image/png"
+
+        first_review = client.post(f"/sessions/{session_id}/review")
+        assert first_review.status_code == 200
+        first_payload = first_review.json()
+        assert first_payload["reviewStatus"] == "awaiting_user"
+
+        answer = client.post(
+            f"/sessions/{session_id}/answer",
+            json={
+                "questionId": first_payload["agentQuestions"][0]["questionId"],
+                "answer": answer_text,
+            },
+        )
+        assert answer.status_code == 200
+        second_review = client.post(f"/sessions/{session_id}/review")
+        assert second_review.status_code == 200, (
+            "expected image-backed demo review to complete, "
+            f"got status={second_review.status_code} body={second_review.text}"
+        )
+        second_payload = second_review.json()
+        assert second_payload["reviewStatus"] == "completed"
+        assert second_payload["reviewResult"] is not None
+
+        state = client.get(f"/sessions/{session_id}")
+        assert state.status_code == 200
+        evidence = state.json()["state"]["evidence"]
+        assert len(evidence) == 1
+        assert evidence[0]["evidenceType"] == "image/png"
+        serialized = json.dumps(
+            {
+                "state": state.json(),
+                "review": second_payload,
+                "events": client.get(f"/sessions/{session_id}/events").json(),
+            },
+            sort_keys=True,
+        )
+        assert explanation in serialized
+        assert answer_text in serialized
+        assert "runtime_unavailable" not in serialized
+        assert "hardcoded" not in serialized.lower()
+
+
+def test_demo_deterministic_completed_review_retry_is_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application, _ = _migrated_app(tmp_path, monkeypatch)
+
+    with TestClient(application, raise_server_exceptions=False) as client:
+        session_id = _create_session(client, title="Demo deterministic completed retry")
+        _submit_text_evidence(
+            client,
+            session_id,
+            "Deterministic replay preserves the same native conversation identity.",
+        )
+
+        first_review = client.post(f"/sessions/{session_id}/review")
+        assert first_review.status_code == 200
+        question_id = first_review.json()["agentQuestions"][0]["questionId"]
+
+        answer = client.post(
+            f"/sessions/{session_id}/answer",
+            json={
+                "questionId": question_id,
+                "answer": "The same durable event log is replayed into the same conversation thread.",
+            },
+        )
+        assert answer.status_code == 200
+
+        completed_review = client.post(f"/sessions/{session_id}/review")
+        assert completed_review.status_code == 200
+        assert completed_review.json()["reviewStatus"] == "completed"
+        before_ids = _native_event_ids(application, session_id)
+
+        repeated_review = client.post(f"/sessions/{session_id}/review")
+        assert repeated_review.status_code == 200
+        assert repeated_review.json()["reviewStatus"] == "completed"
+
+        after_ids = _native_event_ids(application, session_id)
+        assert after_ids == before_ids
+
+        events = client.get(f"/sessions/{session_id}/events")
+        assert events.status_code == 200
+        event_types = [event["type"] for event in events.json()["events"]]
+        assert event_types.count("review.completed") == 1
+        assert event_types.count("score.calculated") == 1
+
+
+def test_demo_deterministic_image_restore_finishes_without_duplicate_media_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application_1, database_url = _migrated_app(tmp_path, monkeypatch, media_enabled=True)
+    explanation = "The uploaded PNG preserves the receipt-backed screenshot needed for deterministic image review."
+
+    with TestClient(application_1, raise_server_exceptions=False) as client:
+        session_id = _create_session(client, title="Demo deterministic image restart")
+        _submit_image_evidence(client, session_id, explanation=explanation)
+
+        first_review = client.post(f"/sessions/{session_id}/review")
+        assert first_review.status_code == 200
+        first_payload = first_review.json()
+        assert first_payload["reviewStatus"] == "awaiting_user"
+        conversation_id = first_payload["conversationId"]
+        question_id = first_payload["agentQuestions"][0]["questionId"]
+        before_ids = _native_event_ids(application_1, session_id)
+        assert _successful_media_observation_count(application_1, session_id) == 1
+
+    application_2 = create_app(database_url=database_url, data_dir=tmp_path)
+    with TestClient(application_2, raise_server_exceptions=False) as client:
+        answer = client.post(
+            f"/sessions/{session_id}/answer",
+            json={
+                "questionId": question_id,
+                "answer": "The restored conversation keeps the uploaded image evidence and prior verified visual facts before the final review draft is submitted.",
+            },
+        )
+        assert answer.status_code == 200
+
+        completed_review = client.post(f"/sessions/{session_id}/review")
+        assert completed_review.status_code == 200
+        completed_payload = completed_review.json()
+        assert completed_payload["reviewStatus"] == "completed"
+        assert completed_payload["conversationId"] == conversation_id
+
+        after_ids = _native_event_ids(application_2, session_id)
+        assert after_ids[: len(before_ids)] == before_ids
+        assert _successful_media_observation_count(application_2, session_id) == 1
+
+        native_keys = _native_message_keys(application_2, session_id)
+        assert native_keys.count(f"goal:{session_id}") == 1
+        assert sum(key.startswith("evidence:") for key in native_keys) == 1
+        assert sum(key.startswith("answer:") for key in native_keys) == 1
+
+        serialized = json.dumps(
+            {
+                "state": client.get(f"/sessions/{session_id}").json(),
+                "events": client.get(f"/sessions/{session_id}/events").json(),
+                "review": completed_payload,
+            },
+            sort_keys=True,
+        ).lower()
+        assert "data:image" not in serialized
+        assert "base64," not in serialized
+        assert "api_key" not in serialized
