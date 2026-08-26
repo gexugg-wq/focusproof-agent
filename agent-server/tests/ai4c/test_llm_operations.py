@@ -33,7 +33,7 @@ def complete_fake_dashscope_environment() -> dict[str, str]:
     return {
         "FOCUSPROOF_PROFILE": "staging",
         "FOCUSPROOF_LLM_PROVIDER": "openai-compatible",
-        "FOCUSPROOF_LLM_MODEL": "qwen-plus",
+        "FOCUSPROOF_LLM_MODEL": "openai/qwen-plus",
         "FOCUSPROOF_LLM_BASE_URL": (
             "https://dashscope.example.test/compatible-mode/v1"
         ),
@@ -169,6 +169,13 @@ def test_short_context_window_override_is_rejected() -> None:
         load_runtime_settings(values)
 
 
+def test_fake_dashscope_environment_uses_litellm_openai_provider_prefix() -> None:
+    values = complete_fake_dashscope_environment()
+
+    assert values["FOCUSPROOF_LLM_MODEL"] == "openai/qwen-plus"
+    assert fake_real_llm_policy().model == "openai/qwen-plus"
+
+
 def test_build_openhands_llm_uses_sdk_and_every_bound() -> None:
     policy = fake_real_llm_policy()
 
@@ -187,6 +194,67 @@ def test_build_openhands_llm_uses_sdk_and_every_bound() -> None:
     assert llm.stream is False
     assert llm.input_cost_per_token == policy.input_cost_per_token
     assert llm.output_cost_per_token == policy.output_cost_per_token
+
+
+def test_visual_capability_is_explicit_and_activates_official_sdk_image_content() -> None:
+    policy = fake_real_llm_policy(
+        FOCUSPROOF_LLM_MODEL="openai/focusproof-vision-probe",
+        FOCUSPROOF_LLM_SUPPORTS_VISION="true",
+    )
+
+    llm = build_openhands_llm(policy, usage_id="focusproof-vision-test")
+
+    assert policy.supports_vision is True
+    assert llm.disable_vision is False
+    assert llm.vision_is_active() is True
+
+
+def test_production_visual_capability_is_forced_closed_until_real_gate_certified() -> None:
+    values = complete_fake_dashscope_environment()
+    values["FOCUSPROOF_PROFILE"] = "production"
+    values["FOCUSPROOF_LLM_SUPPORTS_VISION"] = "true"
+    settings = load_runtime_settings(values)
+
+    assert settings.real_llm is not None
+    llm = build_openhands_llm(
+        settings.real_llm,
+        usage_id="focusproof-production-vision-gate-test",
+    )
+
+    assert settings.real_llm.supports_vision is False
+    assert llm.disable_vision is True
+    assert llm.vision_is_active() is False
+
+
+@pytest.mark.parametrize("profile", ["local-dev", "staging"])
+def test_non_production_profiles_preserve_explicit_visual_capability(
+    profile: str,
+) -> None:
+    values = complete_fake_dashscope_environment()
+    values["FOCUSPROOF_PROFILE"] = profile
+    values["FOCUSPROOF_LLM_SUPPORTS_VISION"] = "true"
+    settings = load_runtime_settings(values)
+
+    assert settings.real_llm is not None
+    llm = build_openhands_llm(
+        settings.real_llm,
+        usage_id=f"focusproof-{profile}-vision-regression-test",
+    )
+
+    assert settings.real_llm.supports_vision is True
+    assert llm.disable_vision is False
+
+
+def test_visual_capability_defaults_off_for_unclassified_models() -> None:
+    policy = fake_real_llm_policy(
+        FOCUSPROOF_LLM_MODEL="openai/focusproof-unclassified-probe",
+    )
+
+    llm = build_openhands_llm(policy, usage_id="focusproof-nonvision-test")
+
+    assert policy.supports_vision is False
+    assert llm.disable_vision is True
+    assert llm.vision_is_active() is False
 
 
 def test_llm_config_and_repr_do_not_expose_api_key() -> None:

@@ -1,5 +1,10 @@
 # OpenHands Conversation Core Integration
 
+> **Historical / Superseded.** This report describes an earlier fake/local runtime
+> experiment. It is not the current architecture and must not be used as implementation
+> guidance. The production path directly reuses the official OpenHands SDK and the
+> boundaries indexed in `docs/architecture/ARCHITECTURE.md`.
+
 ## 1. Goal
 
 This change promotes FocusProof review from a direct deterministic API loop into a Conversation-backed runtime shape. The official `POST /sessions/{session_id}/review` path now runs through `FocusProofLearningConversation`, which projects user messages, action-like decisions, tool observations, and final review events into the FocusProof audit ledger.

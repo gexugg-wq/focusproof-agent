@@ -1,6 +1,12 @@
 # FocusProof Agent Documentation
 
-当前基线：AI4B 已在提交 `bf5c9a8` 通过 AI0 验收，文本/URL 通用学习验证 MVP、OpenHands 原生运行时、持久化、前端、质量与安全基线均已完成。下一阶段是 AI4C.0 Production Readiness 设计门禁，先定义正式身份、真实 LLM 运行和可复现部署边界；多模态输入属于后续 AI5，不在 AI4C 范围内。
+当前权威基线（2026-08-26）：AI4C 工程与 AI5 图片基础/运行验收已完成；
+AI5.8 独立审计经三轮修复后由 Round 3 独立复验接受。图片与 Monad 能力均
+默认关闭、可拆卸；真实视觉 Provider 默认关闭，公开生产部署、托管 OIDC、
+外部长期运维/SLO 尚未授权；音频/PDF/OCR/ASR 尚未实现。AI6 multimodal
+expansion requires separate AI0 approval。
+当前架构与 P1 修复边界见 `architecture/ARCHITECTURE.md` 和
+`research/GENERAL_CORE_P1_REPAIR_REPORT.md`；旧 fake/local runtime 报告仅作历史记录。
 
 本目录按职责分类管理：
 

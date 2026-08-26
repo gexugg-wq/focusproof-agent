@@ -242,7 +242,7 @@ describe("error recovery", () => {
         />
       )
     );
-    const input = screen.getByLabelText(/learning notes/i);
+    const input = screen.getByLabelText(/learning evidence/i);
     await userEvent.type(input, "Keep this evidence after failure.");
 
     await userEvent.click(screen.getByRole("button", { name: /submit evidence/i }));

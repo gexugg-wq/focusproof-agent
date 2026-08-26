@@ -1,9 +1,12 @@
+import gc
 import json
+from collections.abc import Iterator
 
 import pytest
 from openhands.sdk.llm import Message, MessageToolCall, TextContent
 from openhands.sdk.testing import TestLLM
 
+from focusproof.openhands_runtime.tool_registry import release_repository_provider
 from focusproof.runtime.evidence import Evidence, LearningGoal
 
 
@@ -16,6 +19,17 @@ class SessionRepository:
 
     def get_evidence(self, session_id: str, evidence_id: str) -> Evidence:
         return self.evidence[(session_id, evidence_id)]
+
+
+@pytest.fixture(autouse=True)
+def isolate_openhands_runtime_lifecycle() -> Iterator[None]:
+    release_repository_provider()
+    gc.collect()
+    try:
+        yield
+    finally:
+        release_repository_provider()
+        gc.collect()
 
 
 @pytest.fixture

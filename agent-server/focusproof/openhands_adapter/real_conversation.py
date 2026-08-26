@@ -1,3 +1,9 @@
+"""Authorized debug/gate-only OpenHands conversation probe.
+
+This module is not a production runtime or manager. Production application imports must
+remain unreachable from this module; the official path is ``openhands_runtime.manager``.
+"""
+
 from __future__ import annotations
 
 import json

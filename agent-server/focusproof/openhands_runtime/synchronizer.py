@@ -1,17 +1,24 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 from openhands.sdk.event import MessageEvent
 from openhands.sdk.llm import TextContent
 
 from focusproof.openhands_runtime.evidence_messages import (
+    FocusProofMessageEnvelope,
     TEXT_EVIDENCE_CONTEXT_VERSION,
     runtime_evidence_payload,
 )
 from focusproof.openhands_runtime.handle import ConversationHandle
+from focusproof.openhands_runtime.runtime_evidence_message_factory import (
+    MessageKind,
+    RuntimeMediaContentProvider,
+    build_runtime_evidence_message,
+    serialize_message_envelope,
+    is_media_evidence_record,
+)
 from focusproof.persistence.repositories import (
     StoredAnswer,
     StoredEvidence,
@@ -19,7 +26,7 @@ from focusproof.persistence.repositories import (
 )
 from focusproof.persistence.unit_of_work import UnitOfWorkFactoryLike
 
-MessageKind = Literal["goal", "evidence", "evidence_context", "answer"]
+__all__ = ("serialize_message_envelope",)
 
 
 @dataclass(frozen=True)
@@ -39,8 +46,13 @@ class _PendingMessage:
 
 
 class ConversationSynchronizer:
-    def __init__(self, uow_factory: UnitOfWorkFactoryLike) -> None:
+    def __init__(
+        self,
+        uow_factory: UnitOfWorkFactoryLike,
+        media_content_provider: RuntimeMediaContentProvider | None = None,
+    ) -> None:
         self._uow_factory = uow_factory
+        self._media_content_provider = media_content_provider
 
     def sync(
         self,
@@ -62,23 +74,33 @@ class ConversationSynchronizer:
         existing_keys = set(existing_envelopes)
         sent_count = 0
         confirmed_count = 0
-        for pending in _pending_messages(
-            session,
-            evidence,
-            answers,
-            existing_envelopes,
-        ):
-            if pending.key not in existing_keys:
-                serialized = serialize_message_envelope(
-                    schema_version=1,
+        evidence_by_id = {item.evidence_id: item for item in evidence}
+        prepared: list[tuple[_PendingMessage, str | None]] = []
+        for pending in _pending_messages(session, evidence, answers, existing_envelopes):
+            if pending.key in existing_keys:
+                prepared.append((pending, None))
+                continue
+            record = evidence_by_id.get(pending.evidence_id or "")
+            try:
+                message = build_runtime_evidence_message(
+                    self._media_content_provider,
+                    verified_user_id=verified_user_id,
+                    session_id=session.session_id,
                     message_key=pending.key,
                     kind=pending.kind,
-                    session_id=session.session_id,
                     payload=pending.payload,
+                    record=record,
                 )
+            except Exception:
+                if not is_media_evidence_record(record):
+                    raise
+                continue
+            prepared.append((pending, message))
+
+        for pending, prepared_message in prepared:
+            if prepared_message is not None:
                 cast(Any, handle.conversation).send_message(
-                    serialized,
-                    sender=verified_user_id,
+                    prepared_message, sender=verified_user_id
                 )
                 existing_keys.add(pending.key)
                 sent_count += 1
@@ -121,27 +143,6 @@ class ConversationSynchronizer:
             uow.commit()
 
 
-def serialize_message_envelope(
-    *,
-    schema_version: int,
-    message_key: str,
-    kind: MessageKind,
-    session_id: str,
-    payload: dict[str, object],
-) -> str:
-    return json.dumps(
-        {
-            "schema_version": schema_version,
-            "message_key": message_key,
-            "kind": kind,
-            "session_id": session_id,
-            "payload": payload,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-
 def message_key_from_event(event: MessageEvent) -> str | None:
     envelope = message_envelope_from_event(event)
     if envelope is None:
@@ -154,17 +155,13 @@ def message_envelope_from_event(event: MessageEvent) -> dict[str, Any] | None:
     if event.source != "user":
         return None
     text = "".join(
-        content.text
-        for content in event.llm_message.content
-        if isinstance(content, TextContent)
+        content.text for content in event.llm_message.content if isinstance(content, TextContent)
     )
     try:
-        envelope = json.loads(text)
-    except (json.JSONDecodeError, TypeError):
+        envelope = FocusProofMessageEnvelope.model_validate_json(text)
+    except ValueError:
         return None
-    if not isinstance(envelope, dict) or envelope.get("schema_version") != 1:
-        return None
-    return envelope
+    return envelope.model_dump(mode="json")
 
 
 def _pending_messages(
@@ -211,10 +208,7 @@ def _pending_messages(
         existing = existing_envelopes.get(evidence_key)
         if existing is None or _has_text_context(existing):
             continue
-        context_key = (
-            f"evidence-context:{record.evidence_id}:"
-            f"v{TEXT_EVIDENCE_CONTEXT_VERSION}"
-        )
+        context_key = f"evidence-context:{record.evidence_id}:v{TEXT_EVIDENCE_CONTEXT_VERSION}"
         if context_key in existing_envelopes:
             continue
         context_payload = runtime_evidence_payload(
@@ -234,9 +228,7 @@ def _pending_messages(
         )
     pending.extend(
         _PendingMessage(
-            key=(
-                f"answer:{record.session_id}:{record.question_id}:{record.version}"
-            ),
+            key=(f"answer:{record.session_id}:{record.question_id}:{record.version}"),
             kind="answer",
             payload={
                 "questionId": record.question_id,

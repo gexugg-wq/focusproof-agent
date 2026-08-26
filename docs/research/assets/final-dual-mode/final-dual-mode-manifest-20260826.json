@@ -1,0 +1,70 @@
+{
+  "bundle": "final_dual_mode_acceptance",
+  "generatedAt": "2026-08-26T06:14:14.099862+00:00",
+  "liveClamdReport": {
+    "cases": [
+      {
+        "finalized": true,
+        "name": "benign_png",
+        "outcome": "clean",
+        "rejectionCode": null
+      },
+      {
+        "finalized": false,
+        "name": "eicar",
+        "outcome": "malicious",
+        "rejectionCode": "malware_signature_detected"
+      },
+      {
+        "finalized": false,
+        "name": "error",
+        "outcome": "error",
+        "rejectionCode": "daemon_error"
+      },
+      {
+        "finalized": false,
+        "name": "timeout",
+        "outcome": "timeout",
+        "rejectionCode": "deadline_exceeded"
+      },
+      {
+        "finalized": false,
+        "name": "unavailable",
+        "outcome": "unavailable",
+        "rejectionCode": "daemon_unavailable"
+      }
+    ],
+    "liveClamdExecuted": true,
+    "path": "docs/research/assets/final-dual-mode/live-clamd-20260826.json",
+    "productionMalwareScanningVerified": true,
+    "sha256": "8fabfd1b1f8ec7a46ee7a7900bdb9565128c7b512659834a8c63ca96a4dac8ba",
+    "sidecarPath": "",
+    "sidecarVerified": false
+  },
+  "schemaVersion": "1.0",
+  "status": "PASS",
+  "visualReport": {
+    "completionSucceeded": true,
+    "mediaObservation": {
+      "capability": "image",
+      "observationClass": "VerificationObservation",
+      "status": "success",
+      "toolName": "focusproof_media_evidence_verification",
+      "visualFactsCount": 8
+    },
+    "model": "qwen3.7-plus",
+    "nativeEvents": {
+      "actionCount": 2,
+      "observationCount": 2
+    },
+    "path": "docs/research/assets/final-dual-mode/real-vision-clamd-20260826.json",
+    "provider": "openai",
+    "providerAttempted": true,
+    "responseReceived": true,
+    "reviewStatus": "completed",
+    "sha256": "854a3437e80c95270c644313a86b9e5cf0d75317dca1ea18e0641dc740d19d01",
+    "sidecarPath": "docs/research/assets/final-dual-mode/real-vision-clamd-20260826.json.sha256",
+    "sidecarVerified": true,
+    "visualFactsCount": 8
+  }
+}

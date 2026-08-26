@@ -54,6 +54,10 @@ class RuntimeUnavailableError(RuntimeError):
     """Raised when production LLM configuration is unavailable."""
 
 
+class ProviderInfrastructureUnavailableError(RuntimeUnavailableError):
+    """Raised when a provider attempt failed for retryable infrastructure reasons."""
+
+
 class RuntimeCreationError(RuntimeError):
     """Raised when the SDK cannot create the required local runtime."""
 

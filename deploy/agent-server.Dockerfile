@@ -1,4 +1,4 @@
-FROM python:3.12-slim-bookworm@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d
+FROM python:3.12-slim-bookworm@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d AS runtime
 
 ARG SOURCE_DATE_EPOCH=1735689600
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -46,3 +46,11 @@ USER focusproof
 EXPOSE 8000
 
 CMD ["uvicorn", "focusproof.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+
+FROM runtime AS core
+ENV FOCUSPROOF_MEDIA_ENABLED=false
+
+FROM runtime AS media
+ENV FOCUSPROOF_MEDIA_ENABLED=true
+
+FROM core AS final

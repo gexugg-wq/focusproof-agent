@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from typing import Any, Protocol, cast
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, Protocol, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import CursorResult, delete, func, select, update
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from focusproof.persistence.models import (
     AuditEventModel,
@@ -16,11 +17,636 @@ from focusproof.persistence.models import (
     ReviewModel,
     SecurityAuditEventModel,
     VerifiedPrincipalModel,
+    MediaArtifactModel,
+    MediaCleanReceiptModel,
+    MediaIngestionReservationModel,
+    MediaScanAttemptModel,
 )
 from focusproof.runtime.security_audit import (
     SecurityAuditOutcome,
     SecurityAuditReasonCategory,
 )
+
+if TYPE_CHECKING:
+    from focusproof.media_core.models import (
+        FinalizeMediaOutcome,
+        FinalizeMediaRequest,
+        IngestedEvidenceResult,
+        MediaLease,
+        MediaReferenceIntent,
+        MediaReservationRequest,
+        StagedMediaObject,
+    )
+
+
+class IdempotencyConflictError(ValueError):
+    pass
+
+
+class MediaQuotaExceededError(ValueError):
+    pass
+
+
+class MediaAuthorizationError(ValueError):
+    pass
+
+
+class MediaLeaseStateError(ValueError):
+    pass
+
+
+class SqlMediaTransactionRepository:
+    def __init__(
+        self,
+        session: Session,
+        *,
+        max_items: int = 4,
+        max_distinct_bytes: int = 20 * 1024 * 1024,
+        lease_seconds: int = 900,
+    ) -> None:
+        self._session = session
+        self._max_items = max_items
+        self._max_distinct_bytes = max_distinct_bytes
+        self._lease_seconds = lease_seconds
+
+    def reserve(self, request: MediaReservationRequest) -> MediaLease:
+        self._lock_owned_session(request.owner_id, request.session_id)
+        now = datetime.now(UTC)
+        expired = self._session.scalars(
+            select(MediaIngestionReservationModel).where(
+                MediaIngestionReservationModel.owner_id == request.owner_id,
+                MediaIngestionReservationModel.session_id == request.session_id,
+                MediaIngestionReservationModel.status == "ACTIVE",
+                MediaIngestionReservationModel.expires_at <= now,
+            )
+        )
+        for reservation in expired:
+            self._transition_reservation(reservation, "EXPIRED", now)
+        existing = self._find_reservation(
+            request.owner_id, request.session_id, request.idempotency_key
+        )
+        if existing is not None:
+            self._check_fingerprint(existing, request.fingerprint)
+            if existing.status in {"ACTIVE", "PENDING_REFERENCE"}:
+                return self._lease(existing)
+            raise MediaLeaseStateError("idempotency key is terminal")
+        visible = self._evidence_count(request.session_id)
+        occupied = list(
+            self._session.scalars(
+                select(MediaIngestionReservationModel).where(
+                    MediaIngestionReservationModel.session_id == request.session_id,
+                    MediaIngestionReservationModel.status.in_(("ACTIVE", "PENDING_REFERENCE")),
+                )
+            )
+        )
+        if visible + len(occupied) + 1 > self._max_items:
+            raise MediaQuotaExceededError("media item quota exceeded")
+        used_slots = {item.slot for item in occupied}
+        slot = next(index for index in range(self._max_items) if index not in used_slots)
+        reservation = MediaIngestionReservationModel(
+            reservation_id=f"res_{uuid4().hex}",
+            media_item_id=f"media_{uuid4().hex}",
+            owner_id=request.owner_id,
+            session_id=request.session_id,
+            idempotency_key=request.idempotency_key,
+            fingerprint=request.fingerprint,
+            slot=slot,
+            status="ACTIVE",
+            active=True,
+            expires_at=now + timedelta(seconds=self._lease_seconds),
+            created_at=now,
+            updated_at=now,
+        )
+        try:
+            with self._session.begin_nested():
+                self._session.add(reservation)
+                self._session.flush()
+            return self._lease(reservation)
+        except IntegrityError:
+            existing = self._find_reservation(
+                request.owner_id,
+                request.session_id,
+                request.idempotency_key,
+            )
+            if existing is not None:
+                self._check_fingerprint(existing, request.fingerprint)
+                if existing.status in {"ACTIVE", "PENDING_REFERENCE"}:
+                    return self._lease(existing)
+            raise
+
+    def find_idempotent_outcome(
+        self,
+        owner_id: str,
+        session_id: str,
+        idempotency_key: str,
+        fingerprint: str,
+    ) -> FinalizeMediaOutcome | None:
+        self._lock_owned_session(owner_id, session_id)
+        reservation = self._find_reservation(owner_id, session_id, idempotency_key)
+        if reservation is None:
+            return None
+        self._check_fingerprint(reservation, fingerprint)
+        return self._replay_locked_reservation(reservation)
+
+    def _replay_locked_reservation(
+        self,
+        reservation: MediaIngestionReservationModel,
+    ) -> FinalizeMediaOutcome | None:
+        if reservation.status == "PENDING_REFERENCE":
+            artifact = self._require_artifact(reservation)
+            if reservation.intent_action == "ABORT_STAGED" and artifact.state == "REFERENCED":
+                self._complete_reservation(reservation, artifact, mode="FOLLOWER")
+                return self._outcome(reservation, "NOOP", True)
+            return self._outcome(reservation)
+        if reservation.status == "COMPLETED":
+            action = "ABORT_STAGED" if reservation.completion_mode == "DIRECT_REUSE" else "NOOP"
+            return self._outcome(reservation, action, True)
+        return None
+
+    def finalize(self, request: FinalizeMediaRequest) -> FinalizeMediaOutcome:
+        self._lock_owned_session(request.lease.owner_id, request.lease.session_id)
+        reservation = self._session.scalar(
+            select(MediaIngestionReservationModel)
+            .where(MediaIngestionReservationModel.reservation_id == request.lease.reservation_id)
+            .with_for_update()
+        )
+        if reservation is None:
+            raise MediaLeaseStateError("media lease is not active")
+        self._check_lease(reservation, request.lease)
+        self._check_staged_identity(reservation, request)
+        if reservation.status != "ACTIVE":
+            if reservation.status in {"PENDING_REFERENCE", "COMPLETED"}:
+                outcome = self._replay_locked_reservation(reservation)
+                if outcome is not None:
+                    if (
+                        reservation.status == "PENDING_REFERENCE"
+                        and outcome.reference_intent.action == "MARK_REFERENCED"
+                    ):
+                        from focusproof.media_core.models import (
+                            FinalizeMediaOutcome,
+                            MediaReferenceIntent,
+                            StagedMediaObject,
+                        )
+
+                        return FinalizeMediaOutcome(
+                            result=outcome.result,
+                            reference_intent=MediaReferenceIntent(
+                                staged=StagedMediaObject(
+                                    media_item_id=request.staged_media_item_id,
+                                    reservation_id=request.lease.reservation_id,
+                                    opaque_object_key=request.opaque_object_key,
+                                    manifest_id=request.manifest_id,
+                                ),
+                                action="ABORT_STAGED",
+                            ),
+                            evidence_visible=False,
+                        )
+                    return outcome
+            raise MediaLeaseStateError("media lease is not active")
+        if self._is_expired(reservation.expires_at):
+            raise MediaLeaseStateError("media lease expired")
+        if (
+            self._evidence_count(reservation.session_id)
+            + self._pending_count(reservation.session_id)
+            > self._max_items
+        ):
+            raise MediaQuotaExceededError("media item quota exceeded")
+
+        artifact = self._find_artifact(reservation.owner_id, request.normalized_sha256)
+        if artifact is not None:
+            self._check_canonical(artifact, request)
+            self._check_distinct_quota(
+                reservation.session_id, artifact, request.normalized_byte_size
+            )
+            self._store_pending_facts(reservation, artifact, request)
+            if artifact.state == "REFERENCED":
+                reservation.intent_action = "ABORT_STAGED"
+                self._complete_reservation(reservation, artifact, mode="DIRECT_REUSE")
+                return self._outcome(reservation, "ABORT_STAGED", True)
+            reservation.intent_action = "ABORT_STAGED"
+            self._transition_reservation(reservation, "PENDING_REFERENCE")
+            self._session.flush()
+            return self._outcome(reservation)
+
+        self._check_distinct_quota(reservation.session_id, None, request.normalized_byte_size)
+        now = datetime.now(UTC)
+        candidate = MediaArtifactModel(
+            media_item_id=request.staged_media_item_id,
+            owner_id=reservation.owner_id,
+            creator_reservation_id=reservation.reservation_id,
+            opaque_object_key=request.opaque_object_key,
+            manifest_id=request.manifest_id,
+            media_type=request.media_type,
+            normalized_sha256=request.normalized_sha256,
+            normalized_byte_size=request.normalized_byte_size,
+            state="PENDING_REFERENCE",
+            created_at=now,
+        )
+        try:
+            with self._session.begin_nested():
+                self._session.add(candidate)
+                self._session.flush()
+            artifact = candidate
+            action = "MARK_REFERENCED"
+        except IntegrityError:
+            artifact = self._find_artifact(reservation.owner_id, request.normalized_sha256)
+            if artifact is None:
+                raise
+            self._check_canonical(artifact, request)
+            action = "ABORT_STAGED"
+        self._store_pending_facts(reservation, artifact, request)
+        if artifact.state == "REFERENCED":
+            reservation.intent_action = "ABORT_STAGED"
+            self._complete_reservation(reservation, artifact, mode="DIRECT_REUSE")
+            return self._outcome(reservation, "ABORT_STAGED", True)
+        reservation.intent_action = action
+        self._transition_reservation(reservation, "PENDING_REFERENCE", now)
+        self._session.flush()
+        return self._outcome(reservation)
+
+    def confirm_reference(self, intent: MediaReferenceIntent) -> IngestedEvidenceResult:
+        identity = self._session.execute(
+            select(
+                MediaIngestionReservationModel.owner_id,
+                MediaIngestionReservationModel.session_id,
+            ).where(
+                MediaIngestionReservationModel.reservation_id == intent.staged.reservation_id
+            )
+        ).one_or_none()
+        if identity is None:
+            raise MediaLeaseStateError("media reference intent is unavailable")
+        owner_id, session_id = identity
+        self._lock_owned_session(owner_id, session_id)
+        reservation = self._session.scalar(
+            select(MediaIngestionReservationModel)
+            .where(MediaIngestionReservationModel.reservation_id == intent.staged.reservation_id)
+            .with_for_update()
+        )
+        if reservation is None:
+            raise MediaLeaseStateError("media reference intent is unavailable")
+        if reservation.owner_id != owner_id or reservation.session_id != session_id:
+            raise MediaLeaseStateError("media reference intent identity changed")
+        if (
+            reservation.intent_action != "MARK_REFERENCED"
+            or self._staged(reservation) != intent.staged
+            or intent.action != "MARK_REFERENCED"
+        ):
+            raise MediaLeaseStateError("media reference intent does not match")
+        if reservation.status == "COMPLETED":
+            return self._result(reservation.result_json)
+        if reservation.status != "PENDING_REFERENCE":
+            raise MediaLeaseStateError("media reference intent is not pending")
+        artifact = self._session.scalar(
+            select(MediaArtifactModel)
+            .where(MediaArtifactModel.media_item_id == reservation.canonical_artifact_id)
+            .with_for_update()
+        )
+        if artifact is None or artifact.state not in {
+            "PENDING_REFERENCE",
+            "REFERENCED",
+        }:
+            raise MediaLeaseStateError("media artifact is unavailable")
+        self._transition_artifact(artifact, "REFERENCED")
+        self._complete_reservation(reservation, artifact, mode="ADOPTED")
+        self._session.flush()
+        return self._result(reservation.result_json)
+
+    def list_pending_reference_outcomes(self, limit: int) -> tuple[FinalizeMediaOutcome, ...]:
+        if limit < 1 or limit > 100:
+            raise ValueError("pending reference limit must be between 1 and 100")
+        reservations = self._session.scalars(
+            select(MediaIngestionReservationModel)
+            .where(
+                MediaIngestionReservationModel.status == "PENDING_REFERENCE",
+                MediaIngestionReservationModel.intent_action == "MARK_REFERENCED",
+            )
+            .order_by(
+                MediaIngestionReservationModel.created_at,
+                MediaIngestionReservationModel.reservation_id,
+            )
+            .limit(limit)
+        )
+        return tuple(self._outcome(item) for item in reservations)
+
+    def reject(self, lease: MediaLease, reason: str) -> None:
+        self._lock_owned_session(lease.owner_id, lease.session_id)
+        reservation = self._session.scalar(
+            select(MediaIngestionReservationModel)
+            .where(MediaIngestionReservationModel.reservation_id == lease.reservation_id)
+            .with_for_update()
+        )
+        if reservation is None:
+            return
+        self._check_lease(reservation, lease)
+        if reservation.status != "ACTIVE":
+            return
+        now = datetime.now(UTC)
+        status = "EXPIRED" if self._is_expired(reservation.expires_at) else "REJECTED"
+        self._transition_reservation(reservation, status, now)
+        reservation.rejection_reason = reason[:128]
+
+    def _complete_reservation(
+        self,
+        reservation: MediaIngestionReservationModel,
+        artifact: MediaArtifactModel,
+        *,
+        mode: str,
+    ) -> None:
+        if reservation.status == "COMPLETED":
+            return
+        self._transition_reservation(reservation, "COMPLETED")
+        reservation.completion_mode = mode
+        evidence = self._session.get(EvidenceModel, reservation.evidence_id)
+        if evidence is None:
+            result = self._result(reservation.result_json)
+            self._session.add(
+                EvidenceModel(
+                    evidence_id=result.evidence_id,
+                    session_id=reservation.session_id,
+                    evidence_type=result.media_type,
+                    content_hash=result.normalized_sha256,
+                    text_content=result.learner_explanation,
+                    source_url=None,
+                    metadata_json=dict(result.attributes),
+                    artifact_id=artifact.media_item_id,
+                    created_at=datetime.now(UTC),
+                )
+            )
+        self._session.flush()
+
+    @staticmethod
+    def _transition_reservation(
+        reservation: MediaIngestionReservationModel,
+        status: str,
+        now: datetime | None = None,
+    ) -> None:
+        allowed = {
+            "ACTIVE": {"PENDING_REFERENCE", "COMPLETED", "REJECTED", "EXPIRED"},
+            "PENDING_REFERENCE": {"COMPLETED"},
+        }
+        if status not in allowed.get(reservation.status, set()):
+            raise MediaLeaseStateError("invalid media reservation transition")
+        reservation.status = status
+        reservation.active = True if status == "PENDING_REFERENCE" else None
+        reservation.updated_at = now or datetime.now(UTC)
+
+    @staticmethod
+    def _transition_artifact(artifact: MediaArtifactModel, state: str) -> None:
+        if artifact.state == state:
+            return
+        if artifact.state != "PENDING_REFERENCE" or state != "REFERENCED":
+            raise MediaLeaseStateError("invalid media artifact transition")
+        artifact.state = state
+
+    def _store_pending_facts(
+        self,
+        reservation: MediaIngestionReservationModel,
+        artifact: MediaArtifactModel,
+        request: FinalizeMediaRequest,
+    ) -> None:
+        from focusproof.media_core.models import IngestedEvidenceResult
+
+        evidence_id = reservation.evidence_id or f"ev_{uuid4().hex}"
+        result = IngestedEvidenceResult(
+            evidence_id=evidence_id,
+            media_item_id=artifact.media_item_id,
+            artifact_ref=f"focusproof-artifact://{artifact.media_item_id}",
+            media_type=artifact.media_type,
+            normalized_sha256=artifact.normalized_sha256,
+            byte_size=artifact.normalized_byte_size,
+            learner_explanation=request.learner_explanation,
+            attributes=request.attributes,
+        )
+        reservation.canonical_artifact_id = artifact.media_item_id
+        reservation.evidence_id = evidence_id
+        reservation.staged_object_key = request.opaque_object_key
+        reservation.staged_manifest_id = request.manifest_id
+        reservation.media_type = request.media_type
+        reservation.normalized_sha256 = request.normalized_sha256
+        reservation.normalized_byte_size = request.normalized_byte_size
+        reservation.learner_explanation = request.learner_explanation
+        reservation.attributes_json = dict(request.attributes)
+        reservation.result_json = self._result_json(result)
+
+    def _check_distinct_quota(
+        self,
+        session_id: str,
+        artifact: MediaArtifactModel | None,
+        new_size: int,
+    ) -> None:
+        artifact_ids = set(
+            self._session.scalars(
+                select(EvidenceModel.artifact_id).where(
+                    EvidenceModel.session_id == session_id,
+                    EvidenceModel.artifact_id.is_not(None),
+                )
+            )
+        )
+        artifact_ids.update(
+            item
+            for item in self._session.scalars(
+                select(MediaIngestionReservationModel.canonical_artifact_id).where(
+                    MediaIngestionReservationModel.session_id == session_id,
+                    MediaIngestionReservationModel.status == "PENDING_REFERENCE",
+                    MediaIngestionReservationModel.canonical_artifact_id.is_not(None),
+                )
+            )
+            if item is not None
+        )
+        used = 0
+        if artifact_ids:
+            used = int(
+                self._session.scalar(
+                    select(
+                        func.coalesce(func.sum(MediaArtifactModel.normalized_byte_size), 0)
+                    ).where(MediaArtifactModel.media_item_id.in_(artifact_ids))
+                )
+                or 0
+            )
+        candidate_id = artifact.media_item_id if artifact is not None else None
+        delta = (
+            0
+            if candidate_id in artifact_ids
+            else (artifact.normalized_byte_size if artifact is not None else new_size)
+        )
+        if used + delta > self._max_distinct_bytes:
+            raise MediaQuotaExceededError("distinct media byte quota exceeded")
+
+    def _outcome(
+        self,
+        reservation: MediaIngestionReservationModel,
+        action: str | None = None,
+        visible: bool | None = None,
+    ) -> FinalizeMediaOutcome:
+        from focusproof.media_core.models import FinalizeMediaOutcome, MediaReferenceIntent
+
+        actual_action = cast(Any, action or reservation.intent_action)
+        if actual_action not in {"MARK_REFERENCED", "ABORT_STAGED", "NOOP"}:
+            raise MediaLeaseStateError("media reference intent is unavailable")
+        return FinalizeMediaOutcome(
+            result=self._result(reservation.result_json),
+            reference_intent=MediaReferenceIntent(
+                staged=self._staged(reservation),
+                action=actual_action,
+            ),
+            evidence_visible=(reservation.status == "COMPLETED" if visible is None else visible),
+        )
+
+    @staticmethod
+    def _staged(
+        reservation: MediaIngestionReservationModel,
+    ) -> StagedMediaObject:
+        from focusproof.media_core.models import StagedMediaObject
+
+        if reservation.staged_object_key is None or reservation.staged_manifest_id is None:
+            raise MediaLeaseStateError("staged media intent is unavailable")
+        return StagedMediaObject(
+            media_item_id=reservation.media_item_id,
+            reservation_id=reservation.reservation_id,
+            opaque_object_key=reservation.staged_object_key,
+            manifest_id=reservation.staged_manifest_id,
+        )
+
+    def _find_reservation(
+        self, owner_id: str, session_id: str, idempotency_key: str
+    ) -> MediaIngestionReservationModel | None:
+        return self._session.scalar(
+            select(MediaIngestionReservationModel)
+            .where(
+                MediaIngestionReservationModel.owner_id == owner_id,
+                MediaIngestionReservationModel.session_id == session_id,
+                MediaIngestionReservationModel.idempotency_key == idempotency_key,
+            )
+            .with_for_update()
+        )
+
+    def _find_artifact(self, owner_id: str, normalized_sha256: str) -> MediaArtifactModel | None:
+        return self._session.scalar(
+            select(MediaArtifactModel).where(
+                MediaArtifactModel.owner_id == owner_id,
+                MediaArtifactModel.normalized_sha256 == normalized_sha256,
+            ).with_for_update()
+        )
+
+    def _require_artifact(self, reservation: MediaIngestionReservationModel) -> MediaArtifactModel:
+        artifact = self._session.scalar(
+            select(MediaArtifactModel)
+            .where(MediaArtifactModel.media_item_id == reservation.canonical_artifact_id)
+            .with_for_update()
+        )
+        if artifact is None:
+            raise MediaLeaseStateError("canonical media artifact is unavailable")
+        return artifact
+
+    def _lock_owned_session(self, owner_id: str, session_id: str) -> LearningSessionModel:
+        bind = self._session.get_bind()
+        if bind.dialect.name == "sqlite":
+            result = cast(
+                CursorResult[Any],
+                self._session.execute(
+                    update(LearningSessionModel)
+                    .where(LearningSessionModel.session_id == session_id)
+                    .values(updated_at=LearningSessionModel.updated_at)
+                ),
+            )
+            if result.rowcount != 1:
+                raise MediaAuthorizationError("media session is unavailable")
+        locked = _lock_learning_session(self._session, session_id)
+        if locked is None or locked.owner_user_id != owner_id:
+            raise MediaAuthorizationError("media session is unavailable")
+        return locked
+
+    def _evidence_count(self, session_id: str) -> int:
+        return int(
+            self._session.scalar(
+                select(func.count(EvidenceModel.evidence_id)).where(
+                    EvidenceModel.session_id == session_id,
+                    EvidenceModel.artifact_id.is_not(None),
+                )
+            )
+            or 0
+        )
+
+    def _pending_count(self, session_id: str) -> int:
+        return int(
+            self._session.scalar(
+                select(func.count(MediaIngestionReservationModel.reservation_id)).where(
+                    MediaIngestionReservationModel.session_id == session_id,
+                    MediaIngestionReservationModel.status.in_(("ACTIVE", "PENDING_REFERENCE")),
+                )
+            )
+            or 0
+        )
+
+    @staticmethod
+    def _check_fingerprint(reservation: MediaIngestionReservationModel, fingerprint: str) -> None:
+        if reservation.fingerprint != fingerprint:
+            raise IdempotencyConflictError("idempotency fingerprint conflict")
+
+    def _check_lease(self, reservation: MediaIngestionReservationModel, lease: MediaLease) -> None:
+        if self._lease(reservation) != lease:
+            raise MediaLeaseStateError("media lease does not match")
+
+    @staticmethod
+    def _check_staged_identity(
+        reservation: MediaIngestionReservationModel,
+        request: FinalizeMediaRequest,
+    ) -> None:
+        if not (
+            request.staged_media_item_id
+            == request.lease.media_item_id
+            == reservation.media_item_id
+        ):
+            raise MediaLeaseStateError("staged media item does not match lease")
+
+    @staticmethod
+    def _check_canonical(artifact: MediaArtifactModel, request: FinalizeMediaRequest) -> None:
+        if (
+            artifact.media_type != request.media_type
+            or artifact.normalized_byte_size != request.normalized_byte_size
+        ):
+            raise MediaLeaseStateError("canonical media facts conflict")
+
+    @staticmethod
+    def _is_expired(value: datetime) -> bool:
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return value <= datetime.now(UTC)
+
+    @staticmethod
+    def _lease(model: MediaIngestionReservationModel) -> MediaLease:
+        from focusproof.media_core.models import MediaLease
+
+        return MediaLease(
+            model.reservation_id,
+            model.media_item_id,
+            model.owner_id,
+            model.session_id,
+            model.slot,
+            model.idempotency_key,
+            model.fingerprint,
+        )
+
+    @staticmethod
+    def _result_json(result: IngestedEvidenceResult) -> dict[str, Any]:
+        return {
+            "evidence_id": result.evidence_id,
+            "media_item_id": result.media_item_id,
+            "artifact_ref": result.artifact_ref,
+            "media_type": result.media_type,
+            "normalized_sha256": result.normalized_sha256,
+            "byte_size": result.byte_size,
+            "learner_explanation": result.learner_explanation,
+            "attributes": dict(result.attributes),
+        }
+
+    @staticmethod
+    def _result(value: dict[str, Any] | None) -> IngestedEvidenceResult:
+        from focusproof.media_core.models import IngestedEvidenceResult
+
+        if value is None:
+            raise MediaLeaseStateError("media result is unavailable")
+        return IngestedEvidenceResult(**value)
 
 
 class StoredModel(BaseModel):
@@ -110,15 +736,28 @@ class StoredSecurityAuditEvent(StoredModel):
     occurred_at: datetime
 
 
+class MediaMessageArtifactFacts(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    evidence_id: str
+    receipt_id: str
+    attempt_id: str
+    scan_result: str
+    artifact_ref: str
+    artifact_sha256: str
+    opaque_object_key: str
+    media_type: str
+    normalized_sha256: str
+    byte_size: int
+    width: int
+    height: int
+
+
 class SessionRepository(Protocol):
     def create(self, record: StoredSession) -> StoredSession: ...
     def get(self, session_id: str) -> StoredSession | None: ...
-    def get_owned(
-        self, session_id: str, owner_user_id: str
-    ) -> StoredSession | None: ...
-    def update_status(
-        self, session_id: str, status: str, *, expected_version: int
-    ) -> bool: ...
+    def get_owned(self, session_id: str, owner_user_id: str) -> StoredSession | None: ...
+    def update_status(self, session_id: str, status: str, *, expected_version: int) -> bool: ...
     def set_conversation(
         self, session_id: str, conversation_id: str, runtime_mode: str
     ) -> None: ...
@@ -130,9 +769,13 @@ class EvidenceRepository(Protocol):
     def add(self, record: StoredEvidence) -> StoredEvidence: ...
     def get(self, session_id: str, evidence_id: str) -> StoredEvidence | None: ...
     def list_for_session(self, session_id: str) -> list[StoredEvidence]: ...
-    def mark_synced(
-        self, session_id: str, evidence_id: str, synced_at: datetime
-    ) -> None: ...
+    def get_media_message_artifact(
+        self,
+        verified_user_id: str,
+        session_id: str,
+        evidence_id: str,
+    ) -> MediaMessageArtifactFacts: ...
+    def mark_synced(self, session_id: str, evidence_id: str, synced_at: datetime) -> None: ...
 
 
 class AnswerRepository(Protocol):
@@ -247,10 +890,7 @@ class SqlSecurityAuditRepository:
             self._session.scalars(
                 select(SecurityAuditEventModel.id)
                 .where(SecurityAuditEventModel.occurred_at < cutoff)
-                .order_by(
-                    SecurityAuditEventModel.occurred_at,
-                    SecurityAuditEventModel.id,
-                )
+                .order_by(SecurityAuditEventModel.occurred_at, SecurityAuditEventModel.id)
                 .limit(limit)
             )
         )
@@ -258,11 +898,7 @@ class SqlSecurityAuditRepository:
             return 0
         result = cast(
             CursorResult[Any],
-            self._session.execute(
-                delete(SecurityAuditEventModel).where(
-                    SecurityAuditEventModel.id.in_(expired_ids)
-                )
-            ),
+            self._session.execute(delete(SecurityAuditEventModel).where(SecurityAuditEventModel.id.in_(expired_ids))),
         )
         return int(result.rowcount or 0)
 
@@ -299,11 +935,7 @@ class SqlSessionRepository:
         model = self._session.get(LearningSessionModel, session_id)
         return _stored_session(model) if model is not None else None
 
-    def get_owned(
-        self,
-        session_id: str,
-        owner_user_id: str,
-    ) -> StoredSession | None:
+    def get_owned(self, session_id: str, owner_user_id: str) -> StoredSession | None:
         model = self._session.scalar(
             select(LearningSessionModel).where(
                 LearningSessionModel.session_id == session_id,
@@ -312,30 +944,26 @@ class SqlSessionRepository:
         )
         return _stored_session(model) if model is not None else None
 
-    def update_status(
-        self, session_id: str, status: str, *, expected_version: int
-    ) -> bool:
+    def update_status(self, session_id: str, status: str, *, expected_version: int) -> bool:
         result = cast(
             CursorResult[Any],
             self._session.execute(
-            update(LearningSessionModel)
-            .where(
-                LearningSessionModel.session_id == session_id,
-                LearningSessionModel.status != "reviewed",
-                LearningSessionModel.version == expected_version,
-            )
-            .values(
-                status=status,
-                version=LearningSessionModel.version + 1,
-                updated_at=datetime.now(UTC),
-            )
+                update(LearningSessionModel)
+                .where(
+                    LearningSessionModel.session_id == session_id,
+                    LearningSessionModel.status != "reviewed",
+                    LearningSessionModel.version == expected_version,
+                )
+                .values(
+                    status=status,
+                    version=LearningSessionModel.version + 1,
+                    updated_at=datetime.now(UTC),
+                )
             ),
         )
         return bool(result.rowcount)
 
-    def set_conversation(
-        self, session_id: str, conversation_id: str, runtime_mode: str
-    ) -> None:
+    def set_conversation(self, session_id: str, conversation_id: str, runtime_mode: str) -> None:
         self._session.execute(
             update(LearningSessionModel)
             .where(LearningSessionModel.session_id == session_id)
@@ -400,9 +1028,89 @@ class SqlEvidenceRepository:
         )
         return [_stored_evidence(model) for model in models]
 
-    def mark_synced(
-        self, session_id: str, evidence_id: str, synced_at: datetime
-    ) -> None:
+    def get_media_message_artifact(
+        self,
+        verified_user_id: str,
+        session_id: str,
+        evidence_id: str,
+    ) -> MediaMessageArtifactFacts:
+        stable_scan_key = (
+            LearningSessionModel.session_id
+            + ":"
+            + MediaIngestionReservationModel.idempotency_key
+            + ":"
+            + MediaIngestionReservationModel.fingerprint
+        )
+        row = self._session.execute(
+            select(
+                LearningSessionModel.owner_user_id,
+                EvidenceModel.evidence_id,
+                EvidenceModel.artifact_id,
+                MediaIngestionReservationModel.attributes_json,
+                MediaArtifactModel.media_item_id,
+                MediaArtifactModel.opaque_object_key,
+                MediaArtifactModel.media_type,
+                MediaArtifactModel.normalized_sha256,
+                MediaArtifactModel.normalized_byte_size,
+                MediaArtifactModel.state,
+                MediaIngestionReservationModel.reservation_id,
+                MediaScanAttemptModel.attempt_id,
+                MediaScanAttemptModel.scan_result,
+                MediaScanAttemptModel.artifact_sha256,
+                MediaCleanReceiptModel.receipt_id,
+            )
+            .select_from(LearningSessionModel)
+            .outerjoin(
+                EvidenceModel,
+                (EvidenceModel.session_id == LearningSessionModel.session_id)
+                & (EvidenceModel.evidence_id == evidence_id),
+            )
+            .outerjoin(MediaArtifactModel, EvidenceModel.artifact_id == MediaArtifactModel.media_item_id)
+            .outerjoin(
+                MediaIngestionReservationModel,
+                (MediaIngestionReservationModel.session_id == EvidenceModel.session_id)
+                & (MediaIngestionReservationModel.evidence_id == EvidenceModel.evidence_id)
+                & (MediaIngestionReservationModel.status == "COMPLETED"),
+            )
+            .outerjoin(MediaScanAttemptModel, MediaScanAttemptModel.idempotency_key == stable_scan_key)
+            .outerjoin(MediaCleanReceiptModel, MediaCleanReceiptModel.attempt_id == MediaScanAttemptModel.attempt_id)
+            .where(LearningSessionModel.session_id == session_id)
+        ).one_or_none()
+        if row is None:
+            raise KeyError("session is unavailable")
+        if row.owner_user_id != verified_user_id:
+            raise PermissionError("verified identity does not own session")
+        if row.evidence_id is None:
+            raise KeyError("evidence is unavailable")
+        if row.artifact_id is None:
+            raise KeyError("evidence has no media artifact")
+        if row.media_item_id is None:
+            raise KeyError("media artifact is unavailable")
+        if row.state != "REFERENCED":
+            raise KeyError("media artifact is not consumable")
+        if row.reservation_id is None:
+            raise KeyError("clean receipt reservation is unavailable")
+        if row.attempt_id is None or row.scan_result != "clean":
+            raise KeyError("clean receipt is unavailable")
+        if row.receipt_id is None:
+            raise KeyError("clean receipt is unavailable")
+        attributes = row.attributes_json if isinstance(row.attributes_json, dict) else {}
+        return MediaMessageArtifactFacts(
+            evidence_id=row.evidence_id,
+            receipt_id=row.receipt_id,
+            attempt_id=row.attempt_id,
+            scan_result=row.scan_result,
+            artifact_ref=f"focusproof-artifact://{row.media_item_id}",
+            artifact_sha256=row.artifact_sha256,
+            opaque_object_key=row.opaque_object_key,
+            media_type=row.media_type,
+            normalized_sha256=row.normalized_sha256,
+            byte_size=row.normalized_byte_size,
+            width=_positive_dimension(attributes.get("width")),
+            height=_positive_dimension(attributes.get("height")),
+        )
+
+    def mark_synced(self, session_id: str, evidence_id: str, synced_at: datetime) -> None:
         self._session.execute(
             update(EvidenceModel)
             .where(
@@ -530,9 +1238,7 @@ class SqlAuditEventRepository:
     def has_source_event(self, session_id: str, source_event_id: str) -> bool:
         return self._by_source(session_id, source_event_id) is not None
 
-    def _by_source(
-        self, session_id: str, source_event_id: str
-    ) -> StoredAuditEvent | None:
+    def _by_source(self, session_id: str, source_event_id: str) -> StoredAuditEvent | None:
         model = self._session.scalar(
             select(AuditEventModel).where(
                 AuditEventModel.session_id == session_id,
@@ -563,8 +1269,7 @@ class SqlReviewRepository:
             existing = self._session.scalar(
                 select(ReviewModel).where(
                     ReviewModel.session_id == record.session_id,
-                    ReviewModel.source_openhands_event_id
-                    == record.source_openhands_event_id,
+                    ReviewModel.source_openhands_event_id == record.source_openhands_event_id,
                 )
             )
             if existing is not None:
@@ -598,6 +1303,14 @@ class SqlReviewRepository:
             .order_by(ReviewModel.created_at, ReviewModel.review_id)
         )
         return [_stored_review(model) for model in models]
+
+
+def _positive_dimension(value: object) -> int:
+    if isinstance(value, bool):
+        raise KeyError("media dimensions are unavailable")
+    if isinstance(value, (int, float)) and int(value) == value and int(value) > 0:
+        return int(value)
+    raise KeyError("media dimensions are unavailable")
 
 
 def _stored_session(model: LearningSessionModel) -> StoredSession:

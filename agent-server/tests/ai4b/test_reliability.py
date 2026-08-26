@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import inspect
+import socket
 from contextlib import suppress
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import time
-from threading import Barrier, Event
+from threading import Barrier, Event, Thread
 from typing import Any, cast
 
 import httpx
 import pytest
+import uvicorn
 from fastapi.testclient import TestClient
 from openhands.sdk.conversation import LocalConversation
 from openhands.sdk.event import MessageEvent, ObservationEvent
@@ -179,6 +182,8 @@ def test_completed_review_restart_preserves_all_persisted_identities(
         completed = first.client.post(f"/sessions/{session_id}/review")
         assert completed.json()["reviewStatus"] == "completed"
         handle = first.app.state.conversation_manager.get(session_id)
+        assert len(completed.json()["conversationId"]) == 32
+        assert "-" not in completed.json()["conversationId"]
         conversation_id = completed.json()["conversationId"]
         native_event_ids = [event.id for event in handle.conversation.state.events]
         projected = first.client.get(f"/sessions/{session_id}/events").json()["events"]
@@ -219,6 +224,7 @@ def test_llm_exception_before_tool_call_can_retry_without_false_completion(
             raise RuntimeError("LLM failed before its first tool call")
         await original_arun(conversation)
 
+    fail_once.__signature__ = inspect.signature(LocalConversation.arun)  # type: ignore[attr-defined]
     monkeypatch.setattr(LocalConversation, "arun", fail_once)
     with ai4b_app_factory(_draft_llm) as running:
         session_id = _create_session(running.client)
@@ -317,6 +323,7 @@ def test_review_timeout_fails_without_completed_facts_and_releases_run_lock(
         while not release.is_set():
             await asyncio.sleep(0.01)
 
+    blocking_arun.__signature__ = inspect.signature(LocalConversation.arun)  # type: ignore[attr-defined]
     monkeypatch.setattr(LocalConversation, "arun", blocking_arun)
     with ai4b_app_factory(
         _draft_llm,
@@ -378,6 +385,7 @@ def test_cancelled_review_request_interrupts_the_native_conversation(
         interrupted.set()
         original_interrupt(conversation)
 
+    blocking_arun.__signature__ = inspect.signature(LocalConversation.arun)  # type: ignore[attr-defined]
     monkeypatch.setattr(LocalConversation, "arun", blocking_arun)
     monkeypatch.setattr(LocalConversation, "interrupt", record_interrupt)
     with ai4b_app_factory(_draft_llm) as running:
@@ -591,6 +599,7 @@ def test_cancellation_before_restore_is_not_lost_or_run_after_cancel(
             original_interrupt(conversation)
 
         monkeypatch.setattr(factory, "create", blocking_create)
+        record_arun.__signature__ = inspect.signature(LocalConversation.arun)  # type: ignore[attr-defined]
         monkeypatch.setattr(LocalConversation, "arun", record_arun)
         monkeypatch.setattr(LocalConversation, "interrupt", record_interrupt)
 
@@ -636,6 +645,7 @@ def test_http_disconnect_interrupts_review_without_task_cancellation(
         interrupted.set()
         original_interrupt(conversation)
 
+    blocking_arun.__signature__ = inspect.signature(LocalConversation.arun)  # type: ignore[attr-defined]
     monkeypatch.setattr(LocalConversation, "arun", blocking_arun)
     monkeypatch.setattr(LocalConversation, "interrupt", record_interrupt)
     with ai4b_app_factory(_draft_llm) as running:
@@ -682,6 +692,49 @@ def test_http_disconnect_interrupts_review_without_task_cancellation(
 
         assert asyncio.run(scenario()) is True
         _assert_no_completed_review(running.client, session_id)
+
+
+def test_real_uvicorn_review_consumes_bounded_body_and_returns(
+    ai4b_app_factory: Callable[..., Any],
+) -> None:
+    with ai4b_app_factory(_lifecycle_llm) as running:
+        session_id = _create_session(running.client)
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = int(probe.getsockname()[1])
+        server = uvicorn.Server(
+            uvicorn.Config(
+                running.app,
+                host="127.0.0.1",
+                port=port,
+                log_config=None,
+                access_log=False,
+                lifespan="off",
+            )
+        )
+        thread = Thread(target=server.run, daemon=True)
+        thread.start()
+        try:
+            deadline = time.monotonic() + 5
+            while not server.started and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert server.started
+            review_url = f"http://127.0.0.1:{port}/sessions/{session_id}/review"
+            with httpx.Client(timeout=10) as client:
+                oversized = client.post(review_url, content=b"x" * (256 * 1024 + 1))
+                assert oversized.status_code == 413
+                chunked_oversized = client.post(
+                    review_url,
+                    content=iter((b"x" * (256 * 1024), b"x")),
+                )
+                assert chunked_oversized.status_code == 413
+                response = client.post(review_url, json={})
+            assert response.status_code == 200
+            assert response.json()["reviewStatus"] == "awaiting_user"
+        finally:
+            server.should_exit = True
+            thread.join(timeout=5)
+            assert not thread.is_alive()
 
 
 def test_app_shutdown_releases_resources_when_manager_close_fails(

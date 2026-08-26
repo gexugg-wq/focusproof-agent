@@ -30,7 +30,13 @@ export default defineConfig({
         "--scenario general-flow"
       ].join(" "),
       cwd: repositoryDir,
-      env: { LITELLM_LOCAL_MODEL_COST_MAP: "true" },
+      env: {
+        LITELLM_LOCAL_MODEL_COST_MAP: "true",
+        FOCUSPROOF_MEDIA_ENABLED: "true",
+        FOCUSPROOF_MEDIA_SCANNER_MODE: "fake-clean",
+        FOCUSPROOF_CLAMD_DEFINITIONS_VERSION: "deterministic-test",
+        FOCUSPROOF_CLAMD_DEFINITIONS_FRESH_AT: "2026-08-26T00:00:00+00:00"
+      },
       url: "http://127.0.0.1:8000/health",
       reuseExistingServer: false,
       timeout: 120000

@@ -1,0 +1,21 @@
+{
+  "name": "@focusproof/monad-learning-task",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "compile": "hardhat build",
+    "test": "hardhat test nodejs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox-viem": "5.0.7",
+    "@types/node": "^22.20.1",
+    "hardhat": "3.12.0",
+    "typescript": "~6.0.3",
+    "viem": "2.55.11"
+  }
+}

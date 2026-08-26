@@ -3,19 +3,36 @@ import path from "node:path";
 
 const frontendDir = __dirname;
 const repositoryDir = path.resolve(frontendDir, "..");
-const runtimeDir = path.join(frontendDir, "test-results/ai4b-runtime");
+const runId = process.env.FOCUSPROOF_E2E_RUN_ID ?? "manual";
+const runtimeDir = path.join(frontendDir, `test-results/ai4b-runtime-${runId}`);
 const databasePath = path.join(runtimeDir, "focusproof.sqlite3");
 const pythonPath = path.join(repositoryDir, ".venv/bin/python3.12");
+const scenario = process.env.FOCUSPROOF_E2E_SCENARIO ?? "general-flow";
+
+const apiPort = Number(process.env.FOCUSPROOF_E2E_API_PORT ?? "8000");
+const webPort = Number(process.env.FOCUSPROOF_E2E_WEB_PORT ?? "3000");
+const apiBaseUrl = `http://127.0.0.1:${apiPort}`;
+const webBaseUrl = `http://127.0.0.1:${webPort}`;
+const generalTestIgnore = [
+  "ai4c-staging.spec.ts",
+  "ai4c-production-readiness.spec.ts",
+  "focusproof-flow.spec.ts",
+  "monad-flow.spec.ts"
+];
+const scenarioSelection =
+  scenario === "monad-flow"
+    ? { testMatch: ["monad-flow.spec.ts"] }
+    : { testIgnore: generalTestIgnore };
 
 export default defineConfig({
   testDir: "./e2e",
-  testIgnore: ["ai4c-staging.spec.ts", "ai4c-production-readiness.spec.ts"],
+  ...scenarioSelection,
   outputDir: "test-results/artifacts",
   timeout: 30000,
   workers: 1,
   expect: { timeout: 5000 },
   use: {
-    baseURL: "http://127.0.0.1:3000",
+    baseURL: webBaseUrl,
     trace: "retain-on-failure"
   },
   webServer: [
@@ -24,32 +41,38 @@ export default defineConfig({
         pythonPath,
         "scripts/run_ai4b_test_server.py",
         "--host 127.0.0.1",
-        "--port 8000",
+        `--port ${apiPort}`,
         `--database-url sqlite+pysqlite:///${databasePath}`,
         `--data-dir ${runtimeDir}`,
-        "--scenario general-flow"
+        `--scenario ${scenario}`
       ].join(" "),
       cwd: repositoryDir,
-      env: { LITELLM_LOCAL_MODEL_COST_MAP: "true" },
-      url: "http://127.0.0.1:8000/health",
+      env: {
+        LITELLM_LOCAL_MODEL_COST_MAP: "true",
+        FOCUSPROOF_MEDIA_ENABLED: "true",
+        FOCUSPROOF_MEDIA_SCANNER_MODE: "fake-clean",
+        FOCUSPROOF_CLAMD_DEFINITIONS_VERSION: "deterministic-test",
+        FOCUSPROOF_CLAMD_DEFINITIONS_FRESH_AT: "2026-08-26T00:00:00+00:00"
+      },
+      url: `${apiBaseUrl}/health`,
       reuseExistingServer: false,
       timeout: 120000
     },
     {
-      command: "npm run dev -- --hostname 127.0.0.1 --port 3000",
+      command: `npm run dev -- --hostname 127.0.0.1 --port ${webPort}`,
       cwd: frontendDir,
       env: {
-        FOCUSPROOF_API_BASE_URL: "http://127.0.0.1:8000"
+        FOCUSPROOF_API_BASE_URL: apiBaseUrl
       },
-      url: "http://127.0.0.1:3000",
+      url: webBaseUrl,
       reuseExistingServer: false,
       timeout: 120000
     }
   ],
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },
-    { name: "desktop-1280", use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 720 } } },
-    { name: "mobile", use: { ...devices["Pixel 5"], viewport: { width: 390, height: 844 } } },
-    { name: "mobile-360", use: { ...devices["Pixel 5"], viewport: { width: 360, height: 800 } } }
+    { name: "desktop-1280", testIgnore: [...generalTestIgnore, "general-complete-flow.spec.ts"], use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 720 } } },
+    { name: "mobile", testIgnore: [...generalTestIgnore, "general-complete-flow.spec.ts"], use: { ...devices["Pixel 5"], viewport: { width: 390, height: 844 } } },
+    { name: "mobile-360", testIgnore: [...generalTestIgnore, "general-complete-flow.spec.ts"], use: { ...devices["Pixel 5"], viewport: { width: 360, height: 800 } } }
   ]
 });

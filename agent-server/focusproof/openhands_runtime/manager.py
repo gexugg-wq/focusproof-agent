@@ -2,24 +2,42 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import re
 from collections.abc import Awaitable
 from pathlib import Path
 from threading import Condition, RLock
-from typing import Any, ContextManager, Protocol, cast
+from typing import Any, ContextManager, Final, Protocol, cast
 from uuid import UUID, uuid4
 
 from openhands.sdk.conversation.types import ConversationCallbackType
 from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
 from openhands.sdk.event.base import Event as OpenHandsEvent
+from openhands.sdk.llm.exceptions import (
+    LLMRateLimitError,
+    LLMServiceUnavailableError,
+    LLMTimeoutError,
+)
+from openhands.sdk.utils.redact import redact_text_secrets
 
 from focusproof.domain.review import ReviewResult
 from focusproof.config.profiles import RuntimeSettings
+from focusproof.domain.plugins.base import (
+    EvidencePluginProvider,
+    bind_session_repository_plugins,
+)
 from focusproof.openhands_runtime.evidence_messages import runtime_evidence_payload
 from focusproof.openhands_runtime.factory import (
     ConversationFactory,
     LLMFactory,
+    ProviderInfrastructureUnavailableError,
     RuntimeUnavailableError,
 )
+from focusproof.openhands_runtime.capabilities import (
+    VerificationCapabilityRegistry,
+    build_builtin_capabilities,
+)
+from focusproof.openhands_runtime.tool_assembler import SessionToolAssembler
 from focusproof.openhands_runtime.handle import ConversationHandle, RuntimeReviewResult
 from focusproof.openhands_runtime.locks import SessionRunLock
 from focusproof.openhands_runtime.projector import OpenHandsEventProjector
@@ -27,8 +45,15 @@ from focusproof.openhands_runtime.provider_admission import (
     ProviderAdmission,
     ProviderAdmissionUnavailableError,
 )
-from focusproof.openhands_runtime.result_extractor import RuntimeResultExtractor
+from focusproof.openhands_runtime.result_extractor import (
+    _RuntimeResultExtractor,
+    _project_safe_completed_review_lineage,
+)
+from focusproof.openhands_runtime.runtime_contributions import RuntimeContribution
 from focusproof.openhands_runtime.synchronizer import ConversationSynchronizer
+from focusproof.openhands_runtime.runtime_evidence_message_factory import (
+    RuntimeMediaContentProvider,
+)
 from focusproof.openhands_runtime.tools import SessionEvidenceRepository
 from focusproof.openhands_runtime.tools.learner_input import LearnerInputObservation
 from focusproof.openhands_runtime.tools.review_draft import ReviewDraftObservation
@@ -40,6 +65,14 @@ from focusproof.runtime.audit_projection import AuditProjectionStore
 
 
 DEFAULT_REVIEW_TIMEOUT_SECONDS = 60.0
+LOGGER = logging.getLogger(__name__)
+_MAX_RUNTIME_FAILURE_DIAGNOSTIC_CHARS: Final = 500
+_SECRET_FIELD_PATTERN: Final = re.compile(
+    r"(?i)\b(?:authorization|api[_-]?key|x-api-key|base[_-]?url)\b"
+    r"\s*[:=]\s*(?:bearer\s+)?\S+"
+)
+_BEARER_PATTERN: Final = re.compile(r"(?i)\bbearer\s+\S+")
+_URL_PATTERN: Final = re.compile(r"https?://[^\s\"'<>]+")
 
 
 class _NoopSessionRunLock:
@@ -52,6 +85,29 @@ class _NoopSessionRunLock:
 
 class _AsyncRunnableConversation(Protocol):
     def arun(self) -> Awaitable[None]: ...
+
+
+class _PluginBoundScopedEvidenceProvider:
+    def __init__(
+        self,
+        repository: UowEvidenceProvider,
+        *,
+        plugin_providers: tuple[EvidencePluginProvider, ...],
+        uow_factory: UnitOfWorkFactoryLike,
+    ) -> None:
+        self._repository = repository
+        self._plugin_providers = plugin_providers
+        self._uow_factory = uow_factory
+
+    def scope(self, session_id: str, principal_id: str) -> SessionEvidenceRepository:
+        repository = self._repository.scope(session_id, principal_id)
+        return bind_session_repository_plugins(
+            repository,
+            providers=self._plugin_providers,
+            session_id=session_id,
+            principal_id=principal_id,
+            uow_factory=self._uow_factory,
+        )
 
 
 class ConversationManager:
@@ -68,6 +124,9 @@ class ConversationManager:
         run_lock: SessionRunLock | None = None,
         provider_admission: ProviderAdmission | None = None,
         runtime_settings: RuntimeSettings | None = None,
+        media_content_provider: RuntimeMediaContentProvider | None = None,
+        plugin_providers: tuple[EvidencePluginProvider, ...] = (),
+        runtime_contributions: tuple[RuntimeContribution, ...] = (),
     ) -> None:
         self._audit_log = audit_log
         self._lifecycle_lock = RLock()
@@ -87,15 +146,48 @@ class ConversationManager:
         self._run_lock = run_lock or _NoopSessionRunLock()
         self._provider_admission = provider_admission
         self._synchronizer = (
-            ConversationSynchronizer(uow_factory) if uow_factory is not None else None
-        )
-        self._result_extractor = RuntimeResultExtractor(audit_log, uow_factory)
-        self._review_timeout_seconds = review_timeout_seconds
-        factory_repository = (
-            UowEvidenceProvider(uow_factory)
+            ConversationSynchronizer(uow_factory, media_content_provider=media_content_provider)
             if uow_factory is not None
-            else repository
+            else None
         )
+        self._result_extractor = _RuntimeResultExtractor(
+            audit_log,
+            uow_factory,
+            narrative_providers=tuple(
+                provider
+                for contribution in runtime_contributions
+                for provider in contribution.narrative_providers
+            ),
+            completion_policies=tuple(
+                policy
+                for contribution in runtime_contributions
+                for policy in contribution.completion_policies
+            ),
+        )
+        self._review_timeout_seconds = review_timeout_seconds
+        factory_repository: SessionEvidenceRepository | _PluginBoundScopedEvidenceProvider
+        if uow_factory is not None:
+            base_repository = UowEvidenceProvider(
+                uow_factory,
+                media_content_provider=media_content_provider,
+            )
+            factory_repository = (
+                _PluginBoundScopedEvidenceProvider(
+                    base_repository,
+                    plugin_providers=plugin_providers,
+                    uow_factory=uow_factory,
+                )
+                if plugin_providers
+                else base_repository
+            )
+        else:
+            factory_repository = repository
+        tool_assembler = SessionToolAssembler(
+            VerificationCapabilityRegistry(build_builtin_capabilities()),
+            plugin_providers=plugin_providers,
+            runtime_contributions=runtime_contributions,
+        )
+        self._tool_assembler = tool_assembler
         self._factory = ConversationFactory(
             repository=factory_repository,
             project_root=project_root,
@@ -103,9 +195,13 @@ class ConversationManager:
             llm_factory=llm_factory,
             callback_factory=self._create_projector_callback,
             runtime_settings=runtime_settings,
+            tool_assembler=tool_assembler,
             compatibility_mode=uow_factory is None,
         )
         self._accepting_reviews = True
+
+    def available_tool_names(self) -> tuple[str, ...]:
+        return self._tool_assembler.project_tool_names("general", None)
 
     def create(
         self,
@@ -168,9 +264,7 @@ class ConversationManager:
         call_id = review_call_id or uuid4().hex
         with self._lifecycle_lock:
             if not self._accepting_reviews:
-                raise RuntimeUnavailableError(
-                    "Conversation manager is shutting down"
-                )
+                raise RuntimeUnavailableError("Conversation manager is shutting down")
             self._active_reviews.setdefault(session_id, set()).add(call_id)
         try:
             return self._run_review(session_id, verified_user_id, call_id)
@@ -185,6 +279,20 @@ class ConversationManager:
                 self._interrupted_reviews.discard((session_id, call_id))
                 self._lifecycle_changed.notify_all()
 
+    def project_safe_completed_review_lineage(
+        self,
+        session_id: str,
+    ) -> dict[str, object]:
+        """Project lineage from this manager's official conversation EventLog."""
+
+        with self._run_lock.acquire(session_id):
+            handle = self._get_managed_handle_unlocked(session_id)
+            native_events = list(handle.conversation.state.events)
+            return _project_safe_completed_review_lineage(
+                self._audit_log.list(session_id),
+                native_events=native_events,
+            )
+
     def _run_review(
         self,
         session_id: str,
@@ -194,9 +302,7 @@ class ConversationManager:
         with self._run_lock.acquire(session_id):
             with self._lifecycle_lock:
                 if not self._accepting_reviews:
-                    raise RuntimeUnavailableError(
-                        "Conversation manager is shutting down"
-                    )
+                    raise RuntimeUnavailableError("Conversation manager is shutting down")
                 self._running_reviews[session_id] = review_call_id
             if self._uow_factory is not None:
                 if verified_user_id is None:
@@ -209,7 +315,7 @@ class ConversationManager:
                         sessionId=session_id,
                         conversationMode=handle.runtime_mode,
                         usedOpenHandsConversation=True,
-                        conversationId=str(handle.conversation_id),
+                        conversationId=handle.conversation_id.hex,
                         nativeEventCount=len(native_events),
                         messageEventsCount=sum(
                             isinstance(event, MessageEvent) for event in native_events
@@ -232,18 +338,14 @@ class ConversationManager:
                 answers = list(self._answers[session_id].values())
             with self._lifecycle_lock:
                 closing = not self._accepting_reviews
-                interrupted = (
-                    session_id, review_call_id
-                ) in self._interrupted_reviews
+                interrupted = (session_id, review_call_id) in self._interrupted_reviews
             if closing or interrupted:
                 handle.conversation.interrupt()
                 if closing:
-                    raise RuntimeUnavailableError(
-                        "Conversation manager is shutting down"
-                    )
+                    raise RuntimeUnavailableError("Conversation manager is shutting down")
                 return self._failure_result(handle, "CancelledError")
             native_events = list(handle.conversation.state.events)
-            recovered = self._result_extractor.extract(
+            recovered = self._result_extractor._extract_managed(
                 handle=handle,
                 native_events=native_events,
                 goal=goal,
@@ -264,19 +366,21 @@ class ConversationManager:
                     with self._provider_admission.acquire():
                         asyncio.run(
                             asyncio.wait_for(
-                                cast(
-                                    _AsyncRunnableConversation, handle.conversation
-                                ).arun(),
+                                cast(_AsyncRunnableConversation, handle.conversation).arun(),
                                 timeout=self._review_timeout_seconds,
                             )
                         )
             except ProviderAdmissionUnavailableError:
                 raise
-            except TimeoutError:
+            except TimeoutError as exc:
                 handle.conversation.interrupt()
-                return self._failure_result(handle, "TimeoutError")
+                return self._failure_result(handle, exc)
             except Exception as exc:
-                return self._failure_result(handle, type(exc).__name__)
+                if _is_provider_infrastructure_failure(exc):
+                    raise ProviderInfrastructureUnavailableError(
+                        "OpenHands provider infrastructure is unavailable"
+                    ) from exc
+                return self._failure_result(handle, exc)
 
             native_events = list(handle.conversation.state.events)
             projector = self._projectors[session_id]
@@ -286,7 +390,7 @@ class ConversationManager:
                 for event in self._audit_log.list(session_id)
                 if "sourceOpenHandsEventId" in event.payload
             }
-            return self._result_extractor.extract(
+            return self._result_extractor._extract_managed(
                 handle=handle,
                 native_events=native_events,
                 goal=goal,
@@ -310,16 +414,12 @@ class ConversationManager:
         with self._lifecycle_lock:
             active_calls = self._active_reviews.get(session_id, set())
             if review_call_id is None:
-                self._interrupted_reviews.update(
-                    (session_id, call_id) for call_id in active_calls
-                )
+                self._interrupted_reviews.update((session_id, call_id) for call_id in active_calls)
                 should_interrupt = session_id in self._running_reviews
             else:
                 if review_call_id in active_calls:
                     self._interrupted_reviews.add((session_id, review_call_id))
-                should_interrupt = (
-                    self._running_reviews.get(session_id) == review_call_id
-                )
+                should_interrupt = self._running_reviews.get(session_id) == review_call_id
             handle = self._handles.get(session_id) if should_interrupt else None
         if handle is not None:
             handle.conversation.interrupt()
@@ -397,6 +497,12 @@ class ConversationManager:
             self._close_unlocked(session_id)
             raise
         return handle
+
+    def _get_managed_handle_unlocked(self, session_id: str) -> ConversationHandle:
+        if self._uow_factory is None:
+            return self.get(session_id)
+        session = self._load_session(session_id)
+        return self._get_or_restore_unlocked(session_id, session.owner_user_id)
 
     def _sync_persistent_session(
         self,
@@ -490,9 +596,7 @@ class ConversationManager:
                 {
                     "kind": "evidence",
                     "session_id": session_id,
-                    "evidence": runtime_evidence_payload(
-                        evidence.model_dump(mode="json")
-                    ),
+                    "evidence": runtime_evidence_payload(evidence.model_dump(mode="json")),
                 },
                 sort_keys=True,
             ),
@@ -558,14 +662,30 @@ class ConversationManager:
     @staticmethod
     def _failure_result(
         handle: ConversationHandle,
-        exception_name: str,
+        exception: BaseException | str,
     ) -> RuntimeReviewResult:
         native_events = list(handle.conversation.state.events)
+        exception_name = (
+            type(exception).__name__ if isinstance(exception, BaseException) else exception
+        )
+        if isinstance(exception, BaseException):
+            LOGGER.disabled = False
+            root_exception = _root_exception(exception)
+            LOGGER.warning(
+                "OpenHands conversation run failed",
+                extra={
+                    "session_id": handle.session_id,
+                    "conversation_id": str(handle.conversation_id),
+                    "exception_type": type(exception).__name__,
+                    "root_exception_type": type(root_exception).__name__,
+                    "root_exception_message": _redact_runtime_failure_message(str(root_exception)),
+                },
+            )
         return RuntimeReviewResult(
             sessionId=handle.session_id,
             conversationMode="failed",
             usedOpenHandsConversation=False,
-            conversationId=str(handle.conversation_id),
+            conversationId=handle.conversation_id.hex,
             nativeEventCount=len(native_events),
             messageEventsCount=sum(isinstance(event, MessageEvent) for event in native_events),
             actionEventsCount=sum(isinstance(event, ActionEvent) for event in native_events),
@@ -576,6 +696,41 @@ class ConversationManager:
             reviewStatus="failed",
             error=f"{exception_name}: OpenHands conversation run failed",
         )
+
+
+def _root_exception(exc: BaseException) -> BaseException:
+    root = exc
+    seen: set[int] = set()
+    while True:
+        next_exception = root.__cause__ or root.__context__
+        if next_exception is None or id(next_exception) in seen:
+            return root
+        seen.add(id(root))
+        root = next_exception
+
+
+def _is_provider_infrastructure_failure(exc: BaseException) -> bool:
+    infrastructure_types = (
+        LLMRateLimitError,
+        LLMTimeoutError,
+        LLMServiceUnavailableError,
+    )
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        if isinstance(current, infrastructure_types):
+            return True
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _redact_runtime_failure_message(message: str) -> str:
+    redacted = redact_text_secrets(message)
+    redacted = _SECRET_FIELD_PATTERN.sub("[redacted-provider-field]", redacted)
+    redacted = _BEARER_PATTERN.sub("[redacted-provider-token]", redacted)
+    redacted = _URL_PATTERN.sub("[redacted-provider-url]", redacted)
+    return redacted[:_MAX_RUNTIME_FAILURE_DIAGNOSTIC_CHARS]
 
 
 def _learning_goal(session: StoredSession) -> LearningGoal:

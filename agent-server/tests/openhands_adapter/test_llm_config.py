@@ -19,7 +19,7 @@ def test_fake_env_detects_keys_and_model_without_leaking_values(tmp_path: Path) 
     (tmp_path / ".env").write_text(
         "OPENAI_API_KEY=sk-test-secret\n"
         "OPENAI_BASE_URL=https://example.test/v1\n"
-        "OPENHANDS_LLM_MODEL=qwen-plus\n",
+        "OPENHANDS_LLM_MODEL=openai/qwen-plus\n",
         encoding="utf-8",
     )
 
@@ -29,7 +29,7 @@ def test_fake_env_detects_keys_and_model_without_leaking_values(tmp_path: Path) 
     assert values["OPENAI_API_KEY"] == "sk-test-secret"
     assert status["hasOpenAIKey"] is True
     assert status["hasBaseUrl"] is True
-    assert status["model"] == "qwen-plus"
+    assert status["model"] == "openai/qwen-plus"
     assert "sk-test-secret" not in repr(status)
 
 
@@ -56,7 +56,7 @@ def test_build_openhands_llm_config_uses_openai_compatible_env(tmp_path: Path) -
     (tmp_path / ".env").write_text(
         "DASHSCOPE_API_KEY=ds-secret\n"
         "OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1\n"
-        "DASHSCOPE_MODEL=qwen-turbo\n",
+        "DASHSCOPE_MODEL=openai/qwen-turbo\n",
         encoding="utf-8",
     )
 
@@ -64,7 +64,7 @@ def test_build_openhands_llm_config_uses_openai_compatible_env(tmp_path: Path) -
     status = get_llm_config_status(tmp_path)
 
     assert config is not None
-    assert config.model == "qwen-turbo"
+    assert config.model == "openai/qwen-turbo"
     assert config.api_key.get_secret_value() == "ds-secret"
     assert status["canBuildConfig"] is True
     assert status["providerHint"] == "dashscope-openai-compatible"

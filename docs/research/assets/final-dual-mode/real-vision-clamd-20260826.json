@@ -1,0 +1,341 @@
+{
+  "assurance": {
+    "mediaScanner": "clamd",
+    "productionMalwareScanningVerified": false,
+    "scope": "local-test-only"
+  },
+  "checks": {
+    "imagePayloadNotPersisted": true,
+    "mediaToolUsed": true,
+    "monadDisabled": true,
+    "nativeActionObserved": true,
+    "nativeObservationObserved": true,
+    "officialConversationUsed": true,
+    "productionLlmUsed": true,
+    "realRuntimeUsed": true,
+    "visionActive": true
+  },
+  "conversationId": "sess_27db49942aee4faa9db0aa6e49b1f2f8",
+  "diagnostics": {
+    "attempts": 1,
+    "completionSucceeded": true,
+    "mediaObservation": {
+      "capability": "image",
+      "errorCode": "",
+      "observationClass": "VerificationObservation",
+      "status": "success",
+      "toolName": "focusproof_media_evidence_verification",
+      "visualFactsCount": 8
+    },
+    "nativeEventSummary": [
+      {
+        "eventType": "MessageEvent",
+        "id": "063cca1f-bafa-4ed0-ad7f-0373ac57eabe"
+      },
+      {
+        "eventType": "MessageEvent",
+        "id": "872a4f90-61ed-4eb5-ac06-7bf840b6142e"
+      },
+      {
+        "actionClass": "EvidenceReferenceAction",
+        "eventType": "ActionEvent",
+        "id": "04cdb2e7-5714-4bd2-9821-fcbf7430b85c",
+        "toolName": "focusproof_media_evidence_verification"
+      },
+      {
+        "capability": "image",
+        "errorCode": "",
+        "eventType": "ObservationEvent",
+        "id": "1fdaf308-30c8-49a5-9c2d-251f0bcdd577",
+        "observationClass": "VerificationObservation",
+        "status": "success",
+        "toolName": "focusproof_media_evidence_verification",
+        "visualFactsCount": 8
+      },
+      {
+        "actionClass": "ReviewDraftAction",
+        "eventType": "ActionEvent",
+        "id": "dd5855b9-a5e0-403d-a91a-012079bd2af2",
+        "toolName": "focusproof_review_draft"
+      },
+      {
+        "capability": "",
+        "errorCode": "",
+        "eventType": "ObservationEvent",
+        "id": "213fa6b4-f014-4c73-bd2c-73e5e0aaaa73",
+        "observationClass": "ReviewDraftObservation",
+        "status": "",
+        "toolName": "focusproof_review_draft",
+        "visualFactsCount": 0
+      }
+    ],
+    "officialEventCounts": {
+      "actionCount": 2,
+      "messageCount": 2,
+      "observationCount": 2
+    },
+    "providerAttempted": true,
+    "responseReceived": true,
+    "reviewStatus": "completed",
+    "totalProviderCompletionCalls": 1,
+    "transportOutcome": "received",
+    "visualFactsCount": 8,
+    "visualFactsParsed": true,
+    "visualProvider": {
+      "model": "qwen3.7-plus",
+      "provider": "openai"
+    }
+  },
+  "eventTypes": [
+    "ActionEvent",
+    "MessageEvent",
+    "ObservationEvent",
+    "PauseEvent",
+    "SystemPromptEvent"
+  ],
+  "eventlogSummary": {
+    "auditEvents": [
+      {
+        "eventType": "score.calculated",
+        "id": "evt_score_213fa6b4-f014-4c73-bd2c-73e5e0aaaa73"
+      },
+      {
+        "eventType": "review.completed",
+        "id": "evt_review_213fa6b4-f014-4c73-bd2c-73e5e0aaaa73"
+      }
+    ],
+    "consumedFactCount": 8,
+    "consumedFactIds": [
+      "fact_093b66b0421547701acdb145ff4881186320eddc7f04730f0f662f1245596a95",
+      "fact_28eca5266ad14a3b681a0a5e3875fac419300bcee6b2514c37939bae637cec3c",
+      "fact_4fd0d0f3c13a358f78c8401e473d38f662669af8aa2bbbd2218669706f9b6186",
+      "fact_572e387560cb46579d76a7441b4bfc8320045cf9a816bbb35bbb68a85804b414",
+      "fact_75c5b064615b2920d851f6963de6583ea57cbe93d54a62e173c307c8cc3256c3",
+      "fact_995dd644a8f46ecf85775c23fb3f7adbb5609fa6b01c53f2b82744a6f8e33b59",
+      "fact_9f2090e3ffa2a412dbab10578942daa4e67525d80052c643921422a6e2dbc4a9",
+      "fact_ac8104b8a41d965cd82e46c11626f3d978ab9004a30e7fa77f02b2dca9869817"
+    ],
+    "diagnostics": {
+      "attempts": 1,
+      "completionSucceeded": true,
+      "mediaObservation": {
+        "capability": "image",
+        "errorCode": "",
+        "observationClass": "VerificationObservation",
+        "status": "success",
+        "toolName": "focusproof_media_evidence_verification",
+        "visualFactsCount": 8
+      },
+      "nativeEventSummary": [
+        {
+          "eventType": "MessageEvent",
+          "id": "063cca1f-bafa-4ed0-ad7f-0373ac57eabe"
+        },
+        {
+          "eventType": "MessageEvent",
+          "id": "872a4f90-61ed-4eb5-ac06-7bf840b6142e"
+        },
+        {
+          "actionClass": "EvidenceReferenceAction",
+          "eventType": "ActionEvent",
+          "id": "04cdb2e7-5714-4bd2-9821-fcbf7430b85c",
+          "toolName": "focusproof_media_evidence_verification"
+        },
+        {
+          "capability": "image",
+          "errorCode": "",
+          "eventType": "ObservationEvent",
+          "id": "1fdaf308-30c8-49a5-9c2d-251f0bcdd577",
+          "observationClass": "VerificationObservation",
+          "status": "success",
+          "toolName": "focusproof_media_evidence_verification",
+          "visualFactsCount": 8
+        },
+        {
+          "actionClass": "ReviewDraftAction",
+          "eventType": "ActionEvent",
+          "id": "dd5855b9-a5e0-403d-a91a-012079bd2af2",
+          "toolName": "focusproof_review_draft"
+        },
+        {
+          "capability": "",
+          "errorCode": "",
+          "eventType": "ObservationEvent",
+          "id": "213fa6b4-f014-4c73-bd2c-73e5e0aaaa73",
+          "observationClass": "ReviewDraftObservation",
+          "status": "",
+          "toolName": "focusproof_review_draft",
+          "visualFactsCount": 0
+        }
+      ],
+      "officialEventCounts": {
+        "actionCount": 2,
+        "messageCount": 2,
+        "observationCount": 2
+      },
+      "providerAttempted": true,
+      "responseReceived": true,
+      "reviewStatus": "completed",
+      "totalProviderCompletionCalls": 1,
+      "transportOutcome": "received",
+      "visualFactsCount": 8,
+      "visualFactsParsed": true,
+      "visualProvider": {
+        "model": "qwen3.7-plus",
+        "provider": "openai"
+      }
+    },
+    "digest": "1328274c1e0c4c321f339ededc1b3758cc45e668c816ed0ceab35d79066c4d8e",
+    "eventCounts": {
+      "actionCount": 2,
+      "messageCount": 2,
+      "observationCount": 2
+    },
+    "events": [
+      {
+        "eventType": "MessageEvent",
+        "id": "063cca1f-bafa-4ed0-ad7f-0373ac57eabe"
+      },
+      {
+        "eventType": "MessageEvent",
+        "id": "872a4f90-61ed-4eb5-ac06-7bf840b6142e"
+      },
+      {
+        "actionClass": "EvidenceReferenceAction",
+        "eventType": "ActionEvent",
+        "id": "04cdb2e7-5714-4bd2-9821-fcbf7430b85c",
+        "toolName": "focusproof_media_evidence_verification"
+      },
+      {
+        "capability": "image",
+        "errorCode": "",
+        "eventType": "ObservationEvent",
+        "id": "1fdaf308-30c8-49a5-9c2d-251f0bcdd577",
+        "observationClass": "VerificationObservation",
+        "status": "success",
+        "toolName": "focusproof_media_evidence_verification",
+        "visualFactsCount": 8
+      },
+      {
+        "actionClass": "ReviewDraftAction",
+        "eventType": "ActionEvent",
+        "id": "dd5855b9-a5e0-403d-a91a-012079bd2af2",
+        "toolName": "focusproof_review_draft"
+      },
+      {
+        "capability": "",
+        "errorCode": "",
+        "eventType": "ObservationEvent",
+        "id": "213fa6b4-f014-4c73-bd2c-73e5e0aaaa73",
+        "observationClass": "ReviewDraftObservation",
+        "status": "",
+        "toolName": "focusproof_review_draft",
+        "visualFactsCount": 0
+      }
+    ],
+    "fact": "fact_093b66b0421547701acdb145ff4881186320eddc7f04730f0f662f1245596a95",
+    "factIds": [
+      "fact_093b66b0421547701acdb145ff4881186320eddc7f04730f0f662f1245596a95",
+      "fact_ac8104b8a41d965cd82e46c11626f3d978ab9004a30e7fa77f02b2dca9869817",
+      "fact_9f2090e3ffa2a412dbab10578942daa4e67525d80052c643921422a6e2dbc4a9",
+      "fact_75c5b064615b2920d851f6963de6583ea57cbe93d54a62e173c307c8cc3256c3",
+      "fact_572e387560cb46579d76a7441b4bfc8320045cf9a816bbb35bbb68a85804b414",
+      "fact_4fd0d0f3c13a358f78c8401e473d38f662669af8aa2bbbd2218669706f9b6186",
+      "fact_995dd644a8f46ecf85775c23fb3f7adbb5609fa6b01c53f2b82744a6f8e33b59",
+      "fact_28eca5266ad14a3b681a0a5e3875fac419300bcee6b2514c37939bae637cec3c"
+    ],
+    "lineage": [
+      {
+        "consumedFactIds": [
+          "fact_093b66b0421547701acdb145ff4881186320eddc7f04730f0f662f1245596a95",
+          "fact_ac8104b8a41d965cd82e46c11626f3d978ab9004a30e7fa77f02b2dca9869817",
+          "fact_9f2090e3ffa2a412dbab10578942daa4e67525d80052c643921422a6e2dbc4a9",
+          "fact_75c5b064615b2920d851f6963de6583ea57cbe93d54a62e173c307c8cc3256c3",
+          "fact_572e387560cb46579d76a7441b4bfc8320045cf9a816bbb35bbb68a85804b414",
+          "fact_4fd0d0f3c13a358f78c8401e473d38f662669af8aa2bbbd2218669706f9b6186",
+          "fact_995dd644a8f46ecf85775c23fb3f7adbb5609fa6b01c53f2b82744a6f8e33b59",
+          "fact_28eca5266ad14a3b681a0a5e3875fac419300bcee6b2514c37939bae637cec3c"
+        ],
+        "factCount": 8,
+        "facts": [
+          {
+            "factId": "fact_093b66b0421547701acdb145ff4881186320eddc7f04730f0f662f1245596a95",
+            "factType": "visual_text"
+          },
+          {
+            "factId": "fact_ac8104b8a41d965cd82e46c11626f3d978ab9004a30e7fa77f02b2dca9869817",
+            "factType": "visual_text"
+          },
+          {
+            "factId": "fact_9f2090e3ffa2a412dbab10578942daa4e67525d80052c643921422a6e2dbc4a9",
+            "factType": "visual_text"
+          },
+          {
+            "factId": "fact_75c5b064615b2920d851f6963de6583ea57cbe93d54a62e173c307c8cc3256c3",
+            "factType": "visual_text"
+          },
+          {
+            "factId": "fact_572e387560cb46579d76a7441b4bfc8320045cf9a816bbb35bbb68a85804b414",
+            "factType": "visual_text"
+          },
+          {
+            "factId": "fact_4fd0d0f3c13a358f78c8401e473d38f662669af8aa2bbbd2218669706f9b6186",
+            "factType": "visual_text"
+          },
+          {
+            "factId": "fact_995dd644a8f46ecf85775c23fb3f7adbb5609fa6b01c53f2b82744a6f8e33b59",
+            "factType": "visual_text"
+          },
+          {
+            "factId": "fact_28eca5266ad14a3b681a0a5e3875fac419300bcee6b2514c37939bae637cec3c",
+            "factType": "visual_text"
+          }
+        ],
+        "projectionId": "projection_5cb2be9f31e7932e00a534e6f669431456dbc68bb82e69a09e2f8e8c896ce9a3",
+        "sourceObservationEventId": "1fdaf308-30c8-49a5-9c2d-251f0bcdd577"
+      }
+    ],
+    "projection": "projection_5cb2be9f31e7932e00a534e6f669431456dbc68bb82e69a09e2f8e8c896ce9a3",
+    "projectionIds": [
+      "projection_5cb2be9f31e7932e00a534e6f669431456dbc68bb82e69a09e2f8e8c896ce9a3"
+    ],
+    "review": "evt_review_213fa6b4-f014-4c73-bd2c-73e5e0aaaa73",
+    "reviewProjectionIds": [
+      "projection_5cb2be9f31e7932e00a534e6f669431456dbc68bb82e69a09e2f8e8c896ce9a3"
+    ],
+    "review_projection": "projection_5cb2be9f31e7932e00a534e6f669431456dbc68bb82e69a09e2f8e8c896ce9a3",
+    "review_score": "evt_score_213fa6b4-f014-4c73-bd2c-73e5e0aaaa73",
+    "schemaVersion": "3.0",
+    "score": "evt_score_213fa6b4-f014-4c73-bd2c-73e5e0aaaa73",
+    "source": "1fdaf308-30c8-49a5-9c2d-251f0bcdd577",
+    "sourceObservationEventIds": [
+      "1fdaf308-30c8-49a5-9c2d-251f0bcdd577"
+    ]
+  },
+  "gate": "real_visual_provider",
+  "image": {
+    "path": "/home/holy/web3/focusproof-agent/agent-server/tests/fixtures/real-vision/focusproof-general-session.png",
+    "sha256": "9a2fc6ac6864101e14e933e503840705392f5153fd2a4b2b7b9da246aeac4e67",
+    "size": 66594
+  },
+  "limits": {
+    "maxCallsPerReview": 6,
+    "maxConcurrentReviews": 1,
+    "maxReviewSeconds": 120
+  },
+  "model": "qwen3.7-plus",
+  "nativeEvents": {
+    "actionCount": 2,
+    "observationCount": 2
+  },
+  "provider": "openai",
+  "runnerSourceSha256": "11bfa9399b066b9216a7cce8b7b722b11688494c89b98b68b921c8f91baa6252",
+  "scanner_mode": "clamd",
+  "schemaVersion": "1.0",
+  "sdk": {
+    "name": "openhands-sdk",
+    "version": "1.31.0"
+  },
+  "status": "PASS",
+  "timestamp": "2026-08-26T05:27:56.098565+00:00"
+}

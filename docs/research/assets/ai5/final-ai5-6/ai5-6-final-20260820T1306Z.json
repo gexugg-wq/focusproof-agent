@@ -1,0 +1,92 @@
+{
+  "assurance": {
+    "mediaScanner": "fake-clean",
+    "productionMalwareScanningVerified": false,
+    "scope": "local-test-only"
+  },
+  "checks": {
+    "imagePayloadNotPersisted": true,
+    "mediaToolUsed": true,
+    "monadDisabled": true,
+    "nativeActionObserved": true,
+    "nativeObservationObserved": true,
+    "officialConversationUsed": true,
+    "productionLlmUsed": true,
+    "realRuntimeUsed": true,
+    "visionActive": true
+  },
+  "conversationId": "sess_71acb18d6ea34bddb1571ab3cbad5d2e",
+  "diagnostics": {
+    "agentDecisionCompletionCalls": 0,
+    "completionSucceeded": true,
+    "conversationId": "fa4d691f-e19b-5e8c-9d04-6b4b87d1b3ba",
+    "createStatus": "http-200",
+    "extractorReached": true,
+    "mediaActionSeen": true,
+    "mediaObservation": {
+      "errorCode": "",
+      "status": "ready"
+    },
+    "officialEventCounts": {
+      "actionCount": 2,
+      "messageCount": 2,
+      "observationCount": 2
+    },
+    "projectionReached": true,
+    "providerAttempted": true,
+    "responseReceived": true,
+    "responseTextLength": 697,
+    "reviewStatus": "completed",
+    "rootException": {
+      "category": "unclassified",
+      "type": "GateFailed"
+    },
+    "runtimeMode": "openhands-local-real",
+    "totalProviderCompletionCalls": 1,
+    "transportOutcome": "received",
+    "uploadStatus": "http-200",
+    "usedOpenHandsConversation": true,
+    "visualFactsCount": 8,
+    "visualFactsParsed": true,
+    "visualProviderAttempted": true,
+    "visualProviderCompletionCalls": 1,
+    "visualProviderCompletionSucceeded": true,
+    "visualProviderErrorCategory": "none",
+    "visualProviderResponseReceived": true,
+    "visualResponseFormat": "fenced_json",
+    "visualResponseParseStage": "complete"
+  },
+  "eventTypes": [
+    "ActionEvent",
+    "MessageEvent",
+    "ObservationEvent",
+    "PauseEvent",
+    "SystemPromptEvent"
+  ],
+  "gate": "real_image_provider",
+  "image": {
+    "path": "/home/holy/web3/focusproof-agent/docs/research/assets/ai5/task7/chromium-success.png",
+    "sha256": "7ee186d8b0efa5ca62039ab97655e811e748c86696fee1752f8c0fc7ef3f468e",
+    "size": 93296
+  },
+  "limits": {
+    "maxCallsPerReview": 6,
+    "maxConcurrentReviews": 1,
+    "maxReviewSeconds": 120
+  },
+  "model": "qwen3.7-plus",
+  "nativeEvents": {
+    "actionCount": 2,
+    "observationCount": 2
+  },
+  "provider": "openai",
+  "runnerSourceSha256": "19b4e03d63adb56749b6c7dc24a30bd3619a3d0d21e64354f0b1d4a7a8e371fd",
+  "scanner_mode": "fake-clean",
+  "schemaVersion": "1.0",
+  "sdk": {
+    "name": "openhands-sdk",
+    "version": "1.31.0"
+  },
+  "status": "PASS",
+  "timestamp": "2026-08-20T13:04:05.742143+00:00"
+}

@@ -1,11 +1,22 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 from openhands.sdk.utils.redact import redact_text_secrets
+from pydantic import BaseModel, ConfigDict
 
 from focusproof.openhands_runtime.url_redaction import safe_evidence_payload
+
+
+class FocusProofMessageEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    message_key: str
+    kind: Literal["goal", "evidence", "evidence_context", "answer"]
+    session_id: str
+    payload: dict[str, object]
 
 MAX_TEXT_EVIDENCE_CHARACTERS = 4_000
 TEXT_EVIDENCE_CONTEXT_VERSION = 1

@@ -5,11 +5,13 @@
   "scripts": {
     "dev": "next dev",
     "lint": "eslint . --ext .ts,.tsx",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "next build",
-    "test:e2e": "playwright test"
+    "test:e2e": "npm run test:e2e:general && npm run test:e2e:monad",
+    "test:e2e:general": "FOCUSPROOF_E2E_SCENARIO=general-flow playwright test",
+    "test:e2e:monad": "FOCUSPROOF_E2E_SCENARIO=monad-flow playwright test e2e/monad-flow.spec.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

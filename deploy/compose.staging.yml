@@ -25,6 +25,20 @@ services:
       - private
     stop_grace_period: 30s
 
+  clamd:
+    image: clamav/clamav:1.4.3@sha256:75fb5fd95fcbe1d7e6d240c369c1572b686ee2c95949d1042b5148de8eddebb4
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "clamdscan", "--ping=1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+    networks:
+      private:
+        aliases: [clamd]
+    stop_grace_period: 30s
+
   migrate:
     <<: *backend-image
     restart: "no"
@@ -101,6 +115,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/agent-server.Dockerfile
+      target: media
       args:
         SOURCE_DATE_EPOCH: "1735689600"
     restart: unless-stopped
@@ -109,8 +124,13 @@ services:
         condition: service_completed_successfully
       oidc-provider:
         condition: service_healthy
+      clamd:
+        condition: service_healthy
     environment:
       FOCUSPROOF_PROFILE: staging
+      FOCUSPROOF_MEDIA_ENABLED: "true"
+      FOCUSPROOF_MEDIA_SCANNER_MODE: clamd
+      FOCUSPROOF_CLAMD_ENDPOINT: tcp://clamd:3310
       FOCUSPROOF_DATA_DIR: /app/var
       FOCUSPROOF_OIDC_ISSUER: https://127.0.0.1:${FOCUSPROOF_STAGING_OIDC_HOST_PORT:?required}/realms/focusproof
       FOCUSPROOF_OIDC_AUDIENCE: focusproof-api

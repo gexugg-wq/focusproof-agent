@@ -260,7 +260,7 @@ test("authenticated production BFF acceptance covers recovery, authorization, an
     await login(ownerAPage, "learner");
     const sessionId = await createSession(ownerAPage, `AI4C acceptance ${suffix}`);
 
-    const textInput = ownerAPage.getByLabel("Learning notes, explanation, code, or error record");
+    const textInput = ownerAPage.getByLabel("Learning evidence");
     await textInput.focus();
     await expect(textInput).toBeFocused();
     await textInput.fill("Append-only event replay rebuilds state by applying immutable events in sequence, preserving the history needed to reproduce the current view.");
@@ -318,7 +318,7 @@ test("authenticated production BFF acceptance covers recovery, authorization, an
     const disabledSessionId = await createSession(disabledPage, `Disabled boundary ${suffix}`);
     disabledWasMapped = true;
     setPrincipalActive(disabled.id, false);
-    const retained = disabledPage.getByLabel("Learning notes, explanation, code, or error record");
+    const retained = disabledPage.getByLabel("Learning evidence");
     await retained.fill("This input must survive the authorization failure.");
     const forbiddenResponse = disabledPage.waitForResponse((response) =>
       response.request().method() === "POST" && response.url().endsWith(`/api/focusproof/sessions/${disabledSessionId}/evidence`)
