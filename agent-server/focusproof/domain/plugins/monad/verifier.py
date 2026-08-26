@@ -86,7 +86,8 @@ class MonadEvidenceVerifier:
             if timestamp < int(session_started_at.timestamp()) - self._tolerance:
                 return _result("rejected", "stale_transaction", block_number=block_number)
         except MonadRpcUnavailable as exc:
-            return _result("unavailable", str(exc), retryable=True)
+            finding = "deadline_exhausted" if exc.code == "deadline_exhausted" else "rpc_unavailable"
+            return _result("unavailable", finding, retryable=True)
         except (ValueError, TypeError, KeyError, IndexError, OverflowError):
             return _result("unavailable", "malformed_response", retryable=True)
         facts: dict[str, int | str] = {
