@@ -31,6 +31,16 @@ def test_general_session_gets_control_and_general_verification_tools() -> None:
     ]
 
 
+def test_read_only_projection_exactly_matches_assembled_tool_names() -> None:
+    selected = assembler()
+    assert selected.project_tool_names("general", None) == tuple(
+        tool.name
+        for tool in selected.assemble(
+            "sess_1", "general", None, compatibility_mode=True
+        )
+    )
+
+
 def test_session_without_evidence_types_gets_allowlisted_general_verifiers() -> None:
     tools = assembler().assemble(
         "sess_1", "general", set(), compatibility_mode=True

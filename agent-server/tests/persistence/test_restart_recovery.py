@@ -162,6 +162,9 @@ def test_restart_restores_native_history_without_duplicate_product_rows(
     with uow_1() as uow:
         first_audit_count = len(uow.audit_events.list(session_id))
         first_reviews = uow.reviews.list_for_session(session_id)
+    assert first_conversation_id is not None
+    assert len(first_conversation_id) == 32
+    assert "-" not in first_conversation_id
     assert first_result.reviewStatus == "awaiting_user"
     assert len(first_reviews) == 1
 
@@ -176,27 +179,24 @@ def test_restart_restores_native_history_without_duplicate_product_rows(
         for event in restored.conversation.state.events
         if isinstance(event, MessageEvent)
     ]
-    assert str(restored.conversation_id) == first_conversation_id
+    assert restored.conversation_id.hex == first_conversation_id
     assert len(restored.conversation.state.events) == first_native_count
     assert restored_keys.count(f"goal:{session_id}") == 1
     assert restored_keys.count("evidence:ev_1") == 1
     with uow_2() as uow:
         assert len(uow.audit_events.list(session_id)) == first_audit_count
-        uow.answers.upsert(session_id, first_result.agentQuestions[0]["questionId"], "Replay rebuilds the derived view from immutable facts.")
+        uow.answers.upsert(
+            session_id,
+            first_result.agentQuestions[0]["questionId"],
+            "Replay rebuilds the derived view from immutable facts.",
+        )
         uow.commit()
 
     manager_2.send_answer(session_id, "verified-user-1")
     completed = manager_2.run_review(session_id, "verified-user-1")
     assert completed.reviewStatus == "completed"
     assert completed.conversationId == first_conversation_id
-    retry_goal, retry_evidence, retry_answers = manager_2._load_scoring_facts(session_id)
-    retried = manager_2._result_extractor.extract(
-        handle=restored,
-        native_events=list(restored.conversation.state.events),
-        goal=retry_goal,
-        evidence=retry_evidence,
-        answers=retry_answers,
-    )
+    retried = manager_2.run_review(session_id, "verified-user-1")
     assert retried.reviewStatus == "completed"
     with uow_2() as uow:
         reviews = uow.reviews.list_for_session(session_id)
@@ -221,9 +221,7 @@ def test_review_persistence_failure_rolls_back_final_audit_events(
     _seed(uow_factory, session_id)
     manager = _manager(tmp_path, uow_factory, _completed_llm)
 
-    def fail_review_persistence(
-        self: SqlReviewRepository, record: object
-    ) -> None:
+    def fail_review_persistence(self: SqlReviewRepository, record: object) -> None:
         del self, record
         raise RuntimeError("review persistence failed")
 
@@ -253,12 +251,7 @@ def test_corrupt_openhands_persistence_does_not_create_a_new_conversation(
     _seed(uow_factory, session_id)
     conversation_id = uuid5(NAMESPACE_URL, f"focusproof:{session_id}")
     persistence_root = (
-        tmp_path
-        / "var"
-        / "conversations"
-        / session_id
-        / "persistence"
-        / conversation_id.hex
+        tmp_path / "var" / "conversations" / session_id / "persistence" / conversation_id.hex
     )
     persistence_root.mkdir(parents=True)
     (persistence_root / "base_state.json").write_text("{corrupt", encoding="utf-8")

@@ -36,6 +36,13 @@ def test_registry_rejects_conflicting_duplicate_name() -> None:
         registry.register(replace(capability(), tool_class_name="OtherTool"))
 
 
+def test_registry_rejects_duplicate_sdk_tool_identity_under_another_name() -> None:
+    item = capability("text")
+    registry = VerificationCapabilityRegistry([item])
+    with pytest.raises(ValueError, match="tool identity"):
+        registry.register(replace(item, registry_name="text_alias"))
+
+
 def test_registry_selection_is_filtered_and_stable() -> None:
     registry = VerificationCapabilityRegistry(
         [

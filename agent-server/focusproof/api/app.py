@@ -64,6 +64,7 @@ from focusproof.domain.review import ReviewResult
 from focusproof.persistence.database import (
     create_database_engine,
     create_session_factory,
+    enforce_safe_database_logging,
 )
 from focusproof.persistence.security_audit import PersistentSecurityAuditSink
 from focusproof.persistence.audit_projection import PersistentAuditProjectionStore
@@ -82,6 +83,7 @@ from focusproof.persistence.schema_check import (
     SchemaOutOfDateError,
     check_schema_revision,
 )
+from focusproof.openhands_runtime.tool_registry import release_repository_provider
 from focusproof.persistence.unit_of_work import UnitOfWork, UnitOfWorkFactory
 from focusproof.runtime.evidence import Evidence, LearningGoal, hash_evidence_content
 from focusproof.runtime.view import AgentView, SessionView, ToolDescription
@@ -97,6 +99,7 @@ if TYPE_CHECKING:
     from focusproof.openhands_runtime.factory import LLMFactory
     from focusproof.openhands_runtime.handle import RuntimeMode, RuntimeReviewResult
     from focusproof.openhands_runtime.manager import ConversationManager
+    from focusproof.openhands_runtime.runtime_contributions import RuntimeContribution
 
 
 def _get_openhands_capabilities() -> dict[str, Any]:
@@ -295,6 +298,13 @@ def _identity_unavailable_response(exc: IdentityUnavailableError) -> JSONRespons
     )
 
 
+def _service_unavailable_response(code: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"code": code, "retryable": code != "identity_unavailable"},
+    )
+
+
 def _database_unavailable_response() -> JSONResponse:
     return JSONResponse(
         status_code=503,
@@ -308,6 +318,14 @@ class ServiceUnavailableError(RuntimeError):
         self.code = code
 
 
+class IdentityConfigurationError(RuntimeError):
+    pass
+
+
+class RuntimeConfigurationError(RuntimeError):
+    pass
+
+
 class SessionFinalizedError(RuntimeError):
     def __init__(self, session_id: str) -> None:
         super().__init__(f"Session {session_id} is finalized")
@@ -315,9 +333,9 @@ class SessionFinalizedError(RuntimeError):
 
 
 class RequestBodyLimitMiddleware:
-    def __init__(self, app: ASGIApp, *, max_body_bytes: int) -> None:
+    def __init__(self, app: ASGIApp, *, resolver: Any) -> None:
         self._app = app
-        self._max_body_bytes = max_body_bytes
+        self._resolver = resolver
 
     async def __call__(
         self,
@@ -355,6 +373,7 @@ class RequestBodyLimitMiddleware:
                 await _database_unavailable_response()(scope, receive, send)
                 return
 
+        max_body_bytes = self._resolver.resolve(scope)
         headers = dict(scope.get("headers", []))
         content_length = headers.get(b"content-length")
         if content_length is not None:
@@ -362,7 +381,7 @@ class RequestBodyLimitMiddleware:
                 declared_length = int(content_length)
             except ValueError:
                 declared_length = 0
-            if declared_length > self._max_body_bytes:
+            if declared_length > max_body_bytes:
                 if protected_request and identity is not None:
                     try:
                         _record_authorized_request(request, identity)
@@ -375,40 +394,47 @@ class RequestBodyLimitMiddleware:
                 await _request_too_large_response()(scope, receive, send)
                 return
 
-        messages: list[Message] = []
         received_bytes = 0
-        while True:
+        request_complete = False
+        response_messages: list[Message] = []
+        overflow = False
+
+        async def limited_receive() -> Message:
+            nonlocal received_bytes, overflow, request_complete
             message = await receive()
-            messages.append(message)
+            if message["type"] == "http.disconnect":
+                request_complete = True
+            elif message["type"] == "http.request":
+                received_bytes += len(message.get("body", b""))
+                request_complete = not message.get("more_body", False)
+                if received_bytes > max_body_bytes:
+                    overflow = True
+                    request_complete = True
+                    return {"type": "http.request", "body": b"", "more_body": False}
+            return message
+
+        async def limited_send(message: Message) -> None:
+            response_messages.append(message)
+
+        await self._app(scope, limited_receive, limited_send)
+        while not request_complete:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                request_complete = True
+                break
             if message["type"] != "http.request":
-                break
+                continue
             received_bytes += len(message.get("body", b""))
-            if received_bytes > self._max_body_bytes:
-                if protected_request and identity is not None:
-                    try:
-                        _record_authorized_request(request, identity)
-                    except SQLAlchemyError:
-                        await _database_unavailable_response()(scope, receive, send)
-                        return
-                    except IdentityUnavailableError as exc:
-                        await _identity_unavailable_response(exc)(scope, receive, send)
-                        return
-                await _request_too_large_response()(scope, receive, send)
-                return
-            if not message.get("more_body", False):
+            if received_bytes > max_body_bytes:
+                overflow = True
                 break
+            request_complete = not message.get("more_body", False)
+        if overflow:
+            await _request_too_large_response()(scope, receive, send)
 
-        message_index = 0
-
-        async def replay_receive() -> Message:
-            nonlocal message_index
-            if message_index < len(messages):
-                message = messages[message_index]
-                message_index += 1
-                return message
-            return await receive()
-
-        await self._app(scope, replay_receive, send)
+            return
+        for message in response_messages:
+            await send(message)
 
 
 def _authorization_header_from_scope(scope: Scope) -> str | None:
@@ -495,8 +521,13 @@ def create_app(
         if lock_timeout_seconds is not None
         else float(os.environ.get("FOCUSPROOF_LOCK_TIMEOUT_SECONDS") or "5")
     )
+    effective_llm_factory = llm_factory
+    if effective_llm_factory is None and configured_profile == "demo-deterministic":
+        effective_llm_factory = staging_test_llm
     configured_runtime_mode: RuntimeMode = (
-        "openhands-local-scripted-test" if llm_factory is not None else "openhands-local-real"
+        "openhands-local-scripted-test"
+        if effective_llm_factory is not None
+        else "openhands-local-real"
     )
 
     @asynccontextmanager
@@ -507,14 +538,19 @@ def create_app(
         application.state.allow_anonymous_identity = False
         resolved_data_dir.mkdir(parents=True, exist_ok=True)
         try:
-            oidc_settings = load_oidc_settings(
-                os.environ,
-                profile=configured_profile,
-            )
+            try:
+                oidc_settings = load_oidc_settings(
+                    os.environ,
+                    profile=configured_profile,
+                )
+            except ValidationError as exc:
+                raise IdentityConfigurationError from exc
             application.state.allow_anonymous_identity = (
-                not oidc_settings.enabled and configured_profile == "local-dev"
+                not oidc_settings.enabled
+                and configured_profile
+                in {"local-dev", "demo-deterministic", "demo-real-vision"}
             )
-            if not oidc_settings.enabled and configured_profile != "local-dev":
+            if not oidc_settings.enabled and not application.state.allow_anonymous_identity:
                 application.state.readiness_error = "identity_unavailable"
             engine = create_database_engine(configured_database_url)
             check_schema_revision(engine, PROJECT_ROOT / "alembic.ini")
@@ -541,7 +577,7 @@ def create_app(
             configure_token_verifier(token_verifier)
             audit_projection_store = PersistentAuditProjectionStore(uow_factory)
             evidence_provider = UowEvidenceProvider(uow_factory)
-            from focusproof.openhands_runtime.locks import FileSessionRunLock, SessionBusyError
+            from focusproof.openhands_runtime.locks import FileSessionRunLock
             from focusproof.openhands_runtime.manager import ConversationManager
             from focusproof.openhands_runtime.provider_admission import BoundedProviderAdmission
 
@@ -549,12 +585,15 @@ def create_app(
                 resolved_data_dir,
                 timeout_seconds=configured_lock_timeout,
             )
-            application.add_exception_handler(
-                SessionBusyError,
-                _session_busy_handler,
-            )
             plugin_providers = load_evidence_plugin_providers(os.environ)
-            runtime_settings = load_runtime_settings(os.environ) if llm_factory is None else None
+            try:
+                runtime_settings = (
+                    load_runtime_settings(os.environ)
+                    if effective_llm_factory is None
+                    else None
+                )
+            except ValidationError as exc:
+                raise RuntimeConfigurationError from exc
             real_llm_policy = runtime_settings.real_llm if runtime_settings is not None else None
             provider_admission = (
                 BoundedProviderAdmission(
@@ -564,12 +603,31 @@ def create_app(
                 if real_llm_policy is not None
                 else None
             )
+            media_runtime_contribution: RuntimeContribution | None = None
+            media_content_provider = None
+            if media_enabled:
+                from focusproof.bootstrap.media_composition import (
+                    compose_media_message_content_provider,
+                    compose_optional_media_runtime_contribution,
+                )
+
+                media_runtime_contribution = compose_optional_media_runtime_contribution(
+                    enabled=True,
+                    repository=evidence_provider,
+                )
+                media_content_provider = compose_media_message_content_provider(
+                    uow_factory=uow_factory,
+                    data_dir=resolved_data_dir,
+                )
+            runtime_contributions: tuple[RuntimeContribution, ...] = (
+                () if media_runtime_contribution is None else (media_runtime_contribution,)
+            )
             manager = ConversationManager(
                 repository=evidence_provider,
                 audit_log=audit_projection_store,
                 project_root=PROJECT_ROOT,
                 data_dir=resolved_data_dir,
-                llm_factory=llm_factory,
+                llm_factory=effective_llm_factory,
                 uow_factory=uow_factory,
                 run_lock=run_lock,
                 review_timeout_seconds=(
@@ -579,8 +637,11 @@ def create_app(
                 ),
                 provider_admission=provider_admission,
                 runtime_settings=runtime_settings,
+                media_content_provider=media_content_provider,
                 plugin_providers=plugin_providers,
+                runtime_contributions=runtime_contributions,
             )
+            enforce_safe_database_logging()
             application.state.engine = engine
             application.state.uow_factory = uow_factory
             application.state.security_audit_sink = security_audit_sink
@@ -592,18 +653,51 @@ def create_app(
             application.state.audit_projection_store = audit_projection_store
             application.state.evidence_provider = evidence_provider
             application.state.plugin_providers = plugin_providers
+            application.state.product_capabilities = []
+            if media_enabled:
+                from focusproof.bootstrap.media_composition import compose_media_command
+
+                application.state.media_ingestion_command = compose_media_command(
+                    uow_factory=uow_factory,
+                    data_dir=resolved_data_dir,
+                    session_run_lock=run_lock,
+                )
+                application.state.product_capabilities = [
+                    {
+                        "capabilityId": "image_evidence",
+                        "enabled": True,
+                        "formats": ["image/png", "image/jpeg", "image/webp"],
+                        "maxCount": 4,
+                        "maxOriginalBytes": 10485760,
+                        "maxNormalizedBytesPerSession": 20971520,
+                        "explanationRequired": True,
+                    }
+                ]
             application.state.plugin_capabilities = collect_public_plugin_capabilities(
                 plugin_providers
             )
             application.state.run_lock = run_lock
             application.state.conversation_manager = manager
-        except ValidationError:
+            from focusproof.openhands_runtime.sdk_contracts import (
+                preflight_openhands_sdk_contract,
+            )
+            preflight_openhands_sdk_contract()
+            projection = getattr(manager, "available_tool_names", lambda: ())
+            application.state.available_tool_names = tuple(projection())
+        except IdentityConfigurationError:
             application.state.readiness_error = "identity_unavailable"
+            configure_token_verifier(None)
+        except RuntimeConfigurationError:
+            application.state.readiness_error = "runtime_unavailable"
             configure_token_verifier(None)
         except SchemaOutOfDateError:
             application.state.readiness_error = "schema_out_of_date"
         except SQLAlchemyError:
             application.state.readiness_error = "database_unavailable"
+        except Exception as exc:
+            if type(exc).__name__ != "OpenHandsContractUnavailable":
+                raise
+            application.state.readiness_error = "runtime_contract_unavailable"
         try:
             yield
         finally:
@@ -612,17 +706,26 @@ def create_app(
                     manager.close_all()
             finally:
                 reset_token_verifier()
-                from focusproof.openhands_runtime.tool_registry import release_repository_provider
-
                 release_repository_provider()
                 if engine is not None:
                     engine.dispose()
 
     application = FastAPI(title="FocusProof Agent Server", lifespan=lifespan)
+    from focusproof.openhands_runtime.locks import SessionBusyError
+
+    application.add_exception_handler(SessionBusyError, _session_busy_handler)
+
     application.state.recovery_data_dir = resolved_data_dir
+    media_enabled = os.environ.get("FOCUSPROOF_MEDIA_ENABLED") == "true"
+    if media_enabled:
+        from focusproof.api.media_routes import build_media_router
+
+        application.include_router(build_media_router())
+    from focusproof.api.request_limits import BodyLimitResolver
+
     application.add_middleware(
         RequestBodyLimitMiddleware,
-        max_body_bytes=MAX_REQUEST_BODY_BYTES,
+        resolver=BodyLimitResolver(application),
     )
     application.add_middleware(
         OperationalTelemetryMiddleware,
@@ -737,10 +840,7 @@ def _install_exception_handlers(application: FastAPI) -> None:
         exc: ServiceUnavailableError,
     ) -> JSONResponse:
         del request
-        return JSONResponse(
-            status_code=503,
-            content={"code": exc.code, "retryable": True},
-        )
+        return _service_unavailable_response(exc.code)
 
     @application.exception_handler(IdentityUnavailableError)
     async def identity_unavailable_handler(
@@ -832,10 +932,7 @@ def _install_routes(
             "database_unavailable",
         )
         if readiness_error is not None:
-            return JSONResponse(
-                status_code=503,
-                content={"code": readiness_error, "retryable": True},
-            )
+            return _service_unavailable_response(readiness_error)
         engine = getattr(request.app.state, "engine", None)
         manager = getattr(request.app.state, "conversation_manager", None)
         if engine is None or manager is None:
@@ -867,7 +964,7 @@ def _install_routes(
     ) -> dict[str, str]:
         _record_authorized_request(http_request, identity)
         session_id = f"sess_{uuid4().hex}"
-        conversation_id = str(uuid5(NAMESPACE_URL, f"focusproof:{session_id}"))
+        conversation_id = uuid5(NAMESPACE_URL, f"focusproof:{session_id}").hex
         now = datetime.now(UTC)
         runtime_mode = configured_runtime_mode
         record = StoredSession(
@@ -899,7 +996,10 @@ def _install_routes(
                 event_id=f"evt_session_created_{session_id}",
             )
             uow.commit()
-        from focusproof.openhands_runtime.factory import RuntimeCreationError, RuntimeUnavailableError
+        from focusproof.openhands_runtime.factory import (
+            RuntimeCreationError,
+            RuntimeUnavailableError,
+        )
 
         try:
             manager.get_or_restore(session_id, identity.verified_user_id)
@@ -962,7 +1062,10 @@ def _install_routes(
                     uow.commit()
         sync_pending = False
         if not reviewed_replay:
-            from focusproof.openhands_runtime.factory import RuntimeCreationError, RuntimeUnavailableError
+            from focusproof.openhands_runtime.factory import (
+                RuntimeCreationError,
+                RuntimeUnavailableError,
+            )
             from focusproof.openhands_runtime.locks import SessionBusyError
 
             try:
@@ -1020,7 +1123,10 @@ def _install_routes(
                     uow.commit()
         sync_pending = False
         if not reviewed_replay:
-            from focusproof.openhands_runtime.factory import RuntimeCreationError, RuntimeUnavailableError
+            from focusproof.openhands_runtime.factory import (
+                RuntimeCreationError,
+                RuntimeUnavailableError,
+            )
             from focusproof.openhands_runtime.locks import SessionBusyError
 
             try:
@@ -1054,9 +1160,16 @@ def _install_routes(
             identity,
         )
         _record_authorized_request(request, identity)
-        from focusproof.openhands_runtime.factory import RuntimeCreationError, RuntimeUnavailableError
-        from focusproof.openhands_runtime.provider_admission import ProviderAdmissionUnavailableError
+        from focusproof.openhands_runtime.factory import (
+            ProviderInfrastructureUnavailableError,
+            RuntimeCreationError,
+            RuntimeUnavailableError,
+        )
+        from focusproof.openhands_runtime.provider_admission import (
+            ProviderAdmissionUnavailableError,
+        )
 
+        await request.body()
         review_started = monotonic()
         review_call_id = token_hex(16)
         review_task = asyncio.create_task(
@@ -1080,6 +1193,13 @@ def _install_routes(
         except asyncio.CancelledError:
             manager.interrupt(session_id, review_call_id)
             raise
+        except ProviderInfrastructureUnavailableError:
+            _record_review_failure_operational_signal(
+                status="unavailable",
+                outcome="runtime",
+                latency_ms=max(0, round((monotonic() - review_started) * 1000)),
+            )
+            return _service_unavailable_response("runtime_unavailable")
         except RuntimeUnavailableError as exc:
             _record_review_failure_operational_signal(
                 status=(
@@ -1167,7 +1287,14 @@ def _install_routes(
                 "runtimeMode": session.runtime_mode,
             },
             "view": _view(
-                session_id, session.status, goal, runtime_evidence, review, plugin_capabilities
+                session_id,
+                session.status,
+                goal,
+                runtime_evidence,
+                review,
+                plugin_capabilities,
+                available_tool_names=tuple(getattr(request.app.state, "available_tool_names", ())),
+                product_capabilities=list(getattr(request.app.state, "product_capabilities", ())),
             ),
         }
 
@@ -1384,33 +1511,16 @@ def _evidence_id_for_request(
     return f"ev_{sha256(identity.encode('utf-8')).hexdigest()[:48]}"
 
 
-def _available_tools() -> list[ToolDescription]:
-    return [
-        ToolDescription(
-            name="FocusProofEvidenceVerificationTool",
-            description="Verifies repository evidence by ID without assigning a score.",
-            inputSchema={"type": "object", "properties": {"evidence_id": {"type": "string"}}},
-        ),
-        ToolDescription(
-            name="FocusProofLearnerInputTool",
-            description="Requests focused learner input.",
-            inputSchema={"type": "object", "properties": {}},
-        ),
-        ToolDescription(
-            name="FocusProofReviewDraftTool",
-            description="Submits findings without a numeric score.",
-            inputSchema={"type": "object", "properties": {}},
-        ),
-    ]
-
-
 def _view(
     session_id: str,
     status: str,
     goal: LearningGoal,
     evidence: list[Evidence],
     review: ReviewResult | None,
-    plugin_capabilities: list[PublicPluginCapability],
+    plugin_capabilities: list[PublicPluginCapability | dict[str, Any]],
+    *,
+    available_tool_names: tuple[str, ...] = (),
+    product_capabilities: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return AgentView(
         session=SessionView(id=session_id, status=status),
@@ -1419,10 +1529,19 @@ def _view(
         verificationResults=[],
         findings=review.findings if review else [],
         unansweredQuestions=[],
-        availableTools=_available_tools(),
+        availableTools=[
+            ToolDescription(
+                name=name,
+                description="Runtime tool available for this session.",
+                inputSchema={"type": "object", "properties": {}},
+            )
+            for name in available_tool_names
+        ],
         previousActions=[],
         pluginCapabilities=[
-            {
+            item
+            if isinstance(item, dict)
+            else {
                 "pluginId": item.plugin_id,
                 "capabilityId": item.capability_id,
                 "enabled": item.enabled,
@@ -1430,6 +1549,7 @@ def _view(
             }
             for item in plugin_capabilities
         ],
+        productCapabilities=product_capabilities or [],
     ).model_dump(mode="json")
 
 

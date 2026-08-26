@@ -10,6 +10,10 @@ from pydantic import BaseModel, ConfigDict, PrivateAttr, model_serializer
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
+from focusproof.domain.evidence_facts import (
+    EvidenceFactsNotReady as MediaEvidenceNotReady,
+    MediaEvidenceFacts,
+)
 from focusproof.persistence.repositories import StoredPrincipal
 from focusproof.persistence.unit_of_work import UnitOfWorkFactoryLike
 from focusproof.runtime.evidence import Evidence
@@ -149,8 +153,13 @@ def _is_exact_identity_uniqueness_conflict(exc: IntegrityError) -> bool:
 
 
 class UowEvidenceProvider:
-    def __init__(self, uow_factory: UnitOfWorkFactoryLike) -> None:
+    def __init__(
+        self,
+        uow_factory: UnitOfWorkFactoryLike,
+        media_content_provider: object | None = None,
+    ) -> None:
         self._uow_factory = uow_factory
+        self._media_content_provider = media_content_provider
 
     def get_evidence(self, session_id: str, evidence_id: str) -> Evidence:
         with self._uow_factory() as uow:
@@ -175,6 +184,7 @@ class UowEvidenceProvider:
             self._uow_factory,
             session_id=session_id,
             principal_id=principal_id,
+            media_content_provider=self._media_content_provider,
         )
 
 
@@ -186,6 +196,7 @@ class ScopedSessionEvidenceRepository(BaseModel):
     _uow_factory: UnitOfWorkFactoryLike = PrivateAttr()
     _session_id: str = PrivateAttr()
     _principal_id: str = PrivateAttr()
+    _media_content_provider: object | None = PrivateAttr(default=None)
 
     @classmethod
     def bind(
@@ -194,11 +205,13 @@ class ScopedSessionEvidenceRepository(BaseModel):
         *,
         session_id: str,
         principal_id: str,
+        media_content_provider: object | None = None,
     ) -> ScopedSessionEvidenceRepository:
         repository = cls()
         repository._uow_factory = uow_factory
         repository._session_id = session_id
         repository._principal_id = principal_id
+        repository._media_content_provider = media_content_provider
         return repository
 
     @model_serializer
@@ -233,3 +246,65 @@ class ScopedSessionEvidenceRepository(BaseModel):
             sourceUrl=stored.source_url,
             metadata=stored.metadata,
         )
+
+    def get_media_evidence_content(
+        self,
+        session_id: str,
+        evidence_id: str,
+    ) -> object:
+        if session_id != self._session_id:
+            raise KeyError(f"Evidence {evidence_id} does not exist")
+        provider = self._media_content_provider
+        if provider is None:
+            raise MediaEvidenceNotReady("media content provider is unavailable")
+        getter = getattr(provider, "get", None)
+        if getter is None:
+            raise MediaEvidenceNotReady("media content provider is unavailable")
+        return getter(self._principal_id, self._session_id, evidence_id)
+
+    def get_media_evidence_facts(
+        self,
+        session_id: str,
+        evidence_id: str,
+    ) -> MediaEvidenceFacts:
+        evidence = self.get_evidence(session_id, evidence_id)
+        if session_id != self._session_id:
+            raise KeyError(f"Evidence {evidence_id} does not exist")
+        provider = self._media_content_provider
+        if provider is None:
+            raise MediaEvidenceNotReady("media content provider is unavailable")
+        getter = getattr(provider, "get_facts", None)
+        if getter is None:
+            raise MediaEvidenceNotReady("media content provider is unavailable")
+        try:
+            artifact = getter(self._principal_id, self._session_id, evidence_id)
+        except KeyError as exc:
+            raise MediaEvidenceNotReady("clean media facts are not available") from exc
+        explanation = (evidence.textContent or "").strip()
+        if not explanation:
+            raise MediaEvidenceNotReady("media learner explanation is not available")
+        try:
+            return MediaEvidenceFacts(
+                evidence_id=evidence.evidenceId,
+                receipt_id=artifact.receipt_id,
+                attempt_id=artifact.attempt_id,
+                scan_result=artifact.scan_result,
+                artifact_ref=artifact.artifact_ref,
+                artifact_sha256=artifact.artifact_sha256,
+                media_type=artifact.media_type,
+                normalized_sha256=artifact.normalized_sha256,
+                byte_size=artifact.byte_size,
+                width=_positive_int(artifact.width),
+                height=_positive_int(artifact.height),
+                learner_explanation=explanation,
+            )
+        except (AttributeError, ValueError) as exc:
+            raise MediaEvidenceNotReady("media safe facts are not complete") from exc
+
+
+def _positive_int(value: object) -> int:
+    if isinstance(value, bool):
+        raise ValueError("boolean is not a positive integer")
+    if isinstance(value, (int, float)) and int(value) == value and int(value) > 0:
+        return int(value)
+    raise ValueError("value is not a positive integer")

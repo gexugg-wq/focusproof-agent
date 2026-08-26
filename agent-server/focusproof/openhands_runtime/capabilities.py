@@ -66,6 +66,16 @@ class VerificationCapabilityRegistry:
             existing = self._items.get(item.registry_name)
             if existing is not None and existing != item:
                 raise ValueError(f"conflicting capability: {item.registry_name}")
+            identity_owner = next(
+                (
+                    value
+                    for value in self._items.values()
+                    if value.tool_class_name == item.tool_class_name
+                ),
+                None,
+            )
+            if identity_owner is not None and identity_owner.registry_name != item.registry_name:
+                raise ValueError(f"conflicting tool identity: {item.tool_class_name}")
             if existing is None:
                 self._items[item.registry_name] = item
                 return item

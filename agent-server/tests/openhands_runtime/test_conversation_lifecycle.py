@@ -71,10 +71,9 @@ def test_legacy_manager_redacts_url_before_message_and_audit_projection(
             event
             for event in handle.conversation.state.events
             if isinstance(event, MessageEvent)
-            and '"kind": "evidence"' in "".join(
-                item.text
-                for item in event.llm_message.content
-                if isinstance(item, TextContent)
+            and '"kind": "evidence"'
+            in "".join(
+                item.text for item in event.llm_message.content if isinstance(item, TextContent)
             )
         )
         serialized_message = message.model_dump_json()
@@ -88,10 +87,13 @@ def test_legacy_manager_redacts_url_before_message_and_audit_projection(
     for secret in ("secret-token", "query-secret", "fragment", "metadata-secret"):
         assert secret not in serialized_message
         assert secret not in serialized_audit
-    assert source_url == repository.get_evidence(
-        "sess_legacy_url",
-        "ev_url_secret",
-    ).sourceUrl
+    assert (
+        source_url
+        == repository.get_evidence(
+            "sess_legacy_url",
+            "ev_url_secret",
+        ).sourceUrl
+    )
 
 
 def test_learner_input_stops_before_scoring(
@@ -119,9 +121,7 @@ def test_learner_input_stops_before_scoring(
     assert not audit_log.get_by_type("sess_wait", "score.calculated")
     assert not audit_log.get_by_type("sess_wait", "review.completed")
     question_events = audit_log.get_by_type("sess_wait", "question.asked")
-    assert question_events[-1].payload["questionId"] == result.agentQuestions[0][
-        "questionId"
-    ]
+    assert question_events[-1].payload["questionId"] == result.agentQuestions[0]["questionId"]
     manager.close("sess_wait")
 
 
@@ -131,9 +131,14 @@ def test_completed_review_score_is_owned_by_focusproof(
     learning_goal: LearningGoal,
     evidence: Evidence,
 ) -> None:
+    from openhands.sdk.event import ObservationEvent
+
     from focusproof.domain.scoring import score_learning_session
     from focusproof.openhands_runtime.manager import ConversationManager
-    from focusproof.openhands_runtime.tools.review_draft import ReviewDraftAction
+    from focusproof.openhands_runtime.tools.review_draft import (
+        ReviewDraftAction,
+        ReviewDraftObservation,
+    )
     from focusproof.runtime.audit_projection import InMemoryAuditProjectionStore
 
     audit_log = InMemoryAuditProjectionStore()
@@ -159,6 +164,15 @@ def test_completed_review_score_is_owned_by_focusproof(
     assert len(score_events) == 1
     assert len(review_events) == 1
     assert score_events[0].sequence < review_events[0].sequence
+    native_events = manager.get("sess_score").conversation.state.events
+    source_event = next(
+        event
+        for event in reversed(native_events)
+        if isinstance(event, ObservationEvent)
+        and isinstance(event.observation, ReviewDraftObservation)
+        and event.observation.accepted
+    )
+    source_event_id = str(source_event.id)
     completed = result.reviewResult
     assert score_events[0].payload == {
         "score": completed.score,
@@ -167,13 +181,19 @@ def test_completed_review_score_is_owned_by_focusproof(
         "dimensions": completed.dimensions,
         "findings": [finding.model_dump(mode="json") for finding in completed.findings],
         "evidenceRefs": [evidence.evidenceId],
+        "sourceObservationEventId": source_event_id,
+        "narrativeLineage": [],
+        "consumedFactIds": [],
     }
     assert review_events[0].payload == {
         "reviewId": review_events[0].payload["reviewId"],
         "summary": completed.summary,
         "nextStep": completed.nextStep,
         "scoreEventId": score_events[0].id,
+        "sourceObservationEventId": source_event_id,
     }
+    assert score_events[0].id == f"evt_score_{source_event_id}"
+    assert review_events[0].id == f"evt_review_{source_event_id}"
     manager.close("sess_score")
 
 

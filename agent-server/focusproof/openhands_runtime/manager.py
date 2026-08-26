@@ -13,6 +13,11 @@ from uuid import UUID, uuid4
 from openhands.sdk.conversation.types import ConversationCallbackType
 from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
 from openhands.sdk.event.base import Event as OpenHandsEvent
+from openhands.sdk.llm.exceptions import (
+    LLMRateLimitError,
+    LLMServiceUnavailableError,
+    LLMTimeoutError,
+)
 from openhands.sdk.utils.redact import redact_text_secrets
 
 from focusproof.domain.review import ReviewResult
@@ -25,6 +30,7 @@ from focusproof.openhands_runtime.evidence_messages import runtime_evidence_payl
 from focusproof.openhands_runtime.factory import (
     ConversationFactory,
     LLMFactory,
+    ProviderInfrastructureUnavailableError,
     RuntimeUnavailableError,
 )
 from focusproof.openhands_runtime.capabilities import (
@@ -39,8 +45,15 @@ from focusproof.openhands_runtime.provider_admission import (
     ProviderAdmission,
     ProviderAdmissionUnavailableError,
 )
-from focusproof.openhands_runtime.result_extractor import RuntimeResultExtractor
+from focusproof.openhands_runtime.result_extractor import (
+    _RuntimeResultExtractor,
+    _project_safe_completed_review_lineage,
+)
+from focusproof.openhands_runtime.runtime_contributions import RuntimeContribution
 from focusproof.openhands_runtime.synchronizer import ConversationSynchronizer
+from focusproof.openhands_runtime.runtime_evidence_message_factory import (
+    RuntimeMediaContentProvider,
+)
 from focusproof.openhands_runtime.tools import SessionEvidenceRepository
 from focusproof.openhands_runtime.tools.learner_input import LearnerInputObservation
 from focusproof.openhands_runtime.tools.review_draft import ReviewDraftObservation
@@ -60,7 +73,6 @@ _SECRET_FIELD_PATTERN: Final = re.compile(
 )
 _BEARER_PATTERN: Final = re.compile(r"(?i)\bbearer\s+\S+")
 _URL_PATTERN: Final = re.compile(r"https?://[^\s\"'<>]+")
-
 
 
 class _NoopSessionRunLock:
@@ -112,7 +124,9 @@ class ConversationManager:
         run_lock: SessionRunLock | None = None,
         provider_admission: ProviderAdmission | None = None,
         runtime_settings: RuntimeSettings | None = None,
+        media_content_provider: RuntimeMediaContentProvider | None = None,
         plugin_providers: tuple[EvidencePluginProvider, ...] = (),
+        runtime_contributions: tuple[RuntimeContribution, ...] = (),
     ) -> None:
         self._audit_log = audit_log
         self._lifecycle_lock = RLock()
@@ -132,13 +146,31 @@ class ConversationManager:
         self._run_lock = run_lock or _NoopSessionRunLock()
         self._provider_admission = provider_admission
         self._synchronizer = (
-            ConversationSynchronizer(uow_factory) if uow_factory is not None else None
+            ConversationSynchronizer(uow_factory, media_content_provider=media_content_provider)
+            if uow_factory is not None
+            else None
         )
-        self._result_extractor = RuntimeResultExtractor(audit_log, uow_factory)
+        self._result_extractor = _RuntimeResultExtractor(
+            audit_log,
+            uow_factory,
+            narrative_providers=tuple(
+                provider
+                for contribution in runtime_contributions
+                for provider in contribution.narrative_providers
+            ),
+            completion_policies=tuple(
+                policy
+                for contribution in runtime_contributions
+                for policy in contribution.completion_policies
+            ),
+        )
         self._review_timeout_seconds = review_timeout_seconds
         factory_repository: SessionEvidenceRepository | _PluginBoundScopedEvidenceProvider
         if uow_factory is not None:
-            base_repository = UowEvidenceProvider(uow_factory)
+            base_repository = UowEvidenceProvider(
+                uow_factory,
+                media_content_provider=media_content_provider,
+            )
             factory_repository = (
                 _PluginBoundScopedEvidenceProvider(
                     base_repository,
@@ -153,7 +185,9 @@ class ConversationManager:
         tool_assembler = SessionToolAssembler(
             VerificationCapabilityRegistry(build_builtin_capabilities()),
             plugin_providers=plugin_providers,
+            runtime_contributions=runtime_contributions,
         )
+        self._tool_assembler = tool_assembler
         self._factory = ConversationFactory(
             repository=factory_repository,
             project_root=project_root,
@@ -165,6 +199,9 @@ class ConversationManager:
             compatibility_mode=uow_factory is None,
         )
         self._accepting_reviews = True
+
+    def available_tool_names(self) -> tuple[str, ...]:
+        return self._tool_assembler.project_tool_names("general", None)
 
     def create(
         self,
@@ -242,6 +279,20 @@ class ConversationManager:
                 self._interrupted_reviews.discard((session_id, call_id))
                 self._lifecycle_changed.notify_all()
 
+    def project_safe_completed_review_lineage(
+        self,
+        session_id: str,
+    ) -> dict[str, object]:
+        """Project lineage from this manager's official conversation EventLog."""
+
+        with self._run_lock.acquire(session_id):
+            handle = self._get_managed_handle_unlocked(session_id)
+            native_events = list(handle.conversation.state.events)
+            return _project_safe_completed_review_lineage(
+                self._audit_log.list(session_id),
+                native_events=native_events,
+            )
+
     def _run_review(
         self,
         session_id: str,
@@ -264,7 +315,7 @@ class ConversationManager:
                         sessionId=session_id,
                         conversationMode=handle.runtime_mode,
                         usedOpenHandsConversation=True,
-                        conversationId=str(handle.conversation_id),
+                        conversationId=handle.conversation_id.hex,
                         nativeEventCount=len(native_events),
                         messageEventsCount=sum(
                             isinstance(event, MessageEvent) for event in native_events
@@ -294,7 +345,7 @@ class ConversationManager:
                     raise RuntimeUnavailableError("Conversation manager is shutting down")
                 return self._failure_result(handle, "CancelledError")
             native_events = list(handle.conversation.state.events)
-            recovered = self._result_extractor.extract(
+            recovered = self._result_extractor._extract_managed(
                 handle=handle,
                 native_events=native_events,
                 goal=goal,
@@ -325,6 +376,10 @@ class ConversationManager:
                 handle.conversation.interrupt()
                 return self._failure_result(handle, exc)
             except Exception as exc:
+                if _is_provider_infrastructure_failure(exc):
+                    raise ProviderInfrastructureUnavailableError(
+                        "OpenHands provider infrastructure is unavailable"
+                    ) from exc
                 return self._failure_result(handle, exc)
 
             native_events = list(handle.conversation.state.events)
@@ -335,7 +390,7 @@ class ConversationManager:
                 for event in self._audit_log.list(session_id)
                 if "sourceOpenHandsEventId" in event.payload
             }
-            return self._result_extractor.extract(
+            return self._result_extractor._extract_managed(
                 handle=handle,
                 native_events=native_events,
                 goal=goal,
@@ -442,6 +497,12 @@ class ConversationManager:
             self._close_unlocked(session_id)
             raise
         return handle
+
+    def _get_managed_handle_unlocked(self, session_id: str) -> ConversationHandle:
+        if self._uow_factory is None:
+            return self.get(session_id)
+        session = self._load_session(session_id)
+        return self._get_or_restore_unlocked(session_id, session.owner_user_id)
 
     def _sync_persistent_session(
         self,
@@ -605,11 +666,10 @@ class ConversationManager:
     ) -> RuntimeReviewResult:
         native_events = list(handle.conversation.state.events)
         exception_name = (
-            type(exception).__name__
-            if isinstance(exception, BaseException)
-            else exception
+            type(exception).__name__ if isinstance(exception, BaseException) else exception
         )
         if isinstance(exception, BaseException):
+            LOGGER.disabled = False
             root_exception = _root_exception(exception)
             LOGGER.warning(
                 "OpenHands conversation run failed",
@@ -618,16 +678,14 @@ class ConversationManager:
                     "conversation_id": str(handle.conversation_id),
                     "exception_type": type(exception).__name__,
                     "root_exception_type": type(root_exception).__name__,
-                    "root_exception_message": _redact_runtime_failure_message(
-                        str(root_exception)
-                    ),
+                    "root_exception_message": _redact_runtime_failure_message(str(root_exception)),
                 },
             )
         return RuntimeReviewResult(
             sessionId=handle.session_id,
             conversationMode="failed",
             usedOpenHandsConversation=False,
-            conversationId=str(handle.conversation_id),
+            conversationId=handle.conversation_id.hex,
             nativeEventCount=len(native_events),
             messageEventsCount=sum(isinstance(event, MessageEvent) for event in native_events),
             actionEventsCount=sum(isinstance(event, ActionEvent) for event in native_events),
@@ -649,6 +707,22 @@ def _root_exception(exc: BaseException) -> BaseException:
             return root
         seen.add(id(root))
         root = next_exception
+
+
+def _is_provider_infrastructure_failure(exc: BaseException) -> bool:
+    infrastructure_types = (
+        LLMRateLimitError,
+        LLMTimeoutError,
+        LLMServiceUnavailableError,
+    )
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        if isinstance(current, infrastructure_types):
+            return True
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _redact_runtime_failure_message(message: str) -> str:

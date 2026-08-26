@@ -14,7 +14,7 @@ import tempfile
 from typing import Final
 from urllib.parse import parse_qsl, unquote, urlsplit
 
-from ai4c_staging_check import (
+from scripts.ai4c_staging_check import (
     MAINTENANCE_LOCK_NAME,
     maintenance_window,
     recovery_outcome,
@@ -55,6 +55,11 @@ class RecoveryManifest:
     application_revision: str
     database_sha256: str
     openhands_archive_sha256: str
+    media_archive_sha256: str
+    openhands_tree_version: int
+    media_tree_version: int
+    openhands_relative_path: str
+    media_relative_path: str
     created_at_utc: str
 
 
@@ -83,16 +88,48 @@ def current_application_revision() -> str:
     return revision
 
 
+def _recovery_payload_layout(
+    coordination_data_dir: Path,
+    openhands_data_dir: Path,
+    media_data_dir: Path,
+) -> tuple[Path, Path]:
+    try:
+        coordination = coordination_data_dir.resolve(strict=True)
+        openhands = openhands_data_dir.resolve(strict=True)
+        media = media_data_dir.resolve(strict=True)
+    except OSError as exc:
+        raise RecoveryError("recovery payload layout is unavailable") from exc
+    if (
+        coordination_data_dir.is_symlink()
+        or openhands_data_dir.is_symlink()
+        or media_data_dir.is_symlink()
+        or not coordination.is_dir()
+        or not openhands.is_dir()
+        or not media.is_dir()
+        or openhands != coordination / "conversations"
+        or media != coordination / "media" / "objects"
+        or openhands == media
+        or openhands.is_relative_to(media)
+        or media.is_relative_to(openhands)
+    ):
+        raise RecoveryError("recovery payload layout is invalid")
+    return openhands, media
+
+
 def create_backup(
     *,
     database_url: str,
+    coordination_data_dir: Path,
     openhands_data_dir: Path,
     output_dir: Path,
+    media_data_dir: Path,
 ) -> RecoveryManifest:
     with recovery_outcome("backup"):
         return _create_backup(
             database_url=database_url,
+            coordination_data_dir=coordination_data_dir,
             openhands_data_dir=openhands_data_dir,
+            media_data_dir=media_data_dir,
             output_dir=output_dir,
         )
 
@@ -100,38 +137,44 @@ def create_backup(
 def _create_backup(
     *,
     database_url: str,
+    coordination_data_dir: Path,
     openhands_data_dir: Path,
+    media_data_dir: Path,
     output_dir: Path,
 ) -> RecoveryManifest:
     if ".." in output_dir.parts:
         raise RecoveryError("output path must not traverse parents")
-    source = openhands_data_dir.resolve(strict=True)
-    if not source.is_dir() or openhands_data_dir.is_symlink():
-        raise RecoveryError("OpenHands persistence path must be a real directory")
+    source, media_source = _recovery_payload_layout(
+        coordination_data_dir, openhands_data_dir, media_data_dir
+    )
     output_dir = output_dir.resolve()
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     if output_dir.exists():
         raise RecoveryError("output path already exists")
-    with maintenance_window(source):
-        work_dir = Path(
-            tempfile.mkdtemp(prefix=f".{output_dir.name}-", dir=output_dir.parent)
-        )
+    with maintenance_window(coordination_data_dir.resolve(strict=True)):
+        work_dir = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}-", dir=output_dir.parent))
         try:
             database_dump = work_dir / "database.dump"
             archive = work_dir / "openhands.tar.gz"
+            media_archive = work_dir / "media.tar.gz"
             manifest_path = work_dir / "manifest.json"
             _run_pg_dump(database_url, database_dump)
             _write_deterministic_archive(source, archive)
+            _write_deterministic_archive(media_source, media_archive)
             manifest = RecoveryManifest(
-                schema_version=1,
+                schema_version=2,
                 application_revision=current_application_revision(),
                 database_sha256=_file_sha256(database_dump),
                 openhands_archive_sha256=_file_sha256(archive),
+                media_archive_sha256=_file_sha256(media_archive),
+                openhands_tree_version=1,
+                media_tree_version=1,
+                openhands_relative_path="conversations",
+                media_relative_path="media/objects",
                 created_at_utc=datetime.now(UTC).isoformat(),
             )
             manifest_path.write_text(
-                json.dumps(asdict(manifest), sort_keys=True, separators=(",", ":"))
-                + "\n",
+                json.dumps(asdict(manifest), sort_keys=True, separators=(",", ":")) + "\n",
                 encoding="utf-8",
             )
             os.replace(work_dir, output_dir)
@@ -166,9 +209,7 @@ def _run_pg_dump(database_url: str, destination: Path) -> None:
 
 def _is_postgres_scheme(scheme: str) -> bool:
     base, separator, driver = scheme.partition("+")
-    return base in {"postgresql", "postgres"} and (
-        not separator or bool(driver)
-    )
+    return base in {"postgresql", "postgres"} and (not separator or bool(driver))
 
 
 def _postgres_cli_connection(database_url: str) -> PostgresCliConnection:
@@ -241,8 +282,10 @@ def _postgres_cli_connection(database_url: str) -> PostgresCliConnection:
 
 
 def _safe_connection_value(value: str) -> bool:
-    return bool(value) and len(value) <= 4096 and all(
-        ord(character) >= 32 and ord(character) != 127 for character in value
+    return (
+        bool(value)
+        and len(value) <= 4096
+        and all(ord(character) >= 32 and ord(character) != 127 for character in value)
     )
 
 
