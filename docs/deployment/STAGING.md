@@ -146,3 +146,93 @@ This staging guide does not add another runtime, scheduler, event loop, tool
 protocol, wallet, transaction, contract, chain, or domain-specific dependency.
 It does not authorize production authentication, public deployment, or a real
 LLM smoke.
+
+AI5 backup and restore require three explicit directory arguments. Resolve each
+path and use only this layout:
+
+- coordination: `FOCUSPROOF_DATA_DIR`, containing recovery markers and locks;
+- OpenHands payload: `FOCUSPROOF_DATA_DIR/conversations`;
+- media payload: `FOCUSPROOF_DATA_DIR/media/objects`.
+
+The two payload roots must not be equal or nested. The coordination root is
+their intentional common parent, but is never archived, extracted, renamed, or
+swapped as a whole. Backup and restore reject the legacy single-directory
+contract and any symlink, escaped path, or alternate relative layout.
+
+AI5 recovery uses one manifest-v2 unit containing `database.dump`,
+`openhands.tar.gz`, and `media.tar.gz`. The manifest records the canonical
+payload-relative paths, independent SHA-256 values, and tree versions. Restore
+also requires an explicit recovery-admin PostgreSQL URL; it is never inferred
+from `.env`. The business URL names only the target database. The admin URL must
+address the same host, effective port, and TLS settings, but a different cluster
+maintenance database. It is used only to create, rename, terminate connections
+to, and remove the randomized recovery databases.
+
+Restore validates the exact bundle, safe archive members and resource limits,
+all digests, the shadow database media object-key/hash rows, media bytes, and
+official OpenHands persisted image references before changing live state. It
+then switches the database and the two payload roots independently under the
+coordination maintenance marker, post-verifies all three sources, and rolls
+back media, OpenHands, then database on failure. Never restore only one member.
+Manifest v1 has no media snapshot and is rejected; migrate it by restoring with
+the pre-AI5 release and taking a new v2 backup.
+
+The `staging_external` recovery marker test creates a temporary PostgreSQL
+cluster, backs up an image session across database/EventLog/media, destroys its
+temporary sources, restores them, reruns image review, and compares media bytes
+and hashes. It is honestly deselected when container/PostgreSQL capabilities are
+unavailable; a deselection is not recovery evidence and must not be reported as
+a successful drill.
+
+Historical note: the earlier `BLOCKED_BY_OFFICIAL_SDK_GATE` visual conclusion
+is superseded by the real `openai/qwen3.7-plus` acceptance recorded in
+[AI5_IMAGE_GATE_REPORT](../research/AI5_IMAGE_GATE_REPORT.md). The historical
+guarded skip remains context only and must not be treated as current status.
+
+## AI5.3 malware admission
+
+Set FOCUSPROOF_MEDIA_SCANNER_MODE=clamd and an explicit Unix or TCP
+FOCUSPROOF_CLAMD_ENDPOINT. The configured scan capacity must be at least
+10485760 bytes. Staging and production fail composition when clamd settings
+are missing, disabled, fake, or invalid.
+
+Staging compose requires the external endpoint through
+FOCUSPROOF_STAGING_CLAMD_ENDPOINT and passes it as FOCUSPROOF_CLAMD_ENDPOINT.
+The endpoint must be reachable only on the private deployment network. Before
+starting agent-server, operators must independently verify daemon health.
+
+Before enabling upload, run the guarded test with
+FOCUSPROOF_REAL_CLAMD_TEST_ENABLED=true and the same explicit endpoint. The gate
+creates temporary clean and standard EICAR probes, requires clean and malicious
+verdicts respectively, and deletes both probes in finally cleanup. A skip is
+BLOCKED_REAL_CLAMD, not successful staging evidence. Deterministic code-gate
+success and real clamd/EICAR gate success are separate release decisions.
+
+Public scan failures are limited to media_malicious (422, not retryable) and
+media_scan_unavailable (503, retryable). Intentional local/test disabling
+returns media_disabled without entering quarantine, decode, stage, or finalize.
+Roll back by disabling public media upload; never replace clamd with a fake or
+an unscanned path in staging/production.
+
+## Tiered Quality Gate
+
+Run `scripts/run_quality_gate.py` from WSL before promoting staging evidence.
+Use `--list` to inspect resolved steps and `--dry-run` to print commands without
+executing them.
+
+```bash
+cd /home/holy/web3/focusproof-agent
+.venv/bin/python scripts/run_quality_gate.py --tier fast
+.venv/bin/python scripts/run_quality_gate.py --tier integration
+.venv/bin/python scripts/run_quality_gate.py --tier release --allow-real-provider
+```
+
+`fast` is deterministic and must not require Docker, network, PostgreSQL, or
+real LLM/provider credentials. `integration` inherits fast and adds PostgreSQL,
+backup/restore, deterministic frontend/backend E2E, and Clamd integration while
+still avoiding real LLM calls. `release` inherits integration and is blocked
+unless `--allow-real-provider` is present; it requires the configured live Clamd
+endpoint and real Qwen/OpenHands provider environment before producing the final
+dual-mode manifest. Cost profile: fast has no external cost, integration spends
+local infrastructure time, and release can spend provider quota plus live daemon
+capacity.

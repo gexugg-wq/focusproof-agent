@@ -1,0 +1,509 @@
+{
+  "schemaVersion": "1.0",
+  "timestamp": "2026-08-26T04:05:35.929089+00:00",
+  "gitSha": "9a79998f6f62853d8dc000969ceb8a6f43040ba6",
+  "provider": "unknown",
+  "model": "unknown",
+  "scenarios": [
+    {
+      "name": "photosynthesis-text",
+      "status": "PASS",
+      "sessionId": "sess_d8de41a7a97347a4bd37d9ac6313740c",
+      "conversationId": "e9a81ad8756c56b9a0f24506f738c77c",
+      "question": "Explain why retaining earlier events makes replay reproducible.",
+      "questions": [
+        "Explain why retaining earlier events makes replay reproducible."
+      ],
+      "score": 75,
+      "reason": "LikelyLearning",
+      "confidence": 0.72,
+      "findings": [
+        {
+          "severity": "info",
+          "message": "Evidence and learner explanation contain domain-neutral specific details.",
+          "evidenceIds": [
+            "ev_a9ef9f3e4b6fa856c9a8fca72844244dbc89d4d3399fd196"
+          ],
+          "observationRefs": []
+        }
+      ],
+      "summary": "The session shows credible learning evidence with explainable details.",
+      "nextStep": "Preserve the evidence and add one reflection about what to practice next.",
+      "buildLog": [
+        {
+          "id": "evt_session_created_sess_d8de41a7a97347a4bd37d9ac6313740c",
+          "sessionId": "sess_d8de41a7a97347a4bd37d9ac6313740c",
+          "type": "session.created",
+          "sequence": 1,
+          "createdAt": "2026-08-26T04:05:35.982438",
+          "actor": "system",
+          "payload": {
+            "status": "running"
+          }
+        },
+        {
+          "id": "evt_3a473bbbacb240c8af14caa73d219282",
+          "sessionId": "sess_d8de41a7a97347a4bd37d9ac6313740c",
+          "type": "goal.submitted",
+          "sequence": 2,
+          "createdAt": "2026-08-26T04:05:36.020444",
+          "actor": "user",
+          "payload": {
+            "domain": "general",
+            "expectedOutput": "Independent grounded explanation",
+            "goal": "Explain how photosynthesis converts light energy into stored chemical energy.",
+            "plannedMinutes": 10,
+            "title": "photosynthesis-text",
+            "sourceRuntime": "openhands-local",
+            "runtimeSource": "openhands-local",
+            "sourceConversationId": "e9a81ad8-756c-56b9-a0f2-4506f738c77c",
+            "sourceOpenHandsEventId": "8183c2ba-29ee-4a43-953e-f348a837292a",
+            "sourceOpenHandsEventType": "MessageEvent",
+            "sourceOpenHandsEventIndex": 1,
+            "relatedEvidenceIds": [],
+            "sessionId": "sess_d8de41a7a97347a4bd37d9ac6313740c"
+          }
+        },
+        {
+          "id": "evt_7555a04e70104f26837e87344fefbbca",
+          "sessionId": "sess_d8de41a7a97347a4bd37d9ac6313740c",
+          "type": "evidence.submitted",
+          "sequence": 3,
+          "createdAt": "2026-08-26T04:05:36.069467",
+          "actor": "user",
+          "payload": {
+            "evidenceId": "ev_a9ef9f3e4b6fa856c9a8fca72844244dbc89d4d3399fd196",
+            "evidenceType": "text",
+            "contentHash": "sha256:e449883635082a5df58fb7ca4b50eb82df10ead6c0de15548dafe3367a263fe8",
+            "sourceRuntime": "openhands-local",
+            "runtimeSource": "openhands-local",
+            "sourceConversationId": "e9a81ad8-756c-56b9-a0f2-4506f738c77c",
+            "sourceOpenHandsEventId": "a1483ee6-d86b-46f2-b780-cdae451623bd",
+            "sourceOpenHandsEventType": "MessageEvent",
+            "sourceOpenHandsEventIndex": 2,
+            "relatedEvidenceIds": [
+              "ev_a9ef9f3e4b6fa856c9a8fca72844244dbc89d4d3399fd196"
+            ],
+            "sessionId": "sess_d8de41a7a97347a4bd37d9ac6313740c"
+          }
+        },
+        {
+          "id": "evt_6ad5e4227d8b4c4eab587c6f9a7a0bb7",
+          "sessionId": "sess_d8de41a7a97347a4bd37d9ac6313740c",
+          "type": "verification.requested",
+          "sequence": 4,
+          "createdAt": "2026-08-26T04:05:36.144884",
+          "actor": "agent",
+          "payload": {
+            "evidence_id": "ev_071cb180dd14d42a4dca2ab982217987b9c714a905d62368",
+            "kind": "EvidenceReferenceAction",
+            "toolName": "focusproof_text_evidence_verification",
+            "sourceRuntime": "openhands-local",
+            "runtimeSource": "openhands-local",
+            "sourceConversationId": "e9a81ad8-756c-56b9-a0f2-4506f738c77c",
+            "sourceOpenHandsEventId": "62bd6d78-b81d-4b4d-9a04-2eb1cbcfa50b",
+            "sourceOpenHandsEventType": "ActionEvent",
+            "sourceOpenHandsEventIndex": 3,
+            "relatedEvidenceIds": [
+              "ev_071cb180dd14d42a4dca2ab982217987b9c714a905d62368"
+            ],
+            "sessionId": "sess_d8de41a7a97347a4bd37d9ac6313740c",
+            "sourceToolCallId": "verify_sess_d8de41a7a97347a4bd37d9ac6313740c"
+          }
+        },
+        {
+          "id": "evt_5c745e5d9315431ca7fa652c9f912f60",
+          "sessionId": "sess_d8de41a7a97347a4bd37d9ac6313740c",
+          "type": "verification.completed",
+          "sequence": 5,
+          "createdAt": "2026-08-26T04:05:36.160533",
+          "actor": "tool",
+          "payload": {
+            "evidence_id": "ev_071cb180dd14d42a4dca2ab982217987b9c714a905d62368",
+            "capability": "text",
+            "status": "failed",
+            "facts": {},
+            "weak_signals": [],
+            "source_refs": [
+              "ev_071cb180dd14d42a4dca2ab982217987b9c714a905d62368"
+            ],
+            "verifier_version": "1",
+            "started_at": "2026-08-26T04:05:36.157081Z",
+            "completed_at": "2026-08-26T04:05:36.158757Z",
+            "error_code": "evidence_not_found",
+            "safe_error_message": "Evidence was not found.",
+            "kind": "VerificationObservation",
+            "sourceRuntime": "openhands-local",
+            "runtimeSource": "openhands-local",
+            "sourceConversationId": "e9a81ad8-756c-56b9-a0f2-4506f738c77c",
+            "sourceOpenHandsEventId": "510fd0a3-53f5-423e-8bad-a385519427d0",
+            "sourceOpenHandsEventType": "ObservationEvent",
+            "sourceOpenHandsEventIndex": 4,
+            "relatedEvidenceIds": [
+              "ev_071cb180dd14d42a4dca2ab982217987b9c714a905d62368"
+            ],
+            "sessionId": "sess_d8de41a7a97347a4bd37d9ac6313740c",
+            "sourceToolCallId": "verify_sess_d8de41a7a97347a4bd37d9ac6313740c"
+          }
+        },
+        {
+          "id": "evt_c23d0c65c02d405f9cbd222c0b701e49",
+          "sessionId": "sess_d8de41a7a97347a4bd37d9ac6313740c",
+          "type": "question.asked",
+          "sequence": 6,
+          "createdAt": "2026-08-26T04:05:36.178592",
+          "actor": "agent",
+          "payload": {
+            "question": "Explain why retaining earlier events makes replay reproducible.",
+            "reason": "The final review needs an independent learner explanation.",
+            "requested_evidence_type": "text",
+            "kind": "LearnerInputAction",
+            "questionId": "q_709d841b25865224a6cee799d37eca1c",
+            "toolName": "focusproof_learner_input",
+            "sourceRuntime": "openhands-local",
+            "runtimeSource": "openhands-local",
+            "sourceConversationId": "e9a81ad8-756c-56b9-a0f2-4506f738c77c",
+            "sourceOpenHandsEventId": "3c854155-5b20-4d81-ad34-236adfb5d449",
+            "sourceOpenHandsEventType": "ActionEvent",
+            "sourceOpenHandsEventIndex": 5,
+            "relatedEvidenceIds": [],
+            "sessionId": "sess_d8de41a7a97347a4bd37d9ac6313740c",
+            "sourceToolCallId": "question_sess_d8de41a7a97347a4bd37d9ac6313740c"
+          }
+        },
+        {
+          "id": "evt_49a39269bce64a42b4bba795fb6d59bf",
+          "sessionId": "sess_d8de41a7a97347a4bd37d9ac6313740c",
+          "type": "answer.submitted",
+          "sequence": 7,
+          "createdAt": "2026-08-26T04:05:36.264453",
+          "actor": "user",
+          "payload": {
+            "questionId": "q_709d841b25865224a6cee799d37eca1c",
+            "answer": "Chlorophyll captures photons; electron transport produces ATP and NADPH, and the Calvin cycle uses them to fix carbon into sugars.",
+            "sourceRuntime": "openhands-local",
+            "runtimeSource": "openhands-local",
+            "sourceConversationId": "e9a81ad8-756c-56b9-a0f2-4506f738c77c",
+            "sourceOpenHandsEventId": "d255bf9c-9b23-46dd-b9a6-1b691e8ba8b0",
+            "sourceOpenHandsEventType": "MessageEvent",
+            "sourceOpenHandsEventIndex": 8,
+            "relatedEvidenceIds": [],
+            "sessionId": "sess_d8de41a7a97347a4bd37d9ac6313740c"
+          }
+        },
+        {
+          "id": "evt_score_1131d6f5-cbaa-4831-a69d-f4e7871cb897",
+          "sessionId": "sess_d8de41a7a97347a4bd37d9ac6313740c",
+          "type": "score.calculated",
+          "sequence": 8,
+          "createdAt": "2026-08-26T04:05:36.360255",
+          "actor": "system",
+          "payload": {
+            "score": 75,
+            "confidence": 0.72,
+            "status": "LikelyLearning",
+            "dimensions": {
+              "goalClarity": 9,
+              "evidenceSpecificity": 18,
+              "goalAlignment": 15,
+              "understanding": 24,
+              "output": 7,
+              "reflection": 6
+            },
+            "findings": [
+              {
+                "severity": "info",
+                "message": "Evidence and learner explanation contain domain-neutral specific details.",
+                "evidenceIds": [
+                  "ev_a9ef9f3e4b6fa856c9a8fca72844244dbc89d4d3399fd196"
+                ],
+                "observationRefs": []
+              }
+            ],
+            "evidenceRefs": [
+              "ev_a9ef9f3e4b6fa856c9a8fca72844244dbc89d4d3399fd196"
+            ],
+            "sourceObservationEventId": "1131d6f5-cbaa-4831-a69d-f4e7871cb897",
+            "narrativeLineage": [],
+            "consumedFactIds": []
+          }
+        },
+        {
+          "id": "evt_review_1131d6f5-cbaa-4831-a69d-f4e7871cb897",
+          "sessionId": "sess_d8de41a7a97347a4bd37d9ac6313740c",
+          "type": "review.completed",
+          "sequence": 9,
+          "createdAt": "2026-08-26T04:05:36.361316",
+          "actor": "system",
+          "payload": {
+            "reviewId": "rev_baa2331ddcf8472dad1c09565e0df7ac",
+            "summary": "The session shows credible learning evidence with explainable details.",
+            "nextStep": "Preserve the evidence and add one reflection about what to practice next.",
+            "scoreEventId": "evt_score_1131d6f5-cbaa-4831-a69d-f4e7871cb897",
+            "sourceObservationEventId": "1131d6f5-cbaa-4831-a69d-f4e7871cb897"
+          }
+        }
+      ],
+      "nativeEvents": {
+        "actionCount": 3,
+        "observationCount": 3
+      }
+    },
+    {
+      "name": "python-closure-url",
+      "status": "PASS",
+      "sessionId": "sess_b713346dc5d94fefa1f8b598afb98d62",
+      "conversationId": "2afec108b24155f58f580ff9f6ac98ae",
+      "question": "Explain why retaining earlier events makes replay reproducible.",
+      "questions": [
+        "Explain why retaining earlier events makes replay reproducible."
+      ],
+      "score": 63,
+      "reason": "LikelyLearning",
+      "confidence": 0.72,
+      "findings": [
+        {
+          "severity": "info",
+          "message": "Evidence and learner explanation contain domain-neutral specific details.",
+          "evidenceIds": [
+            "ev_6cb53e14a31536bd8e30c5b4cf9e7c885f787e3b7825989b"
+          ],
+          "observationRefs": []
+        }
+      ],
+      "summary": "The session shows credible learning evidence with explainable details.",
+      "nextStep": "Preserve the evidence and add one reflection about what to practice next.",
+      "buildLog": [
+        {
+          "id": "evt_session_created_sess_b713346dc5d94fefa1f8b598afb98d62",
+          "sessionId": "sess_b713346dc5d94fefa1f8b598afb98d62",
+          "type": "session.created",
+          "sequence": 1,
+          "createdAt": "2026-08-26T04:05:36.385840",
+          "actor": "system",
+          "payload": {
+            "status": "running"
+          }
+        },
+        {
+          "id": "evt_9b887eea426d4d0e81541ea8f290a0df",
+          "sessionId": "sess_b713346dc5d94fefa1f8b598afb98d62",
+          "type": "goal.submitted",
+          "sequence": 2,
+          "createdAt": "2026-08-26T04:05:36.412349",
+          "actor": "user",
+          "payload": {
+            "domain": "general",
+            "expectedOutput": "Independent grounded explanation",
+            "goal": "Explain how Python closures retain lexical state.",
+            "plannedMinutes": 10,
+            "title": "python-closure-url",
+            "sourceRuntime": "openhands-local",
+            "runtimeSource": "openhands-local",
+            "sourceConversationId": "2afec108-b241-55f5-8f58-0ff9f6ac98ae",
+            "sourceOpenHandsEventId": "55681351-31bb-4d27-8fd6-3075394da482",
+            "sourceOpenHandsEventType": "MessageEvent",
+            "sourceOpenHandsEventIndex": 1,
+            "relatedEvidenceIds": [],
+            "sessionId": "sess_b713346dc5d94fefa1f8b598afb98d62"
+          }
+        },
+        {
+          "id": "evt_2230acb416444699a2ef9e6f206cd269",
+          "sessionId": "sess_b713346dc5d94fefa1f8b598afb98d62",
+          "type": "evidence.submitted",
+          "sequence": 3,
+          "createdAt": "2026-08-26T04:05:36.457735",
+          "actor": "user",
+          "payload": {
+            "evidenceId": "ev_6cb53e14a31536bd8e30c5b4cf9e7c885f787e3b7825989b",
+            "evidenceType": "url",
+            "contentHash": "sha256:5ac7ed0440f78bac375cdfb009c56943cb1d1b117cd3b4d306a942f411373020",
+            "source": {
+              "scheme": "https",
+              "hostname": "docs.python.org",
+              "origin": "https://docs.python.org",
+              "path_redacted": true,
+              "url_sha256": "ca414bf25ff381cb75ecd035203ba33a3a31d19d283bb901101580d3c6639128"
+            },
+            "sourceRuntime": "openhands-local",
+            "runtimeSource": "openhands-local",
+            "sourceConversationId": "2afec108-b241-55f5-8f58-0ff9f6ac98ae",
+            "sourceOpenHandsEventId": "e77a10be-e8ea-435b-adb7-0b2fb24f0bfa",
+            "sourceOpenHandsEventType": "MessageEvent",
+            "sourceOpenHandsEventIndex": 2,
+            "relatedEvidenceIds": [
+              "ev_6cb53e14a31536bd8e30c5b4cf9e7c885f787e3b7825989b"
+            ],
+            "sessionId": "sess_b713346dc5d94fefa1f8b598afb98d62"
+          }
+        },
+        {
+          "id": "evt_32fece2b64084c31a9fe6252926e8a02",
+          "sessionId": "sess_b713346dc5d94fefa1f8b598afb98d62",
+          "type": "verification.requested",
+          "sequence": 4,
+          "createdAt": "2026-08-26T04:05:36.520671",
+          "actor": "agent",
+          "payload": {
+            "evidence_id": "ev_3f8d8078b315c4491c75348e628e8d643467df60983f8eaf",
+            "kind": "EvidenceReferenceAction",
+            "toolName": "focusproof_text_evidence_verification",
+            "sourceRuntime": "openhands-local",
+            "runtimeSource": "openhands-local",
+            "sourceConversationId": "2afec108-b241-55f5-8f58-0ff9f6ac98ae",
+            "sourceOpenHandsEventId": "8015a7c3-b292-4d70-94b2-e78c3e91ddaf",
+            "sourceOpenHandsEventType": "ActionEvent",
+            "sourceOpenHandsEventIndex": 3,
+            "relatedEvidenceIds": [
+              "ev_3f8d8078b315c4491c75348e628e8d643467df60983f8eaf"
+            ],
+            "sessionId": "sess_b713346dc5d94fefa1f8b598afb98d62",
+            "sourceToolCallId": "verify_sess_b713346dc5d94fefa1f8b598afb98d62"
+          }
+        },
+        {
+          "id": "evt_66235b4c40b74c72a521b12270917170",
+          "sessionId": "sess_b713346dc5d94fefa1f8b598afb98d62",
+          "type": "verification.completed",
+          "sequence": 5,
+          "createdAt": "2026-08-26T04:05:36.534679",
+          "actor": "tool",
+          "payload": {
+            "evidence_id": "ev_3f8d8078b315c4491c75348e628e8d643467df60983f8eaf",
+            "capability": "text",
+            "status": "failed",
+            "facts": {},
+            "weak_signals": [],
+            "source_refs": [
+              "ev_3f8d8078b315c4491c75348e628e8d643467df60983f8eaf"
+            ],
+            "verifier_version": "1",
+            "started_at": "2026-08-26T04:05:36.531857Z",
+            "completed_at": "2026-08-26T04:05:36.532965Z",
+            "error_code": "evidence_not_found",
+            "safe_error_message": "Evidence was not found.",
+            "kind": "VerificationObservation",
+            "sourceRuntime": "openhands-local",
+            "runtimeSource": "openhands-local",
+            "sourceConversationId": "2afec108-b241-55f5-8f58-0ff9f6ac98ae",
+            "sourceOpenHandsEventId": "bfc550ce-2fe4-4b18-a0ac-39f84a1638e4",
+            "sourceOpenHandsEventType": "ObservationEvent",
+            "sourceOpenHandsEventIndex": 4,
+            "relatedEvidenceIds": [
+              "ev_3f8d8078b315c4491c75348e628e8d643467df60983f8eaf"
+            ],
+            "sessionId": "sess_b713346dc5d94fefa1f8b598afb98d62",
+            "sourceToolCallId": "verify_sess_b713346dc5d94fefa1f8b598afb98d62"
+          }
+        },
+        {
+          "id": "evt_94d5491b01654be9a1c58e941a5391d0",
+          "sessionId": "sess_b713346dc5d94fefa1f8b598afb98d62",
+          "type": "question.asked",
+          "sequence": 6,
+          "createdAt": "2026-08-26T04:05:36.549233",
+          "actor": "agent",
+          "payload": {
+            "question": "Explain why retaining earlier events makes replay reproducible.",
+            "reason": "The final review needs an independent learner explanation.",
+            "requested_evidence_type": "text",
+            "kind": "LearnerInputAction",
+            "questionId": "q_709d841b25865224a6cee799d37eca1c",
+            "toolName": "focusproof_learner_input",
+            "sourceRuntime": "openhands-local",
+            "runtimeSource": "openhands-local",
+            "sourceConversationId": "2afec108-b241-55f5-8f58-0ff9f6ac98ae",
+            "sourceOpenHandsEventId": "568c46a7-e164-4045-ba59-2eb54c70af7a",
+            "sourceOpenHandsEventType": "ActionEvent",
+            "sourceOpenHandsEventIndex": 5,
+            "relatedEvidenceIds": [],
+            "sessionId": "sess_b713346dc5d94fefa1f8b598afb98d62",
+            "sourceToolCallId": "question_sess_b713346dc5d94fefa1f8b598afb98d62"
+          }
+        },
+        {
+          "id": "evt_d2725d14cc36406cb15f1df3a3f8c5bb",
+          "sessionId": "sess_b713346dc5d94fefa1f8b598afb98d62",
+          "type": "answer.submitted",
+          "sequence": 7,
+          "createdAt": "2026-08-26T04:05:36.649403",
+          "actor": "user",
+          "payload": {
+            "questionId": "q_709d841b25865224a6cee799d37eca1c",
+            "answer": "A closure retains references to bindings from its enclosing lexical scope, so those values remain accessible after the outer call returns.",
+            "sourceRuntime": "openhands-local",
+            "runtimeSource": "openhands-local",
+            "sourceConversationId": "2afec108-b241-55f5-8f58-0ff9f6ac98ae",
+            "sourceOpenHandsEventId": "35a36429-bca5-4df1-836e-035efd87603b",
+            "sourceOpenHandsEventType": "MessageEvent",
+            "sourceOpenHandsEventIndex": 8,
+            "relatedEvidenceIds": [],
+            "sessionId": "sess_b713346dc5d94fefa1f8b598afb98d62"
+          }
+        },
+        {
+          "id": "evt_score_ef75dc5f-4034-426f-8842-54880e73678f",
+          "sessionId": "sess_b713346dc5d94fefa1f8b598afb98d62",
+          "type": "score.calculated",
+          "sequence": 8,
+          "createdAt": "2026-08-26T04:05:36.748099",
+          "actor": "system",
+          "payload": {
+            "score": 63,
+            "confidence": 0.72,
+            "status": "LikelyLearning",
+            "dimensions": {
+              "goalClarity": 7,
+              "evidenceSpecificity": 15,
+              "goalAlignment": 12,
+              "understanding": 18,
+              "output": 6,
+              "reflection": 5
+            },
+            "findings": [
+              {
+                "severity": "info",
+                "message": "Evidence and learner explanation contain domain-neutral specific details.",
+                "evidenceIds": [
+                  "ev_6cb53e14a31536bd8e30c5b4cf9e7c885f787e3b7825989b"
+                ],
+                "observationRefs": []
+              }
+            ],
+            "evidenceRefs": [
+              "ev_6cb53e14a31536bd8e30c5b4cf9e7c885f787e3b7825989b"
+            ],
+            "sourceObservationEventId": "ef75dc5f-4034-426f-8842-54880e73678f",
+            "narrativeLineage": [],
+            "consumedFactIds": []
+          }
+        },
+        {
+          "id": "evt_review_ef75dc5f-4034-426f-8842-54880e73678f",
+          "sessionId": "sess_b713346dc5d94fefa1f8b598afb98d62",
+          "type": "review.completed",
+          "sequence": 9,
+          "createdAt": "2026-08-26T04:05:36.749887",
+          "actor": "system",
+          "payload": {
+            "reviewId": "rev_7e5b2c0d2633438da856548a65a44ade",
+            "summary": "The session shows credible learning evidence with explainable details.",
+            "nextStep": "Preserve the evidence and add one reflection about what to practice next.",
+            "scoreEventId": "evt_score_ef75dc5f-4034-426f-8842-54880e73678f",
+            "sourceObservationEventId": "ef75dc5f-4034-426f-8842-54880e73678f"
+          }
+        }
+      ],
+      "nativeEvents": {
+        "actionCount": 3,
+        "observationCount": 3
+      }
+    },
+    {
+      "status": "FAIL",
+      "reason": "scenario questions were not dynamically different"
+    }
+  ],
+  "overall": "FAIL"
+}

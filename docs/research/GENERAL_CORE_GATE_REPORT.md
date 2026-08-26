@@ -2,6 +2,15 @@
 
 Status: PASS (2026-08-12)
 
+> Current-status note (2026-08-14): This is a historical General Core report.
+> Its Next Stage statement is superseded. Current roadmap and acceptance
+> status are maintained in
+> [TASK_BOARD](../project-management/TASK_BOARD.md) and
+> [AI5_IMAGE_GATE_REPORT](AI5_IMAGE_GATE_REPORT.md): image input and real visual
+> interpretation passed, AI5.3 implementation/code gates passed, and the real
+> external clamd clean/EICAR gate remains blocked. No later formal phase name is
+> approved.
+
 ## Scope
 
 This report records the general knowledge learning-verification closure for FocusProof when Monad is disabled by default and only the official OpenHands Conversation path is used.

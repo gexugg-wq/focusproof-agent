@@ -3,7 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Callable, Mapping, Sequence
+import re
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -16,7 +17,9 @@ if str(AGENT_SERVER) not in sys.path:
 import uvicorn  # noqa: E402
 from alembic import command  # noqa: E402
 from alembic.config import Config  # noqa: E402
-from fastapi import FastAPI  # noqa: E402
+from fastapi import FastAPI, Request  # noqa: E402
+from starlette.responses import Response  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
 import focusproof.api.app  # noqa: E402
 from focusproof.api.models import SubmitEvidenceRequest  # noqa: E402
 from focusproof.domain.plugins.base import EvidencePluginProvider, PublicPluginCapability  # noqa: E402
@@ -292,6 +295,41 @@ def _scenario_factory(
         setattr(focusproof.api.app, "load_evidence_plugin_providers", provider_loader)
         return _monad_flow_llm_factory
     raise ValueError(f"Unsupported deterministic scenario: {scenario}")
+def _install_image_unknown_retry_probe(application: FastAPI) -> None:
+    first_keys: dict[str, str] = {}
+
+    @application.middleware("http")
+    async def image_unknown_retry_probe(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        nonlocal first_keys
+        if request.method != "POST" or not request.url.path.endswith("/evidence/image"):
+            return await call_next(request)
+        payload = await request.body()
+        match = re.search(
+            rb'name="idempotency_key"\r\n\r\n([A-Za-z0-9._:-]{1,255})\r\n', payload
+        )
+        if match is None:
+            return JSONResponse(
+                status_code=422,
+                content={"code": "invalid_idempotency_key", "retryable": False},
+            )
+        key = match.group(1).decode("ascii")
+        session_path = request.url.path
+        if session_path not in first_keys:
+            first_keys[session_path] = key
+            return JSONResponse(
+                status_code=503,
+                content={"code": "media_unavailable", "retryable": True},
+            )
+        if key != first_keys[session_path]:
+            return JSONResponse(
+                status_code=409,
+                content={"code": "idempotency_conflict", "retryable": False},
+            )
+        return await call_next(request)
+
 
 
 def build_app(args: argparse.Namespace) -> FastAPI:
@@ -302,11 +340,14 @@ def build_app(args: argparse.Namespace) -> FastAPI:
     focusproof.api.app._validate_database_path(database_url, data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
     _apply_migrations(database_url)
-    return focusproof.api.app.create_app(
+    application = focusproof.api.app.create_app(
         database_url=database_url,
         data_dir=data_dir,
         llm_factory=_scenario_factory(str(args.scenario)),
     )
+    if args.scenario == "general-flow":
+        _install_image_unknown_retry_probe(application)
+    return application
 
 
 def main(argv: Sequence[str] | None = None) -> int:

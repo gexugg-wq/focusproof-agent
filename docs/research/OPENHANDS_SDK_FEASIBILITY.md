@@ -1,5 +1,10 @@
 # OpenHands SDK Feasibility Report
 
+> **Historical / Superseded.** Version paths and local-mirror recommendations below are
+> retained only as research history. Current production code targets official OpenHands
+> SDK 1.31.0 public extension points and must not introduce a second runtime,
+> Conversation, EventLog, agent loop, or tool protocol.
+
 ## 0. AI0 Product Decision Override
 
 AI1 originally recommended **Local Mirror Interfaces** from a lightweight MVP perspective. AI0 has now changed the product direction: FocusProof is not intended to be a disposable demo, so AI2 should directly use OpenHands SDK where feasible and build a FocusProof adapter layer around it.
