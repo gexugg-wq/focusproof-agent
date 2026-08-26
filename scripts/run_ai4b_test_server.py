@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import argparse
-import json
-import sys
 import re
+import sys
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 
@@ -16,18 +15,14 @@ import uvicorn  # noqa: E402
 from alembic import command  # noqa: E402
 from alembic.config import Config  # noqa: E402
 from fastapi import FastAPI, Request  # noqa: E402
-from starlette.responses import Response  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
+from starlette.responses import Response  # noqa: E402
 import focusproof.api.app  # noqa: E402
-from focusproof.api.models import SubmitEvidenceRequest  # noqa: E402
-from openhands.sdk.llm import Message, MessageToolCall, TextContent  # noqa: E402
-import openhands.sdk.testing  # noqa: E402
+from focusproof.openhands_runtime.demo_deterministic_provider import (  # noqa: E402
+    build_demo_deterministic_test_llm,
+)
 
 LOOPBACK_HOST = "127.0.0.1"
-SMOKE_EVIDENCE_TEXT = (
-    "Append-only event replay rebuilds state by applying immutable events in "
-    "sequence, preserving the history needed to reproduce the current view."
-)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -62,72 +57,9 @@ def _apply_migrations(database_url: str) -> None:
     command.upgrade(config, "head")
 
 
-def _general_flow_llm_factory(session_id: str) -> openhands.sdk.testing.TestLLM:
-    evidence_id = focusproof.api.app._evidence_id_for_request(
-        session_id,
-        SubmitEvidenceRequest(
-            evidenceType="text",
-            textContent=SMOKE_EVIDENCE_TEXT,
-        ),
-    )
-    verify = MessageToolCall(
-        id=f"verify_{session_id}",
-        name="focusproof_text_evidence_verification",
-        arguments=json.dumps({"evidence_id": evidence_id}),
-        origin="completion",
-    )
-    question = MessageToolCall(
-        id=f"question_{session_id}",
-        name="focusproof_learner_input",
-        arguments=json.dumps(
-            {
-                "question": ("Explain why retaining earlier events makes replay reproducible."),
-                "reason": "The final review needs an independent learner explanation.",
-                "requested_evidence_type": "text",
-            }
-        ),
-        origin="completion",
-    )
-    draft = MessageToolCall(
-        id=f"draft_{session_id}",
-        name="focusproof_review_draft",
-        arguments=json.dumps(
-            {
-                "credibility_findings": ["Repository-backed text evidence was inspected."],
-                "understanding_findings": ["The learner supplied a concrete replay explanation."],
-                "contradictions": [],
-                "recommended_next_step": "Apply replay to one additional event sequence.",
-                "confidence": 0.72,
-            }
-        ),
-        origin="completion",
-    )
-    return openhands.sdk.testing.TestLLM.from_messages(
-        [
-            Message(
-                role="assistant",
-                content=[TextContent(text="Inspect the submitted evidence.")],
-                tool_calls=[verify],
-            ),
-            Message(
-                role="assistant",
-                content=[TextContent(text="Request one independent explanation.")],
-                tool_calls=[question],
-            ),
-            Message(
-                role="assistant",
-                content=[TextContent(text="Submit the completed review draft.")],
-                tool_calls=[draft],
-            ),
-        ]
-    )
-
-
-def _scenario_factory(
-    scenario: str,
-) -> Callable[[str], openhands.sdk.testing.TestLLM]:
+def _scenario_factory(scenario: str) -> Callable[[str], object]:
     if scenario == "general-flow":
-        return _general_flow_llm_factory
+        return build_demo_deterministic_test_llm
     raise ValueError(f"Unsupported deterministic scenario: {scenario}")
 
 
@@ -143,6 +75,8 @@ def _install_image_unknown_retry_probe(application: FastAPI) -> None:
         if request.method != "POST" or not request.url.path.endswith("/evidence/image"):
             return await call_next(request)
         payload = await request.body()
+        if b'filename="diagram.png"' not in payload:
+            return await call_next(request)
         match = re.search(rb'name="idempotency_key"\r\n\r\n([A-Za-z0-9._:-]{1,255})\r\n', payload)
         if match is None:
             return JSONResponse(

@@ -70,9 +70,7 @@ def _tracked_text_paths() -> set[Path]:
         text=True,
     )
     paths = {
-        Path(line)
-        for line in completed.stdout.splitlines()
-        if line and "__pycache__" not in line
+        Path(line) for line in completed.stdout.splitlines() if line and "__pycache__" not in line
     }
     paths.update(REQUIRED_ARTIFACTS)
     paths.add(Path("agent-server/tests/ai4b/test_release_artifacts.py"))
@@ -160,10 +158,7 @@ def test_tracked_release_text_contains_no_unapproved_secret_material() -> None:
     )
     for relative_path in sorted(_tracked_text_paths()):
         text = (ROOT / relative_path).read_text(encoding="utf-8", errors="strict")
-        if (
-            FAKE_SECRET_SENTINEL in text
-            and relative_path not in FAKE_SECRET_ALLOWLIST
-        ):
+        if FAKE_SECRET_SENTINEL in text and relative_path not in FAKE_SECRET_ALLOWLIST:
             findings.append(f"{relative_path}: unapproved fake-secret sentinel")
         for marker in private_key_markers:
             if marker in text:
@@ -177,9 +172,7 @@ def test_tracked_release_text_contains_no_unapproved_secret_material() -> None:
                     "placeholder",
                     "redacted",
                 }:
-                    findings.append(
-                        f"{relative_path}:{line_number}: provider key has a value"
-                    )
+                    findings.append(f"{relative_path}:{line_number}: provider key has a value")
     assert findings == []
 
 
@@ -195,9 +188,14 @@ def test_test_server_is_loopback_only_and_reuses_production_runtime(
         if isinstance(node, (ast.Import, ast.ImportFrom))
         for alias in node.names
     }
+    import_from_modules = {
+        node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+    }
     assert "focusproof.api.app" in imported_names
-    assert "openhands.sdk.testing" in imported_names
-    assert "TestLLM" in source
+    assert "focusproof.openhands_runtime.demo_deterministic_provider" in import_from_modules
+    assert "build_demo_deterministic_test_llm" in source
+    assert "SubmitEvidenceRequest" not in source
+    assert "SMOKE_EVIDENCE_TEXT" not in source
     assert "create_app(" in source
     assert "uvicorn.run(" in source
     assert "DASHSCOPE_API_KEY" not in source
@@ -294,6 +292,7 @@ def test_provider_secret_scanner_recognizes_common_assignment_styles(
         "json": json.dumps({key_name: secret}),
     }
     assert _provider_assignment_value(lines[style], key_name) == secret
+
 
 def test_smoke_prints_only_ids_and_statuses(
     monkeypatch: pytest.MonkeyPatch,

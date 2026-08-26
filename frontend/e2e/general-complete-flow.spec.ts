@@ -18,6 +18,8 @@ test("completes one Chromium general review in the same conversation across relo
 
   await expect(page).toHaveURL(/\/sessions\/[^/]+$/, { timeout: 15000 });
   const sessionUrl = page.url();
+  const sessionId = /\/sessions\/([^/]+)$/.exec(sessionUrl)?.[1];
+  expect(sessionId).toBeTruthy();
   await expect(page.getByRole("heading", { name: topic })).toBeVisible();
   await expect(page.getByText("general", { exact: true })).toBeVisible();
   await expect(page.getByText("Not specified", { exact: true })).toBeVisible();
@@ -36,11 +38,9 @@ test("completes one Chromium general review in the same conversation across relo
   await page.getByRole("button", { name: /end learning/i }).click();
   const reviewState = page.getByRole("status", { name: /review state/i });
   await expect(reviewState).toHaveText(/awaiting user/i, { timeout: 75000 });
-  const question = page.getByText(
-    "Explain why retaining earlier events makes replay reproducible."
-  );
-  await expect(question).toBeVisible();
-  await page.getByLabel(/answer for /i).fill(answerText);
+  const answerBox = page.getByLabel(/answer for /i);
+  await expect(answerBox).toBeVisible();
+  await answerBox.fill(answerText);
   await page.getByRole("button", { name: /submit answer/i }).click();
   await expect(page.getByText("Answer submitted.")).toBeVisible();
   await page.getByRole("button", { name: /request review again/i }).click();
@@ -51,8 +51,7 @@ test("completes one Chromium general review in the same conversation across relo
   const buildLog = page.getByRole("heading", { name: "Build Log" }).locator("..");
   await expect(buildLog.getByText("Session created")).toBeVisible();
   await expect(buildLog.getByText("Evidence submitted")).toHaveCount(1);
-  await expect(buildLog.getByText("Verification requested")).toBeVisible();
-  await expect(buildLog.getByText("Verification completed")).toBeVisible();
+  await expect(buildLog.getByText("Score calculated")).toBeVisible();
   await expect(buildLog.getByText("Question asked")).toBeVisible();
   await expect(buildLog.getByText("Answer submitted")).toBeVisible();
   await expect(buildLog.getByText("Review completed")).toBeVisible();
@@ -61,6 +60,31 @@ test("completes one Chromium general review in the same conversation across relo
   );
   expect(sequences).toEqual([...sequences].sort((left, right) => left - right));
   expect(new Set(sequences).size).toBe(sequences.length);
+  const apiState = await page.evaluate(async (id) => {
+    const [sessionResponse, eventsResponse] = await Promise.all([
+      fetch("/api/focusproof/sessions/" + id),
+      fetch("/api/focusproof/sessions/" + id + "/events")
+    ]);
+    return {
+      sessionOk: sessionResponse.ok,
+      eventsOk: eventsResponse.ok,
+      session: await sessionResponse.json(),
+      events: await eventsResponse.json()
+    };
+  }, sessionId);
+  expect(apiState.sessionOk).toBeTruthy();
+  expect(apiState.eventsOk).toBeTruthy();
+  const conversationId = apiState.session.state.conversationId;
+  expect(conversationId).toBeTruthy();
+  const eventTypes = apiState.events.events.map((event: { type: string }) => event.type);
+  expect(eventTypes).toEqual(expect.arrayContaining([
+    "session.created",
+    "evidence.submitted",
+    "question.asked",
+    "answer.submitted",
+    "score.calculated",
+    "review.completed"
+  ]));
 
   await expect(page.getByRole("tablist")).toHaveCount(0);
   await expect(page.getByRole("tab")).toHaveCount(0);
@@ -71,6 +95,22 @@ test("completes one Chromium general review in the same conversation across relo
   await expect(reviewState).toHaveText(/completed/i);
   await expect(page.getByText("LikelyLearning")).toBeVisible();
   await expect(buildLog.getByText("Review completed")).toBeVisible();
+  const reloadedState = await page.evaluate(async (id) => {
+    const [sessionResponse, eventsResponse] = await Promise.all([
+      fetch("/api/focusproof/sessions/" + id),
+      fetch("/api/focusproof/sessions/" + id + "/events")
+    ]);
+    return {
+      sessionOk: sessionResponse.ok,
+      eventsOk: eventsResponse.ok,
+      session: await sessionResponse.json(),
+      events: await eventsResponse.json()
+    };
+  }, sessionId);
+  expect(reloadedState.sessionOk).toBeTruthy();
+  expect(reloadedState.eventsOk).toBeTruthy();
+  expect(reloadedState.session.state.conversationId).toBe(conversationId);
+  expect(reloadedState.events.events.map((event: { type: string }) => event.type)).toEqual(eventTypes);
   await expect(page.getByRole("tablist")).toHaveCount(0);
   await expect(page.getByRole("tab")).toHaveCount(0);
   await expect(page.getByText(new RegExp(["mo", "nad chain evidence"].join(""), "i"))).toHaveCount(0);
