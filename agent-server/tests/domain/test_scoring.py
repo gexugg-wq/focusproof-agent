@@ -19,7 +19,7 @@ def text_evidence(evidence_id: str, text: str) -> Evidence:
 def _goal() -> LearningGoal:
     return LearningGoal(
         domain="web3",
-        title="Understand Monad transactions",
+        title="Understand payment transactions",
         goal="Explain how a transaction is submitted and confirmed",
         expectedOutput=None,
         plannedMinutes=120,

@@ -40,7 +40,6 @@ export default defineConfig({
         FOCUSPROOF_MEDIA_SCANNER_MODE: "fake-clean",
         FOCUSPROOF_CLAMD_DEFINITIONS_VERSION: "demo-deterministic-test",
         FOCUSPROOF_CLAMD_DEFINITIONS_FRESH_AT: "2026-08-26T00:00:00+00:00",
-        FOCUSPROOF_PLUGIN_MONAD_ENABLED: "false",
         LITELLM_LOCAL_MODEL_COST_MAP: "true"
       },
       url: `${apiBaseUrl}/health`,

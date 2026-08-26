@@ -281,7 +281,7 @@ def _safe_pass() -> dict[str, object]:
             "nativeActionObserved": True,
             "nativeObservationObserved": True,
             "mediaToolUsed": True,
-            "monadDisabled": True,
+            "pluginCapabilitiesAbsent": True,
         },
         "limits": {"maxCallsPerReview": 6, "maxReviewSeconds": 120, "maxConcurrentReviews": 1},
         "assurance": gate._assurance("fake-clean"),

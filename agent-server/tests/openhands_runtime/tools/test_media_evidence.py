@@ -47,7 +47,7 @@ def _facts() -> MediaEvidenceFacts:
         width=640,
         height=480,
         learner_explanation=(
-            "I compared the nonce, gas limit, and confirmation step in a Monad transaction."
+            "I compared the nonce, gas limit, and confirmation step in a payment transaction."
         ),
     )
 

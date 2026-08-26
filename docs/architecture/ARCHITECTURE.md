@@ -33,7 +33,7 @@ runtime capability, or AI4C production-readiness deliverable.
 Current authoritative status (2026-08-25): AI4C engineering and AI5
 image-foundation/runtime acceptance are complete. The AI5.8 independent audit
 was initially rejected, then accepted after three fix rounds and an independent
-Round 3 re-verification. Media and Monad remain default-off and detachable.
+Round 3 re-verification. Media remains default-off and detachable. The former chain-specific plugin has been removed from active runtime, UI, configuration, dependencies, and contract sources.
 Real visual-provider use is still default-off; public deployment, managed OIDC,
 and external long-term operations/SLOs are not authorized. Audio/PDF/OCR/ASR
 are not implemented. AI6 multimodal expansion requires separate AI0 approval.
@@ -73,9 +73,8 @@ projections and cannot schedule Agent steps, execute tools or replace native
 OpenHands restoration.
 
 Media admission security remains an application-owned boundary outside Agent
-decisions, generic scoring, and Monad. Generic scoring does not branch by
-modality, Monad remains disabled by default, and Web3/Monad plus
-audio/PDF/OCR/ASR remain backlog/deferred pending AI0.
+decisions and generic scoring. Generic scoring does not branch by
+modality, and audio/PDF/OCR/ASR remain backlog/deferred pending AI0.
 
 The product database owns sessions, evidence metadata, authorization,
 reviews, build logs, and a read/query audit projection. It does not restore or

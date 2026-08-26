@@ -24,7 +24,6 @@ FORBIDDEN_RUNTIME_MARKERS = (
     "execute_focusproof_tool",
     "FakeTextEvidenceTool",
     "FakeWeb3TxTool",
-    "monad-testnet-mock",
 )
 
 

@@ -7,8 +7,7 @@ AI5.8 acceptance sync, AI5 image-foundation engineering, the pinned local visual
 gate, the live Clamd production-scanning boundary, PostgreSQL migration and
 concurrency gates, and the shared image-publish/review lock are complete. The
 independent AI5.8 audit was initially rejected, its three fix rounds completed,
-and Round 3 was independently reverified as accepted. Media and Monad remain
-default-off and detachable. This is engineering/runtime acceptance, not public
+and Round 3 was independently reverified as accepted. Media remains default-off and detachable. The former chain-specific plugin slice has been removed. This is engineering/runtime acceptance, not public
 production authorization: a real visual provider remains disabled by default,
 and managed OIDC, public deployment, and external long-term operations/SLOs
 remain unapproved. Audio/PDF/OCR/ASR are not implemented. AI6 multimodal
@@ -21,11 +20,11 @@ The runtime direction is Python because FocusProof directly uses OpenHands SDK A
 ## Why OpenHands-Native
 
 FocusProof directly uses suitable public OpenHands SDK runtime capabilities, including Conversation, Agent, native events and the tool protocol. It does not maintain OpenHands-inspired mirror implementations when the SDK already provides the behavior. FocusProof owns learning evidence, scoring, authorization, product persistence projections and review semantics, connected to the native runtime through thin adapters.
-Media security remains outside Agent decisions and generic scoring; scoring does not fork by modality, and Monad remains disabled by default.
+Media security remains outside Agent decisions and generic scoring; scoring does not fork by modality or chain-specific branches.
 
-## Why Web3 Is Only The First Plugin
+## Domain-General Scope
 
-Web3 evidence such as transaction hashes, contract addresses and wallet addresses can be externally verified, so it is a strong first demo domain. The core product is broader: programming, math, language learning, reading, research and exam preparation should all fit through domain plugins.
+FocusProof keeps learning evidence domain-general. Text, URL and image evidence are current product paths; optional wallet metadata can remain generic evidence context but no chain-specific verifier is active. Future domain plugins require separate approval.
 
 ## Project Structure
 
@@ -39,7 +38,6 @@ focusproof-agent/
       persistence/
       runtime/
       agents/
-      domain/plugins/web3/
       tools/
       contracts/
     tests/
@@ -106,6 +104,5 @@ current change must still pass a targeted `ruff format --check` before handoff.
 - AI4A owns the completed general text/URL verification framework.
 - AI4B owns the completed general quality, security and release-readiness baseline.
 - AI4C engineering and AI5 image-foundation/runtime acceptance are complete.
-- AI6 multimodal expansion requires separate AI0 approval. Web3/Monad remains
-  optional and default-off; audio/PDF/OCR/ASR remain unimplemented.
+- AI6 multimodal expansion requires separate AI0 approval. Audio/PDF/OCR/ASR remain unimplemented.
 - Optional Web3 proof recording remains a domain-plugin backlog and cannot redefine the general runtime.

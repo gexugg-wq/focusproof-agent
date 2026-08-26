@@ -44,7 +44,7 @@ def test_real_image_provider(tmp_path: Path) -> None:
     assert report["checks"]["realRuntimeUsed"] is True
     assert report["checks"]["visionActive"] is True
     assert report["checks"]["mediaToolUsed"] is True
-    assert report["checks"]["monadDisabled"] is True
+    assert report["checks"]["pluginCapabilitiesAbsent"] is True
     assert report["checks"]["productionLlmUsed"] is True
     assert report["provider"] == "openai"
     assert report["model"] == "qwen3.7-plus"

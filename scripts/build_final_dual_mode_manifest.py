@@ -105,7 +105,7 @@ def _validate_visual_report(report: dict[str, object]) -> dict[str, object]:
         ("nativeObservationObserved", checks.get("nativeObservationObserved")),
         ("mediaToolUsed", checks.get("mediaToolUsed")),
         ("visionActive", checks.get("visionActive")),
-        ("monadDisabled", checks.get("monadDisabled")),
+        ("pluginCapabilitiesAbsent", checks.get("pluginCapabilitiesAbsent")),
         ("imagePayloadNotPersisted", checks.get("imagePayloadNotPersisted")),
     )
     for label, value in required_true:

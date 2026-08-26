@@ -39,7 +39,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     os.environ.setdefault("FOCUSPROOF_PROFILE", "demo-deterministic")
     os.environ.setdefault("FOCUSPROOF_MEDIA_ENABLED", "false")
-    os.environ.setdefault("FOCUSPROOF_PLUGIN_MONAD_ENABLED", "false")
     os.environ["FOCUSPROOF_DATA_DIR"] = str(args.data_dir)
     os.environ["FOCUSPROOF_DATABASE_URL"] = args.database_url
     os.environ["DATABASE_URL"] = args.database_url

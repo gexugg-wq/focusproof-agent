@@ -27,9 +27,6 @@ dev = [
     "pytest",
     "ruff",
 ]
-monad = [
-    "web3>=7.16,<8",
-]
 media = [
     "Pillow>=12.1.1,<13",
     "python-multipart>=0.0.20,<0.1",

@@ -26,8 +26,8 @@ Exact image logic is permitted only in `media_adapters/**`,
 `media_projection/image_narrative_provider.py`, `runtime_contributions.py`,
 `tools/media_evidence.py`, and `bootstrap/media_composition.py`. Media
 core/application must not import OpenHands, FastAPI, SQLAlchemy, Pillow,
-multipart, frontend, scoring, plugins, or Monad. Manager/Agent loop, domain
-scoring, text/URL tools, and Monad contain no image branch.
+multipart, frontend, scoring, or plugins. Manager/Agent loop, domain
+scoring, and text/URL tools contain no image branch.
 
 Accepted runtime baseline: AI4B at `bf5c9a8` on OpenHands SDK 1.31.0. AI4C must
 consume the accepted Conversation/tool/event boundary and must not redesign the

@@ -207,7 +207,6 @@ def test_product_path_pass_report_is_observed_validated_and_auditable(
             "FOCUSPROOF_PROFILE": "local-dev",
             "FOCUSPROOF_MEDIA_ENABLED": "true",
             "FOCUSPROOF_MEDIA_SCANNER_MODE": "fake-clean",
-            "FOCUSPROOF_PLUGIN_MONAD_ENABLED": "false",
         }
     ):
         try:
@@ -358,7 +357,6 @@ def test_product_path_zero_attempt_unknown_transport_cannot_publish_pass(
                 "FOCUSPROOF_PROFILE": "local-dev",
                 "FOCUSPROOF_MEDIA_ENABLED": "true",
                 "FOCUSPROOF_MEDIA_SCANNER_MODE": "fake-clean",
-                "FOCUSPROOF_PLUGIN_MONAD_ENABLED": "false",
                 "FOCUSPROOF_LLM_API_KEY": "safe-test-key",
             },
             "openai/qwen3.7-plus",
@@ -660,7 +658,6 @@ def test_product_path_tampered_real_audit_lineage_cannot_publish_pass(
                 "FOCUSPROOF_PROFILE": "local-dev",
                 "FOCUSPROOF_MEDIA_ENABLED": "true",
                 "FOCUSPROOF_MEDIA_SCANNER_MODE": "fake-clean",
-                "FOCUSPROOF_PLUGIN_MONAD_ENABLED": "false",
                 "FOCUSPROOF_LLM_API_KEY": "safe-test-key",
             },
             "openai/qwen3.7-plus",
@@ -685,7 +682,6 @@ def test_product_path_tampered_real_audit_lineage_cannot_publish_pass(
                 "FOCUSPROOF_PROFILE": "local-dev",
                 "FOCUSPROOF_MEDIA_ENABLED": "true",
                 "FOCUSPROOF_MEDIA_SCANNER_MODE": "fake-clean",
-                "FOCUSPROOF_PLUGIN_MONAD_ENABLED": "false",
             }
         ):
             original_run_product_chain(
@@ -820,7 +816,6 @@ def test_product_path_tampered_audit_or_safe_summary_cannot_publish_pass(
                 "FOCUSPROOF_PROFILE": "local-dev",
                 "FOCUSPROOF_MEDIA_ENABLED": "true",
                 "FOCUSPROOF_MEDIA_SCANNER_MODE": "fake-clean",
-                "FOCUSPROOF_PLUGIN_MONAD_ENABLED": "false",
                 "FOCUSPROOF_LLM_API_KEY": "safe-test-key",
             },
             "openai/qwen3.7-plus",

@@ -22,6 +22,7 @@ ALLOWED_IMAGE_FILES = {
     PurePosixPath("focusproof/media_projection/image_narrative_provider.py"),
     PurePosixPath("focusproof/openhands_runtime/runtime_contributions.py"),
     PurePosixPath("focusproof/openhands_runtime/tools/media_evidence.py"),
+    PurePosixPath("focusproof/openhands_runtime/demo_deterministic_provider.py"),
     PurePosixPath("focusproof/bootstrap/media_composition.py"),
 }
 ALLOWED_IMAGE_DIR = PurePosixPath("focusproof/media_adapters")

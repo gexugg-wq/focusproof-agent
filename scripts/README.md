@@ -77,7 +77,7 @@ See:
 Run the real-provider acceptance harness only from Linux with Python 3.12. It starts the
 official FocusProof FastAPI application, applies the production Alembic migrations to an
 isolated `/tmp` SQLite database, and exercises the official session/evidence/review/answer/events
-API path for text and public-HTTPS URL scenarios. The Monad plugin is forced off.
+API path for text and public-HTTPS URL scenarios. No optional plugin is loaded.
 
 ```bash
 PYTHONPATH=/mnt/d/web3/focusproof-general-core-gate/agent-server \

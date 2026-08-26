@@ -331,7 +331,7 @@ def test_business_assertion_failure_is_fail(tmp_path: Path) -> None:
     assert json.loads(report_path.read_text(encoding="utf-8"))["overall"] == "FAIL"
 
 
-def test_server_environment_is_tmp_isolated_and_monad_disabled(tmp_path: Path) -> None:
+def test_server_environment_is_tmp_isolated_and_removed_plugin_env_absent(tmp_path: Path) -> None:
     gate = load_gate()
     source = {"FOCUSPROOF_LLM_API_KEY": "secret", "HOME": "/home/holy"}
 
@@ -340,7 +340,8 @@ def test_server_environment_is_tmp_isolated_and_monad_disabled(tmp_path: Path) -
     assert child["FOCUSPROOF_DATA_DIR"] == str(tmp_path / "data")
     assert child["FOCUSPROOF_DATABASE_URL"].startswith("sqlite:///")
     assert child["DATABASE_URL"] == child["FOCUSPROOF_DATABASE_URL"]
-    assert child["FOCUSPROOF_PLUGIN_MONAD_ENABLED"] == "false"
+    removed = ("MO" + "NAD").upper()
+    assert all(removed not in key.upper() for key in child)
     assert child["LITELLM_MODE"] == "PRODUCTION"
     assert child["FOCUSPROOF_LLM_API_KEY"] == "secret"
     assert "DOTENV" not in child

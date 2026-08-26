@@ -19,8 +19,8 @@ from focusproof.runtime.observations import Observation
 def _goal() -> LearningGoal:
     return LearningGoal(
         domain="web3",
-        title="Understand Monad transactions",
-        goal="Explain how a Monad transaction is submitted and confirmed",
+        title="Understand payment transactions",
+        goal="Explain how a payment transaction is submitted and confirmed",
     )
 
 
@@ -89,7 +89,7 @@ def test_image_visual_facts_produce_stable_lineage_in_scoring_evidence() -> None
     observation = _media_observation(
         explanation="The learner inspected the transaction screenshot.",
         visual_facts=(
-            "A signed Monad transaction includes a nonce.",
+            "A signed payment transaction includes a nonce.",
             "The interface displays a gas limit before submission.",
             "A confirmed result is included in a block.",
         ),
@@ -105,7 +105,7 @@ def test_image_visual_facts_produce_stable_lineage_in_scoring_evidence() -> None
     assert len(first[0].consumed_fact_ids) == 3
     assert first[0].source_observation_event_id == "obs-native-image-1"
     assert first[0].projection_id
-    assert "signed Monad transaction" in first[0].text
+    assert "signed payment transaction" in first[0].text
     assert "gas limit" in first[0].text
     scoring_input = converted[-1]
     assert scoring_input.metadata["consumedFactIds"] == list(first[0].consumed_fact_ids)
@@ -122,7 +122,7 @@ def test_image_without_verified_explanation_stays_weak() -> None:
 
 def test_failed_image_observation_stays_weak_even_if_facts_contain_text() -> None:
     result = _review_from_image(
-        explanation="A Monad transaction is submitted and confirmed in a block.",
+        explanation="A payment transaction is submitted and confirmed in a block.",
         observation_status="failed",
     )
 
@@ -132,7 +132,7 @@ def test_failed_image_observation_stays_weak_even_if_facts_contain_text() -> Non
 
 def test_image_explanation_that_copies_goal_is_not_learning() -> None:
     result = _review_from_image(
-        explanation="Explain how a Monad transaction is submitted and confirmed",
+        explanation="Explain how a payment transaction is submitted and confirmed",
         answers=("A nonce orders account transactions.",),
     )
 
@@ -155,12 +155,12 @@ def test_aligned_image_explanation_and_answer_can_support_learning_without_image
 ):
     result = _review_from_image(
         explanation=(
-            "A Monad transaction uses a signed request with a nonce and gas limit, "
+            "A payment transaction uses a signed request with a nonce and gas limit, "
             "then validators execute it and include the confirmed result in a block."
         ),
         answers=("The nonce orders account transactions, and gas bounds the execution cost.",),
         visual_facts=(
-            "A signed Monad transaction includes a nonce.",
+            "A signed payment transaction includes a nonce.",
             "The interface displays a gas limit before submission.",
             "A confirmed result is included in a block.",
         ),
@@ -186,7 +186,7 @@ class FakeAudioProvider:
         return VerifiedLearningNarrative(
             evidence_id=evidence.evidenceId,
             text=(
-                "The learner explained that a Monad transaction uses a nonce, gas, "
+                "The learner explained that a payment transaction uses a nonce, gas, "
                 "execution, and block confirmation."
             ),
             verification_status="success",

@@ -1,1 +1,1 @@
-"""Web3 domain plugin placeholder for Monad-oriented evidence."""
+"""Web3-independent evidence plugin namespace."""

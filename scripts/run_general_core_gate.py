@@ -146,7 +146,6 @@ def server_environment(environ: Mapping[str, str], root: Path) -> dict[str, str]
             "FOCUSPROOF_DATA_DIR": str(data_dir),
             "FOCUSPROOF_DATABASE_URL": f"sqlite:///{database}",
             "DATABASE_URL": f"sqlite:///{database}",
-            "FOCUSPROOF_PLUGIN_MONAD_ENABLED": "false",
             "LITELLM_MODE": "PRODUCTION",
             "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "agent-server"),
         }
@@ -211,8 +210,8 @@ def _scenario(
             or not isinstance(observation_count, int) or observation_count < 1):
         raise BusinessFailure("completed review omitted required acceptance evidence")
     capabilities = session.get("view", {}).get("pluginCapabilities", [])
-    if any(str(item.get("pluginId", "")).lower() == "monad" for item in capabilities if isinstance(item, dict)):
-        raise BusinessFailure("Monad capability count was not zero")
+    if any(isinstance(item, dict) for item in capabilities):
+        raise BusinessFailure("Plugin capability count was not zero")
     return {
         "name": scenario["name"], "status": "PASS", "sessionId": session_id,
         "conversationId": conversation_id, "question": questions[0] if questions else None,
@@ -240,8 +239,8 @@ def run_gate(*, base_url: str, scenarios: Sequence[Mapping[str, Any]], request: 
             raise BusinessFailure("gate exceeded the total interaction timeout")
         capabilities = request("GET", _endpoint(base_url, "/openhands/capabilities"), timeout_seconds=remaining)
         plugins = capabilities.get("plugins", [])
-        if any(str(item.get("name", "")).lower() == "monad" for item in plugins if isinstance(item, dict)):
-            raise BusinessFailure("Monad capability count was not zero")
+        if any(isinstance(item, dict) for item in plugins):
+            raise BusinessFailure("Plugin capability count was not zero")
         report["scenarios"] = [
             _scenario(base_url, item, request, deadline=deadline, clock=clock)
             for item in scenarios

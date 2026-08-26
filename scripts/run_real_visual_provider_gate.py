@@ -72,7 +72,7 @@ _PASS_RESULT_SCHEMA: dict[str, ReportSchema] = {
         "nativeActionObserved": bool,
         "nativeObservationObserved": bool,
         "mediaToolUsed": bool,
-        "monadDisabled": bool,
+        "pluginCapabilitiesAbsent": bool,
     },
     "limits": {
         "maxCallsPerReview": int,
@@ -132,7 +132,6 @@ def _provider_environment(
         "FOCUSPROOF_PROFILE": "demo-real-vision",
         "FOCUSPROOF_MEDIA_ENABLED": "true",
         "FOCUSPROOF_MEDIA_SCANNER_MODE": scanner_mode,
-        "FOCUSPROOF_PLUGIN_MONAD_ENABLED": "false",
         "FOCUSPROOF_LLM_PROVIDER": provider,
         "FOCUSPROOF_LLM_MODEL": qualified_model,
         "FOCUSPROOF_LLM_SUPPORTS_VISION": "true",
@@ -667,10 +666,8 @@ def _run_product_chain(
                 "nativeObservationObserved": int(responses[-1].get("observationEventsCount") or 0)
                 > 0,
                 "mediaToolUsed": "focusproof_media_evidence_verification" in all_native,
-                "monadDisabled": not any(
-                    str(item.get("pluginId", "")).lower() == "monad"
-                    for item in plugin_capabilities
-                    if isinstance(item, dict)
+                "pluginCapabilitiesAbsent": not any(
+                    isinstance(item, dict) for item in plugin_capabilities
                 ),
             }
             required_checks = dict(checks)

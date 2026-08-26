@@ -24,7 +24,7 @@ def _visual_report() -> dict[str, object]:
         "checks": {
             "imagePayloadNotPersisted": True,
             "mediaToolUsed": True,
-            "monadDisabled": True,
+            "pluginCapabilitiesAbsent": True,
             "nativeActionObserved": True,
             "nativeObservationObserved": True,
             "officialConversationUsed": True,

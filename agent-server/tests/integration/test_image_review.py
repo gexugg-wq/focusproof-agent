@@ -92,8 +92,8 @@ def test_image_review_uses_verified_facts_without_claiming_model_saw_pixels() ->
     ]
     goal = LearningGoal(
         domain="web3",
-        title="Understand Monad transactions",
-        goal="Explain how a Monad transaction is submitted and confirmed",
+        title="Understand payment transactions",
+        goal="Explain how a payment transaction is submitted and confirmed",
     )
     now = datetime.now(UTC)
     native_observation = ObservationEvent(
@@ -112,7 +112,7 @@ def test_image_review_uses_verified_facts_without_claiming_model_saw_pixels() ->
                 "width": 640,
                 "height": 480,
                 "learner_explanation": (
-                    "The diagram shows a signed Monad transaction with nonce and gas, "
+                    "The diagram shows a signed payment transaction with nonce and gas, "
                     "then execution and confirmation in a block."
                 ),
                 "visual_facts": [
