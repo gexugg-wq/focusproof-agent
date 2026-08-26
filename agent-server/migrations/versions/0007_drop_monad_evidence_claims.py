@@ -7,7 +7,7 @@ Revises: 0006_media_scan_receipts
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 revision: str = "0007_drop_monad_evidence_claims"
 down_revision: str | None = "0006_media_scan_receipts"
@@ -29,6 +29,10 @@ def _index_exists() -> bool:
 
 
 def upgrade() -> None:
+    if context.is_offline_mode():
+        op.drop_index(_INDEX, table_name=_TABLE)
+        op.drop_table(_TABLE)
+        return
     if not _table_exists():
         return
     if _index_exists():
@@ -37,8 +41,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if context.is_offline_mode():
+        _create_table()
+        return
     if _table_exists():
         return
+    _create_table()
+
+
+def _create_table() -> None:
     op.create_table(
         _TABLE,
         sa.Column("claim_id", sa.String(96), primary_key=True),
