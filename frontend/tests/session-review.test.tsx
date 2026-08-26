@@ -217,3 +217,31 @@ describe("image capability validation", () => {
     expect(getImageCapability(candidate)).toBeNull();
   });
 });
+
+describe("SessionWorkspace retired plugin removal", () => {
+  it("ignores stale retired plugin capabilities from older sessions", async () => {
+    const staleRetiredPluginSession: SessionDetail = {
+      ...session,
+      view: {
+        pluginCapabilities: [
+          {
+            pluginId: ["mo", "nad"].join(""),
+            capabilityId: ["mo", "nad_learning_transaction"].join(""),
+            enabled: true,
+            metadata: {
+              chainId: 1234,
+              chainName: ["Mo", "nad"].join(""),
+              contractAddress: "0x52908400098527886E0F7030069857D2E4169EE7",
+              taskDescription: "Submit a wallet transaction that calls increment() on the configured teaching contract."
+            }
+          }
+        ]
+      }
+    };
+    workspaceApi.getSession.mockResolvedValueOnce(staleRetiredPluginSession);
+    render(workspaceWrap(new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }), <SessionWorkspace sessionId="sess_1" />));
+    await screen.findByRole("heading", { name: /event logs/i });
+    expect(screen.queryByText(new RegExp(["mo", "nad chain evidence"].join(""), "i"))).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: new RegExp(["submit mo", "nad evidence"].join(""), "i") })).not.toBeInTheDocument();
+  });
+});

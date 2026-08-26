@@ -5,31 +5,13 @@ import { Activity, BookOpen } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { focusProofApi, getSafeErrorMessage, isApiError } from "@/lib/api/client";
-import type { ImageEvidenceCapability, PluginCapability, SessionDetail, SubmitEvidenceRequest } from "@/lib/api/contracts";
+import type { ImageEvidenceCapability, SessionDetail, SubmitEvidenceRequest } from "@/lib/api/contracts";
 import { BuildLog } from "@/features/build-log/BuildLog";
 import { EvidencePanel } from "@/features/evidence/EvidencePanel";
-import { MonadEvidencePanel } from "@/features/plugins/monad/MonadEvidencePanel";
 import { ReviewPanel } from "@/features/review/ReviewPanel";
 import { WalletPanel } from "@/features/wallet/WalletPanel";
 import { saveRecentSession } from "@/lib/storage/recent-sessions";
 
-function isPluginCapability(value: unknown): value is PluginCapability {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Record<string, unknown>;
-  return typeof candidate.pluginId === "string"
-    && typeof candidate.capabilityId === "string"
-    && typeof candidate.enabled === "boolean"
-    && !!candidate.metadata
-    && typeof candidate.metadata === "object";
-}
-
-function getEnabledMonadCapability(session: SessionDetail): (PluginCapability & { pluginId: "monad"; capabilityId: "monad_learning_transaction" }) | null {
-  const raw = session.view?.pluginCapabilities;
-  const capabilities = Array.isArray(raw) ? raw.filter(isPluginCapability) : [];
-  const match = capabilities.find((capability) => capability.pluginId === "monad" && capability.capabilityId === "monad_learning_transaction" && capability.enabled);
-  if (!match) return null;
-  return match as PluginCapability & { pluginId: "monad"; capabilityId: "monad_learning_transaction" };
-}
 const allowedImageFormats = new Set(["image/png", "image/jpeg", "image/webp"]);
 const positiveInteger = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value > 0;
 
@@ -81,7 +63,6 @@ export function SessionWorkspace({ sessionId }: { sessionId: string }) {
   const session = sessionQuery.data;
   saveRecentSession({ sessionId, title: session.state.goal.title, domain: session.state.goal.domain, visitedAt: new Date().toISOString() });
   const web3Context = session.state.goal.domain.toLowerCase() === "web3";
-  const monadCapability = getEnabledMonadCapability(session);
   const imageCapability = getImageCapability(session);
   return (
     <main className="grid min-h-screen gap-4 p-4 lg:grid-cols-[280px_minmax(0,1fr)_340px]">
@@ -97,17 +78,15 @@ export function SessionWorkspace({ sessionId }: { sessionId: string }) {
           <div><dt className="font-medium">Expected output</dt><dd>{session.state.goal.expectedOutput || "Not specified"}</dd></div>
           <div><dt className="font-medium">Planned minutes</dt><dd>{session.state.goal.plannedMinutes ?? "Not specified"}</dd></div>
         </dl>
-        {web3Context || monadCapability ? <WalletPanel onWalletChange={setWalletAddress} /> : null}
+        {web3Context ? <WalletPanel onWalletChange={setWalletAddress} /> : null}
       </aside>
       <div className="grid content-start gap-4">
-        {monadCapability ? <MonadEvidencePanel capability={monadCapability} onSubmitEvidence={(payload) => evidence.mutateAsync(payload)} /> : null}
         <EvidencePanel
           sessionId={sessionId}
           ownerUserId={session.state.ownerUserId}
           domain={session.state.goal.domain}
           walletAddress={walletAddress}
           submittedEvidence={session.state.evidence}
-          includeWeb3Mode={!monadCapability}
           imageCapability={imageCapability}
           onUploadImage={(form) => focusProofApi.submitImageEvidence(sessionId, form).then((response) => { void queryClient.invalidateQueries({ queryKey: ["session", sessionId] }); return response; })}
           onSubmitEvidence={(payload) => evidence.mutateAsync(payload)}

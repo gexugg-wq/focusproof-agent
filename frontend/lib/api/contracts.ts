@@ -75,15 +75,6 @@ export type ImageEvidenceResponse = {
   replayed: boolean;
 };
 
-export type MonadPluginCapabilityMetadata = {
-  chainId: number | string;
-  chainName: string;
-  contractAddress: string;
-  explorerTxBaseUrl?: string | null;
-  operationLabel?: string | null;
-  taskDescription?: string | null;
-};
-
 export type SessionView = {
   pluginCapabilities?: PluginCapability[];
   productCapabilities?: unknown[];

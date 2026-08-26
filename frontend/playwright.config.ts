@@ -7,7 +7,6 @@ const runId = process.env.FOCUSPROOF_E2E_RUN_ID ?? "manual";
 const runtimeDir = path.join(frontendDir, `test-results/ai4b-runtime-${runId}`);
 const databasePath = path.join(runtimeDir, "focusproof.sqlite3");
 const pythonPath = path.join(repositoryDir, ".venv/bin/python3.12");
-const scenario = process.env.FOCUSPROOF_E2E_SCENARIO ?? "general-flow";
 
 const apiPort = Number(process.env.FOCUSPROOF_E2E_API_PORT ?? "8000");
 const webPort = Number(process.env.FOCUSPROOF_E2E_WEB_PORT ?? "3000");
@@ -16,13 +15,9 @@ const webBaseUrl = `http://127.0.0.1:${webPort}`;
 const generalTestIgnore = [
   "ai4c-staging.spec.ts",
   "ai4c-production-readiness.spec.ts",
-  "focusproof-flow.spec.ts",
-  "monad-flow.spec.ts"
+  "focusproof-flow.spec.ts"
 ];
-const scenarioSelection =
-  scenario === "monad-flow"
-    ? { testMatch: ["monad-flow.spec.ts"] }
-    : { testIgnore: generalTestIgnore };
+const scenarioSelection = { testIgnore: generalTestIgnore };
 
 export default defineConfig({
   testDir: "./e2e",
@@ -44,7 +39,7 @@ export default defineConfig({
         `--port ${apiPort}`,
         `--database-url sqlite+pysqlite:///${databasePath}`,
         `--data-dir ${runtimeDir}`,
-        `--scenario ${scenario}`
+        "--scenario general-flow"
       ].join(" "),
       cwd: repositoryDir,
       env: {

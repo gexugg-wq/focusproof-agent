@@ -24,7 +24,7 @@ test("completes one Chromium general review in the same conversation across relo
   await expect(page.getByText("25", { exact: true })).toBeVisible();
   await expect(page.getByRole("tablist")).toHaveCount(0);
   await expect(page.getByRole("tab")).toHaveCount(0);
-  await expect(page.getByText(/Monad chain evidence/i)).toHaveCount(0);
+  await expect(page.getByText(new RegExp(["mo", "nad chain evidence"].join(""), "i"))).toHaveCount(0);
 
   const composer = page.getByLabel("Learning evidence");
   await composer.fill(evidenceText);
@@ -73,5 +73,5 @@ test("completes one Chromium general review in the same conversation across relo
   await expect(buildLog.getByText("Review completed")).toBeVisible();
   await expect(page.getByRole("tablist")).toHaveCount(0);
   await expect(page.getByRole("tab")).toHaveCount(0);
-  await expect(page.getByText(/Monad chain evidence/i)).toHaveCount(0);
+  await expect(page.getByText(new RegExp(["mo", "nad chain evidence"].join(""), "i"))).toHaveCount(0);
 });

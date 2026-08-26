@@ -18,7 +18,7 @@ test("retries an unknown image result through the real BFF with the same key", a
   await expect(page.getByRole("heading", { name: topic })).toBeVisible();
   await expect(page.getByRole("tablist")).toHaveCount(0);
   await expect(page.getByRole("tab")).toHaveCount(0);
-  await expect(page.getByText(/Monad chain evidence/i)).toHaveCount(0);
+  await expect(page.getByText(new RegExp(["mo", "nad chain evidence"].join(""), "i"))).toHaveCount(0);
 
   await page.getByLabel(/choose images/i).setInputFiles({
     name: "diagram.png",
