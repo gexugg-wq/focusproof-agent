@@ -1,8 +1,8 @@
 # FocusProof Agent Documentation
 
 当前权威基线（2026-08-26）：AI4C 工程与 AI5 图片基础/运行验收已完成；
-AI5.8 独立审计经三轮修复后由 Round 3 独立复验接受。图片与 Monad 能力均
-默认关闭、可拆卸；真实视觉 Provider 默认关闭，公开生产部署、托管 OIDC、
+AI5.8 独立审计经三轮修复后由 Round 3 独立复验接受。图片能力默认关闭且可拆卸；
+Monad 插件已退役，当前 active plugin count=0；真实视觉 Provider 默认关闭，公开生产部署、托管 OIDC、
 外部长期运维/SLO 尚未授权；音频/PDF/OCR/ASR 尚未实现。AI6 multimodal
 expansion requires separate AI0 approval。
 当前架构与 P1 修复边界见 `architecture/ARCHITECTURE.md` 和

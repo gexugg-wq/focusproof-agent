@@ -111,8 +111,9 @@ statements. Historical sections remain for provenance.
 7. Round 2 default gate: `1900 passed, 1 skipped, 19 deselected`. Round 3
    focused evidence: `85/94 passed`; targeted/production strict mypy, Ruff,
    diff, and cached-empty gates passed.
-8. FocusProof remains general-purpose. Monad is detachable/default-off.
-   Audio/PDF/OCR/ASR are not implemented. Public deployment, managed OIDC, and
+8. FocusProof remains general-purpose. The retired Monad plugin is no longer an
+   active runtime capability; active plugin count=0. Audio/PDF/OCR/ASR are not
+   implemented. Public deployment, managed OIDC, and
    external long-term operations/SLOs remain unauthorized.
 
 AI5 quality-gate closure is represented by `scripts/run_quality_gate.py`.
@@ -142,7 +143,7 @@ Conversation, EventLog, Message/Action/Observation, or Tool abstractions.
 | AI4A | General Verification Framework | `agent-server/focusproof/openhands_runtime/`, narrowly affected `agent-server/focusproof/domain/` modules, `agent-server/tests/`, `fixtures/`, `docs/research/`, necessary Python dependency declarations | `frontend/`, `contracts/`, `.env`, `var/`, OpenHands SDK source, public protocol or architecture changes without AI0 approval |
 | AI4B | General QA + Security + Release Readiness | cross-system tests, narrowly affected backend/frontend fixes, `docs/security/`, `docs/deployment/`, `docs/research/` | New product features, multimodal work, public deployment |
 | AI4C | Production Readiness | identity/runtime/deployment modules approved by AI4C.0, their tests, deployment config and reports | Multimodal work, Web3 specialization, OpenHands mirror implementations, scoring rewrites without AI0 approval |
-| AI5 | Multimodal Image Foundation | image media modules under `agent-server/focusproof/media_*`, conditional API/bootstrap/runtime contribution files, scoped media tests, frontend image evidence flow, and AI5 docs/reports | OpenHands SDK source, `.env` or secrets, `var/`, unapproved public protocol changes, second Runtime/Conversation/EventLog/Tool protocol, Monad/Web3 defaults |
+| AI5 | Multimodal Image Foundation | image media modules under `agent-server/focusproof/media_*`, conditional API/bootstrap/runtime contribution files, scoped media tests, frontend image evidence flow, and AI5 docs/reports | OpenHands SDK source, `.env` or secrets, `var/`, unapproved public protocol changes, second Runtime/Conversation/EventLog/Tool protocol, retired Monad/Web3 history |
 
 Two AIs must not edit the same file at the same time.
 
@@ -422,7 +423,7 @@ explicitly outside the accepted AI4B baseline.
 
 ## 10. AI4C: Production Readiness
 
-Status: completed. AI4C.0-4 engineering implementation, deterministic local acceptance, and the 2026-08-12 formal real-provider General Core Gate are accepted. The gate passed both official text and URL scenarios through FastAPI, OpenHands SDK Conversation, Agent.step, and native Action/Observation/EventLog with Monad disabled. This closes AI4C; it does not authorize public production release.
+Status: completed. AI4C.0-4 engineering implementation, deterministic local acceptance, and the 2026-08-12 formal real-provider General Core Gate are accepted. The gate passed both official text and URL scenarios through FastAPI, OpenHands SDK Conversation, Agent.step, and native Action/Observation/EventLog with active plugin count=0. This closes AI4C; it does not authorize public production release.
 
 The highest honest release classification remains staging-ready with blockers. External release gates remain SDK-EQUIVALENCE blocked, CLEAN-STACK blocked, and external OIDC/staging blocked. Real-provider General Core Gate execution is complete and is no longer an outstanding blocker.
 
@@ -477,7 +478,7 @@ Final AI5 evidence:
 - focused architecture/product/SDK: `43 passed, 1 skipped`
 - media API/core/adapters/message content: `171 passed`
 - runtime contribution/tool/scoring: `21 passed`
-- default API/general core/Monad default-disabled: `76 passed`
+- default API/general core/retired-plugin historical gate: `76 passed`
 - persistence/migrations/restart recovery: `114 passed`
 - Alembic upgrade `0005` -> downgrade `0004` -> upgrade head: PASS
 - explicit visual-provider capability tests: `2 passed`; complete LLM operations: `20 passed`
@@ -500,7 +501,7 @@ Historical acceptance evidence retained for context:
 - Docker core/media build: PASS
 - frontend lint/typecheck/`114` Vitest/build: PASS
 - default E2E: `28/28`
-- Monad E2E: `4/4`
+- retired-plugin E2E historical evidence: `4/4`
 - staging restore: `1 passed`
 
 ## 12. Development Phases
@@ -547,7 +548,7 @@ not fully complete and public production upload remains unauthorized.
 
 ## 14. General Core Gate Closure Addendum
 
-Monad plugin source is retained in the repository but the default runtime keeps it disabled. Wallet, Monad, contract, and transaction-hash entry points only render when the enabled capability is present.
+The former Monad plugin has been retired from active runtime, UI, scripts, and contract sources. The commit chain below remains as historical context for how the capability was first hidden before full removal.
 
 Accepted implementation commit chain:
 

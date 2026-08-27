@@ -6,7 +6,7 @@ Baseline: local main 15083df
 
 ## Summary
 
-FocusProof active runtime, frontend UI/config, scripts/gates, contract sources, environment examples, and dependency metadata no longer expose the Monad plugin slice. General text, URL, image evidence, multi-turn review, generic scoring, OpenHands SDK Conversation/EventLog/tool protocol, persistence, demo-deterministic, and real-provider gates were preserved.
+FocusProof active runtime, frontend UI/config, scripts/gates, contract sources, environment examples, and dependency metadata no longer expose the Monad plugin slice. Active plugin count is now 0. General text, URL, image evidence, multi-turn review, generic scoring, OpenHands SDK Conversation/EventLog/tool protocol, persistence, demo-deterministic, and real-provider gates were preserved.
 
 Change count from baseline: 49 deleted files, 37 modified files, 3 added files, 89 total changed paths. The largest deletion is the isolated contracts/monad-learning-task package and the backend/frontend plugin-owned test and UI trees.
 
@@ -25,7 +25,7 @@ Change count from baseline: 49 deleted files, 37 modified files, 3 added files, 
 - SessionWorkspace no longer renders chain-specific plugin panels or button wiring.
 - Frontend API contracts no longer carry Monad plugin metadata.
 - .env.example, frontend Playwright configs, demo/gate scripts, README, pyproject.toml, and uv.lock no longer contain active Monad config or optional dependencies. uv.lock was regenerated with uv lock.
-- scripts/run_ai4b_test_server.py keeps generic/image E2E support and only retains the image retry probe for the diagram.png retry fixture.
+- scripts/run_ai4b_test_server.py remains the generic/image E2E server and only retains the image retry probe for the diagram.png retry fixture.
 
 ## Database Migration
 
@@ -59,4 +59,4 @@ Allowed remaining matches are historical migrations, migration compatibility tes
 ## Residual Risk
 
 - No live PostgreSQL upgrade/downgrade was run because no DSN was available and no secret files were read. Offline PostgreSQL migration SQL compilation passed.
-- Historical docs still mention Monad by design; current architecture and active runtime/config/UI/scripts no longer expose it.
+- Historical docs still mention Monad by design; current authority docs and active runtime/config/UI/scripts no longer present it as an available plugin.
