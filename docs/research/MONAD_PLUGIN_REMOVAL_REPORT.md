@@ -8,7 +8,7 @@ Baseline: local main 15083df
 
 FocusProof active runtime, frontend UI/config, scripts/gates, contract sources, environment examples, and dependency metadata no longer expose the Monad plugin slice. General text, URL, image evidence, multi-turn review, generic scoring, OpenHands SDK Conversation/EventLog/tool protocol, persistence, demo-deterministic, and real-provider gates were preserved.
 
-Change count from baseline: 49 deleted files, 37 modified files, 2 added files, 88 total changed paths. The largest deletion is the isolated contracts/monad-learning-task package and the backend/frontend plugin-owned test and UI trees.
+Change count from baseline: 49 deleted files, 37 modified files, 3 added files, 89 total changed paths. The largest deletion is the isolated contracts/monad-learning-task package and the backend/frontend plugin-owned test and UI trees.
 
 ## Deletions
 
@@ -54,7 +54,7 @@ During removal verification, Playwright exposed a pre-existing coupling in scrip
 
 Forbidden active paths checked with git grep -n -i monad -- agent-server/focusproof frontend scripts contracts pyproject.toml .env.example and returned no matches.
 
-Allowed remaining matches are historical migrations, migration compatibility tests, explicit legacy env/import compatibility tests proving the plugin does not return, and historical research/spec/plan documents. These are retained for database compatibility and audit history, not active runtime support.
+Allowed remaining matches are historical migrations, migration compatibility tests, explicit legacy env/import compatibility tests proving the plugin does not return, this removal report, and historical research/spec/plan documents. No active architecture fixture path now uses the retired plugin name. These are retained for database compatibility and audit history, not active runtime support.
 
 ## Residual Risk
 

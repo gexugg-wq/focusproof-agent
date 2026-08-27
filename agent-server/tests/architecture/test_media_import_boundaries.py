@@ -36,7 +36,7 @@ PROTECTED_DUTY_PATHS = (
     PurePosixPath("focusproof/openhands_runtime/capabilities.py"),
     PurePosixPath("focusproof/openhands_runtime/tools/text_evidence.py"),
     PurePosixPath("focusproof/openhands_runtime/tools/url_evidence.py"),
-    PurePosixPath("focusproof/monad"),
+    PurePosixPath("focusproof/protected_domain"),
 )
 TOKEN_RE = re.compile(r"[A-Z]?[a-z0-9]+|[A-Z]+(?=[A-Z]|$)")
 IMAGE_SIGNAL_TOKENS = {"image", "imagecontent", "vision"}
@@ -492,7 +492,7 @@ def test_generic_llm_vision_capability_is_allowed_only_in_exact_config_files(pat
         "focusproof/domain/scoring.py",
         "focusproof/openhands_runtime/capabilities.py",
         "focusproof/openhands_runtime/tools/text_evidence.py",
-        "focusproof/monad/runtime.py",
+        "focusproof/protected_domain/runtime.py",
     ],
 )
 def test_generic_llm_vision_capability_is_rejected_everywhere_else(path: str) -> None:
@@ -536,7 +536,7 @@ def test_image_branches_accept_valid_media_routes_fixture(
         "focusproof/api/media_routes.py.evil",
         "focusproof/openhands_runtime/manager.py",
         "focusproof/domain/scoring.py",
-        "focusproof/monad/runtime.py",
+        "focusproof/protected_domain/runtime.py",
         "focusproof/openhands_runtime/tools/text_evidence.py",
         "focusproof/openhands_runtime/tools/url_evidence.py",
     ],
@@ -632,7 +632,7 @@ def test_malware_scanning_duties_do_not_enter_protected_surfaces() -> None:
         PACKAGE_ROOT / "openhands_runtime",
         PACKAGE_ROOT / "openhands_adapter",
         PACKAGE_ROOT / "domain" / "plugins",
-        PACKAGE_ROOT / "monad",
+        PACKAGE_ROOT / "protected_domain",
     )
     forbidden = ("malware", "clamd", "malwarescanner", "malwarescanverdict")
     violations: list[str] = []
