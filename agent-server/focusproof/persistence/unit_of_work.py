@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from types import TracebackType
 from typing import Any, Protocol, Self
 
@@ -12,8 +12,10 @@ from focusproof.persistence.repositories import (
     EvidenceRepository,
     ReviewRepository,
     PrincipalRepository,
+    ResourceSlotRepository,
     SecurityAuditRepository,
     SessionRepository,
+    SpeechRequestRepository,
     SqlAnswerRepository,
     SqlAuditEventRepository,
     SqlEvidenceRepository,
@@ -48,6 +50,8 @@ class UnitOfWork(Protocol):
     principals: PrincipalRepository
     security_audit: SecurityAuditRepository
     media: MediaTransactionPort
+    speech_requests: SpeechRequestRepository
+    resource_slots: ResourceSlotRepository
 
     @property
     def scan_audit(self) -> Any: ...
@@ -72,6 +76,8 @@ class SqlAlchemyUnitOfWork:
     principals: PrincipalRepository
     security_audit: SecurityAuditRepository
     media: MediaTransactionPort
+    speech_requests: SpeechRequestRepository
+    resource_slots: ResourceSlotRepository
 
     def __init__(
         self,
@@ -79,17 +85,28 @@ class SqlAlchemyUnitOfWork:
         *,
         media_max_items: int = 4,
         media_max_distinct_bytes: int = 20 * 1024 * 1024,
+        speech_active_hmac_key_version: str | None = None,
+        speech_hmac_keys: Mapping[str, bytes] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._session: Session | None = None
         self._committed = False
         self._media_max_items = media_max_items
         self._media_max_distinct_bytes = media_max_distinct_bytes
+        self._speech_active_hmac_key_version = speech_active_hmac_key_version
+        self._speech_hmac_keys = dict(speech_hmac_keys or {})
 
     def __enter__(self) -> Self:
-        from focusproof.persistence.repositories import SqlMediaTransactionRepository
+        from focusproof.persistence.repositories import (
+            _begin_immediate,
+            SqlMediaTransactionRepository,
+            SqlResourceSlotRepository,
+            SqlSpeechRequestRepository,
+        )
 
         self._session = self._session_factory()
+        if self._speech_active_hmac_key_version is not None:
+            _begin_immediate(self._session)
         self.sessions = SqlSessionRepository(self._session)
         self.evidence = SqlEvidenceRepository(self._session)
         self.answers = SqlAnswerRepository(self._session)
@@ -101,6 +118,12 @@ class SqlAlchemyUnitOfWork:
             self._session,
             max_items=self._media_max_items,
             max_distinct_bytes=self._media_max_distinct_bytes,
+        )
+        self.resource_slots = SqlResourceSlotRepository(self._session)
+        self.speech_requests = SqlSpeechRequestRepository(
+            self._session,
+            active_hmac_key_version=self._speech_active_hmac_key_version,
+            hmac_keys=self._speech_hmac_keys,
         )
         return self
 
@@ -149,12 +172,27 @@ class UnitOfWorkFactory:
         self._session_factory = session_factory
         self._media_max_items = media_max_items
         self._media_max_distinct_bytes = media_max_distinct_bytes
+        self._speech_active_hmac_key_version: str | None = None
+        self._speech_hmac_keys: dict[str, bytes] = {}
+
+    def configure_speech(
+        self,
+        *,
+        active_hmac_key_version: str,
+        hmac_keys: Mapping[str, bytes],
+    ) -> None:
+        if active_hmac_key_version not in hmac_keys:
+            raise ValueError("active speech HMAC key is unavailable")
+        self._speech_active_hmac_key_version = active_hmac_key_version
+        self._speech_hmac_keys = dict(hmac_keys)
 
     def __call__(self) -> SqlAlchemyUnitOfWork:
         return SqlAlchemyUnitOfWork(
             self._session_factory,
             media_max_items=self._media_max_items,
             media_max_distinct_bytes=self._media_max_distinct_bytes,
+            speech_active_hmac_key_version=self._speech_active_hmac_key_version,
+            speech_hmac_keys=self._speech_hmac_keys,
         )
 
 

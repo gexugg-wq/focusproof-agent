@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     PrimaryKeyConstraint,
     String,
+    Uuid,
     Text,
     UniqueConstraint,
     text,
@@ -470,3 +471,152 @@ class ReviewModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utc_now
     )
+
+
+class SpeechTranscriptionRequestModel(Base):
+    __tablename__ = "speech_transcription_requests"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_user_id",
+            "session_id",
+            "hmac_key_version",
+            "idempotency_key_hash",
+            name="uq_speech_requests_owner_session_hmac",
+        ),
+        Index("ix_speech_requests_owner_created", "owner_user_id", "created_at"),
+        Index("ix_speech_requests_session_created", "session_id", "created_at"),
+        Index("ix_speech_requests_state_lease", "state", "lease_expires_at"),
+        CheckConstraint(
+            "length(idempotency_key_hash) = 64",
+            name="ck_speech_requests_hmac_hash_length",
+        ),
+        CheckConstraint(
+            "length(trim(hmac_key_version)) > 0",
+            name="ck_speech_requests_hmac_version",
+        ),
+        CheckConstraint(
+            "request_fingerprint IS NULL OR length(request_fingerprint) = 64",
+            name="ck_speech_requests_fingerprint_length",
+        ),
+        CheckConstraint(
+            "state IN ('admitted', 'uploading', 'scanning', 'inspecting', "
+            "'dispatching', 'succeeded', 'failed_terminal', 'cancelled', 'ambiguous')",
+            name="ck_speech_requests_state",
+        ),
+        CheckConstraint(
+            "provider = 'dashscope' AND model = 'qwen3-asr-flash'",
+            name="ck_speech_requests_provider_model",
+        ),
+        CheckConstraint(
+            "provider_attempts BETWEEN 0 AND 1",
+            name="ck_speech_requests_provider_attempts",
+        ),
+        CheckConstraint("lease_generation > 0", name="ck_speech_requests_lease_generation"),
+        CheckConstraint("byte_size IS NULL OR byte_size > 0", name="ck_speech_requests_byte_size"),
+        CheckConstraint(
+            "duration_ms IS NULL OR duration_ms > 0",
+            name="ck_speech_requests_duration",
+        ),
+        CheckConstraint("latency_ms IS NULL OR latency_ms >= 0", name="ck_speech_requests_latency"),
+        CheckConstraint(
+            "((state IN ('admitted', 'uploading', 'scanning', 'inspecting', 'dispatching') "
+            "AND lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL "
+            "AND completed_at IS NULL) OR "
+            "(state IN ('succeeded', 'failed_terminal', 'cancelled', 'ambiguous') "
+            "AND lease_owner IS NULL AND lease_expires_at IS NULL "
+            "AND completed_at IS NOT NULL))",
+            name="ck_speech_requests_lease_terminal_matrix",
+        ),
+        CheckConstraint(
+            "((state IN ('admitted', 'uploading', 'scanning', 'inspecting', 'cancelled') "
+            "AND provider_dispatched_at IS NULL AND provider_attempts = 0) OR "
+            "(state IN ('dispatching', 'succeeded', 'ambiguous') "
+            "AND provider_dispatched_at IS NOT NULL AND provider_attempts = 1) OR "
+            "(state = 'failed_terminal' AND "
+            "((provider_dispatched_at IS NULL AND provider_attempts = 0) OR "
+            "(provider_dispatched_at IS NOT NULL AND provider_attempts = 1))))",
+            name="ck_speech_requests_dispatch_matrix",
+        ),
+        CheckConstraint(
+            "((state = 'succeeded' AND outcome_code IS NULL AND latency_ms IS NOT NULL) OR "
+            "(state IN ('failed_terminal', 'cancelled', 'ambiguous') "
+            "AND outcome_code IN ('invalid_audio', 'audio_too_large', 'audio_too_long', "
+            "'unsupported_audio_format', 'malware_detected', 'scan_unavailable', "
+            "'inspection_failed', 'client_cancelled', 'transcription_timeout', "
+            "'transcription_rate_limited', 'transcription_provider_unavailable', "
+            "'transcription_no_speech', 'transcription_failed', "
+            "'transcription_ambiguous', 'lease_expired_pre_dispatch', "
+            "'lease_expired_post_dispatch', 'shutdown', 'upload_failed')) OR "
+            "(state IN ('admitted', 'uploading', 'scanning', 'inspecting', 'dispatching') "
+            "AND outcome_code IS NULL AND latency_ms IS NULL))",
+            name="ck_speech_requests_outcome_matrix",
+        ),
+    )
+
+    request_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey(
+            "learning_sessions.session_id",
+            name="fk_speech_requests_session",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    hmac_key_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    media_type: Mapped[str | None] = mapped_column(String(128))
+    byte_size: Mapped[int | None] = mapped_column(Integer)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    lease_owner: Mapped[str | None] = mapped_column(String(96))
+    lease_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    outcome_code: Mapped[str | None] = mapped_column(String(64))
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SpeechResourceSlotModel(Base):
+    __tablename__ = "speech_resource_slots"
+    __table_args__ = (
+        PrimaryKeyConstraint("resource_kind", "slot_number", name="pk_speech_resource_slots"),
+        Index("ix_speech_slots_claim", "resource_kind", "enabled", "slot_number"),
+        CheckConstraint(
+            "resource_kind IN ('scan', 'asr')",
+            name="ck_speech_slots_resource_kind",
+        ),
+        CheckConstraint(
+            "slot_number >= 0 AND config_generation > 0 AND lease_generation >= 0",
+            name="ck_speech_slots_positive_values",
+        ),
+        CheckConstraint(
+            "work_kind IS NULL OR work_kind IN ('image', 'speech')",
+            name="ck_speech_slots_work_kind",
+        ),
+        CheckConstraint(
+            "((lease_owner_token IS NULL AND work_kind IS NULL AND work_id IS NULL "
+            "AND lease_expires_at IS NULL) OR "
+            "(lease_owner_token IS NOT NULL AND work_kind IS NOT NULL "
+            "AND work_id IS NOT NULL AND lease_expires_at IS NOT NULL "
+            "AND lease_generation > 0))",
+            name="ck_speech_slots_occupancy_matrix",
+        ),
+    )
+
+    resource_kind: Mapped[str] = mapped_column(String(32))
+    slot_number: Mapped[int] = mapped_column(Integer)
+    lease_owner_token: Mapped[str | None] = mapped_column(String(96))
+    work_kind: Mapped[str | None] = mapped_column(String(16))
+    work_id: Mapped[str | None] = mapped_column(String(96))
+    config_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    lease_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

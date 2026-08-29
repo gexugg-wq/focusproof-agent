@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import CursorResult, delete, func, select, update
+from sqlalchemy import CursorResult, delete, func, select, text, update
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
@@ -21,11 +25,19 @@ from focusproof.persistence.models import (
     MediaCleanReceiptModel,
     MediaIngestionReservationModel,
     MediaScanAttemptModel,
+    SpeechResourceSlotModel,
+    SpeechTranscriptionRequestModel,
 )
 from focusproof.runtime.security_audit import (
     SecurityAuditOutcome,
     SecurityAuditReasonCategory,
 )
+from focusproof.speech_core.errors import (
+    SpeechAdmissionError,
+    SpeechErrorCode,
+)
+from focusproof.speech_core.models import TranscriptionState
+
 
 if TYPE_CHECKING:
     from focusproof.media_core.models import (
@@ -1396,3 +1408,690 @@ def _stored_principal(model: VerifiedPrincipalModel) -> StoredPrincipal:
         created_at=model.created_at,
         state_changed_at=model.state_changed_at,
     )
+
+
+class SpeechQuotaExceededError(ValueError):
+    pass
+
+
+class SpeechHmacReadinessError(RuntimeError):
+    pass
+
+
+class SpeechLeaseStateError(ValueError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class SpeechAdmissionToken:
+    request_id: str
+    owner_user_id: str
+    session_id: str
+    lease_owner: str
+    lease_generation: int
+    lease_expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceSlotLease:
+    resource_kind: str
+    slot_number: int
+    lease_owner_token: str
+    lease_generation: int
+
+
+class SpeechRequestRepository(Protocol):
+    def admit(
+        self,
+        *,
+        owner_user_id: str,
+        session_id: str,
+        idempotency_key: str,
+        request_fingerprint: str | None,
+        lease_owner: str,
+        now: datetime | None = None,
+        lease_seconds: int = 120,
+    ) -> SpeechAdmissionToken: ...
+
+    def transition(
+        self,
+        token: SpeechAdmissionToken,
+        state: str,
+        *,
+        now: datetime | None = None,
+        lease_seconds: int = 120,
+        media_type: str | None = None,
+        byte_size: int | None = None,
+        duration_ms: int | None = None,
+    ) -> SpeechAdmissionToken: ...
+
+    def mark_dispatching(
+        self,
+        token: SpeechAdmissionToken,
+        *,
+        now: datetime | None = None,
+        lease_seconds: int = 120,
+    ) -> SpeechAdmissionToken: ...
+
+    def finalize(
+        self,
+        token: SpeechAdmissionToken,
+        *,
+        state: str,
+        outcome_code: str | None = None,
+        latency_ms: int | None = None,
+        now: datetime | None = None,
+    ) -> bool: ...
+
+    def recover_expired(self, *, now: datetime | None = None) -> int: ...
+
+
+class ResourceSlotRepository(Protocol):
+    def reconcile(
+        self,
+        resource_kind: str,
+        *,
+        configured_count: int,
+        config_generation: int,
+    ) -> None: ...
+
+    def claim(
+        self,
+        resource_kind: str,
+        *,
+        work_kind: str,
+        work_id: str,
+        lease_seconds: int,
+        now: datetime | None = None,
+    ) -> ResourceSlotLease | None: ...
+
+    def release(self, lease: ResourceSlotLease) -> bool: ...
+
+
+_ACTIVE_SPEECH_STATES = {
+    TranscriptionState.ADMITTED.value,
+    TranscriptionState.UPLOADING.value,
+    TranscriptionState.SCANNING.value,
+    TranscriptionState.INSPECTING.value,
+    TranscriptionState.DISPATCHING.value,
+}
+_TERMINAL_SPEECH_STATES = {
+    TranscriptionState.SUCCEEDED.value,
+    TranscriptionState.FAILED_TERMINAL.value,
+    TranscriptionState.CANCELLED.value,
+    TranscriptionState.AMBIGUOUS.value,
+}
+_SPEECH_OUTCOME_CODES = {
+    "invalid_audio",
+    "audio_too_large",
+    "audio_too_long",
+    "unsupported_audio_format",
+    "malware_detected",
+    "scan_unavailable",
+    "inspection_failed",
+    "client_cancelled",
+    "transcription_timeout",
+    "transcription_rate_limited",
+    "transcription_provider_unavailable",
+    "transcription_no_speech",
+    "transcription_failed",
+    "transcription_ambiguous",
+    "lease_expired_pre_dispatch",
+    "lease_expired_post_dispatch",
+    "shutdown",
+    "upload_failed",
+}
+_NEXT_SPEECH_STATE = {
+    TranscriptionState.ADMITTED.value: TranscriptionState.UPLOADING.value,
+    TranscriptionState.UPLOADING.value: TranscriptionState.SCANNING.value,
+    TranscriptionState.SCANNING.value: TranscriptionState.INSPECTING.value,
+}
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _advisory_key(namespace: str, value: str) -> int:
+    digest = hashlib.sha256(f"{namespace}:{value}".encode()).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=True)
+
+
+def _begin_immediate(session: Session) -> None:
+    if session.get_bind().dialect.name != "sqlite":
+        return
+    marker = "speech_begin_immediate"
+    if session.info.get(marker):
+        return
+    session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+    session.info[marker] = True
+
+
+def _configure_postgres_transaction(session: Session, timeout_ms: int) -> None:
+    if session.get_bind().dialect.name != "postgresql":
+        return
+    bounded = max(1, min(timeout_ms, 115_000))
+    session.execute(text(f"SET LOCAL lock_timeout = '{bounded}ms'"))
+    session.execute(text(f"SET LOCAL statement_timeout = '{bounded}ms'"))
+
+
+def _take_advisory_lock(session: Session, namespace: str, value: str) -> None:
+    if session.get_bind().dialect.name == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": _advisory_key(namespace, value)},
+        )
+
+
+class SqlSpeechRequestRepository:
+    def __init__(
+        self,
+        session: Session,
+        *,
+        active_hmac_key_version: str | None = None,
+        hmac_keys: Mapping[str, bytes] | None = None,
+        lock_timeout_ms: int = 2_000,
+        max_session_requests: int = 20,
+        max_owner_hour_requests: int = 30,
+    ) -> None:
+        actual_keys = dict(hmac_keys or {})
+        if active_hmac_key_version is not None and not active_hmac_key_version.strip():
+            raise ValueError("active HMAC key version must not be blank")
+        if (
+            active_hmac_key_version is not None
+            and active_hmac_key_version not in actual_keys
+        ):
+            raise ValueError("active HMAC key material is unavailable")
+        if any(
+            not version.strip() or not key for version, key in actual_keys.items()
+        ):
+            raise ValueError("HMAC keyring entries must be non-empty")
+        self._session = session
+        self._active_hmac_key_version = active_hmac_key_version
+        self._hmac_keys = actual_keys
+        self._lock_timeout_ms = lock_timeout_ms
+        self._max_session_requests = max_session_requests
+        self._max_owner_hour_requests = max_owner_hour_requests
+
+    def admit(
+        self,
+        *,
+        owner_user_id: str,
+        session_id: str,
+        idempotency_key: str,
+        request_fingerprint: str | None,
+        lease_owner: str,
+        now: datetime | None = None,
+        lease_seconds: int = 120,
+    ) -> SpeechAdmissionToken:
+        if self._active_hmac_key_version is None:
+            raise SpeechHmacReadinessError("speech HMAC keyring is not configured")
+
+        UUID(idempotency_key)
+        if request_fingerprint is not None and len(request_fingerprint) != 64:
+            raise ValueError("request fingerprint must be a SHA-256 hex digest")
+        if not lease_owner.strip() or lease_seconds <= 0:
+            raise ValueError("speech lease must be bounded and owned")
+        actual_now = _aware(now or datetime.now(UTC))
+        self._lock_admission(owner_user_id, session_id)
+        owned_session = self._session.get(LearningSessionModel, session_id)
+        if owned_session is None or owned_session.owner_user_id != owner_user_id:
+            raise SpeechAdmissionError(SpeechErrorCode.TRANSCRIPTION_FAILED)
+
+        existing = self._find_duplicate(owner_user_id, session_id, idempotency_key)
+        if existing is not None:
+            self._raise_duplicate(existing, request_fingerprint)
+
+        session_count = int(
+            self._session.scalar(
+                select(func.count(SpeechTranscriptionRequestModel.request_id)).where(
+                    SpeechTranscriptionRequestModel.session_id == session_id
+                )
+            )
+            or 0
+        )
+        owner_count = int(
+            self._session.scalar(
+                select(func.count(SpeechTranscriptionRequestModel.request_id)).where(
+                    SpeechTranscriptionRequestModel.owner_user_id == owner_user_id,
+                    SpeechTranscriptionRequestModel.created_at
+                    >= actual_now - timedelta(hours=1),
+                )
+            )
+            or 0
+        )
+        if session_count >= self._max_session_requests:
+            raise SpeechQuotaExceededError("speech session lifetime quota exceeded")
+        if owner_count >= self._max_owner_hour_requests:
+            raise SpeechQuotaExceededError("speech owner rolling quota exceeded")
+
+        active_version = self._active_hmac_key_version
+        request_id = str(uuid4())
+        expires_at = actual_now + timedelta(seconds=lease_seconds)
+        row = SpeechTranscriptionRequestModel(
+            request_id=request_id,
+            session_id=session_id,
+            owner_user_id=owner_user_id,
+            idempotency_key_hash=self._hash(
+                active_version, idempotency_key
+            ),
+            hmac_key_version=active_version,
+            request_fingerprint=request_fingerprint,
+            state=TranscriptionState.ADMITTED.value,
+            media_type=None,
+            byte_size=None,
+            duration_ms=None,
+            provider="dashscope",
+            model="qwen3-asr-flash",
+            provider_attempts=0,
+            lease_owner=lease_owner,
+            lease_generation=1,
+            lease_expires_at=expires_at,
+            provider_dispatched_at=None,
+            outcome_code=None,
+            latency_ms=None,
+            created_at=actual_now,
+            updated_at=actual_now,
+            completed_at=None,
+        )
+        self._session.add(row)
+        self._session.flush()
+        return self._token(row)
+
+    def assert_hmac_readiness(self) -> None:
+        if self._active_hmac_key_version is None:
+            raise SpeechHmacReadinessError("speech HMAC keyring is not configured")
+
+        referenced = set(
+            self._session.scalars(
+                select(SpeechTranscriptionRequestModel.hmac_key_version).distinct()
+            )
+        )
+        if referenced.difference(self._hmac_keys):
+            raise SpeechHmacReadinessError(
+                "speech HMAC key material is unavailable for retained metadata"
+            )
+
+    def transition(
+        self,
+        token: SpeechAdmissionToken,
+        state: str,
+        *,
+        now: datetime | None = None,
+        lease_seconds: int = 120,
+        media_type: str | None = None,
+        byte_size: int | None = None,
+        duration_ms: int | None = None,
+    ) -> SpeechAdmissionToken:
+        if state not in {
+            TranscriptionState.UPLOADING.value,
+            TranscriptionState.SCANNING.value,
+            TranscriptionState.INSPECTING.value,
+        }:
+            raise SpeechLeaseStateError("transition target is not an active business state")
+        row = self._cas_row(token)
+        if row is None or _NEXT_SPEECH_STATE.get(row.state) != state:
+            raise SpeechLeaseStateError("speech transition is stale or illegal")
+        actual_now = _aware(now or datetime.now(UTC))
+        values: dict[str, object] = {
+            "state": state,
+            "lease_generation": token.lease_generation + 1,
+            "lease_expires_at": actual_now + timedelta(seconds=lease_seconds),
+            "updated_at": actual_now,
+        }
+        if media_type is not None:
+            values["media_type"] = media_type
+        if byte_size is not None:
+            values["byte_size"] = byte_size
+        if duration_ms is not None:
+            values["duration_ms"] = duration_ms
+        if not self._cas_update(token, values):
+            raise SpeechLeaseStateError("speech transition lost its lease")
+        return SpeechAdmissionToken(
+            token.request_id,
+            token.owner_user_id,
+            token.session_id,
+            token.lease_owner,
+            token.lease_generation + 1,
+            cast(datetime, values["lease_expires_at"]),
+        )
+
+    def mark_dispatching(
+        self,
+        token: SpeechAdmissionToken,
+        *,
+        now: datetime | None = None,
+        lease_seconds: int = 120,
+    ) -> SpeechAdmissionToken:
+        row = self._cas_row(token)
+        if row is None or row.state != TranscriptionState.INSPECTING.value:
+            raise SpeechLeaseStateError("only inspected audio may be dispatched")
+        actual_now = _aware(now or datetime.now(UTC))
+        expires_at = actual_now + timedelta(seconds=lease_seconds)
+        if not self._cas_update(
+            token,
+            {
+                "state": TranscriptionState.DISPATCHING.value,
+                "provider_attempts": 1,
+                "provider_dispatched_at": actual_now,
+                "lease_generation": token.lease_generation + 1,
+                "lease_expires_at": expires_at,
+                "updated_at": actual_now,
+            },
+        ):
+            raise SpeechLeaseStateError("speech dispatch lost its lease")
+        return SpeechAdmissionToken(
+            token.request_id,
+            token.owner_user_id,
+            token.session_id,
+            token.lease_owner,
+            token.lease_generation + 1,
+            expires_at,
+        )
+
+    def finalize(
+        self,
+        token: SpeechAdmissionToken,
+        *,
+        state: str,
+        outcome_code: str | None = None,
+        latency_ms: int | None = None,
+        now: datetime | None = None,
+    ) -> bool:
+        if state not in _TERMINAL_SPEECH_STATES:
+            raise SpeechLeaseStateError("speech final state is not terminal")
+        row = self._cas_row(token)
+        if row is None:
+            return False
+        dispatched = row.provider_dispatched_at is not None
+        if state == TranscriptionState.SUCCEEDED.value:
+            if not dispatched or outcome_code is not None or latency_ms is None:
+                raise SpeechLeaseStateError("succeeded metadata is inconsistent")
+        elif outcome_code not in _SPEECH_OUTCOME_CODES:
+            raise SpeechLeaseStateError("terminal failure outcome is not bounded")
+        if state == TranscriptionState.CANCELLED.value and dispatched:
+            raise SpeechLeaseStateError("post-dispatch cancellation is ambiguous")
+        if state == TranscriptionState.AMBIGUOUS.value and not dispatched:
+            raise SpeechLeaseStateError("pre-dispatch work cannot be ambiguous")
+        actual_now = _aware(now or datetime.now(UTC))
+        return self._cas_update(
+            token,
+            {
+                "state": state,
+                "lease_owner": None,
+                "lease_generation": token.lease_generation + 1,
+                "lease_expires_at": None,
+                "outcome_code": outcome_code,
+                "latency_ms": latency_ms,
+                "completed_at": actual_now,
+                "updated_at": actual_now,
+            },
+        )
+
+    def recover_expired(self, *, now: datetime | None = None) -> int:
+        actual_now = _aware(now or datetime.now(UTC))
+        rows = list(
+            self._session.scalars(
+                select(SpeechTranscriptionRequestModel)
+                .where(
+                    SpeechTranscriptionRequestModel.state.in_(_ACTIVE_SPEECH_STATES),
+                    SpeechTranscriptionRequestModel.lease_expires_at <= actual_now,
+                )
+                .with_for_update()
+            )
+        )
+        recovered = 0
+        for row in rows:
+            if row.lease_owner is None or row.lease_expires_at is None:
+                continue
+            token = self._token(row)
+            dispatched = row.provider_dispatched_at is not None
+            state = (
+                TranscriptionState.AMBIGUOUS.value
+                if dispatched
+                else TranscriptionState.FAILED_TERMINAL.value
+            )
+            outcome = (
+                "lease_expired_post_dispatch"
+                if dispatched
+                else "lease_expired_pre_dispatch"
+            )
+            if self.finalize(token, state=state, outcome_code=outcome, now=actual_now):
+                recovered += 1
+        return recovered
+
+    def _lock_admission(self, owner_user_id: str, session_id: str) -> None:
+        _begin_immediate(self._session)
+        _configure_postgres_transaction(self._session, self._lock_timeout_ms)
+        _take_advisory_lock(self._session, "speech-owner", owner_user_id)
+        _take_advisory_lock(self._session, "speech-session", session_id)
+
+    def _find_duplicate(
+        self,
+        owner_user_id: str,
+        session_id: str,
+        idempotency_key: str,
+    ) -> SpeechTranscriptionRequestModel | None:
+        for version, key in self._hmac_keys.items():
+            digest = hmac.new(key, idempotency_key.encode(), hashlib.sha256).hexdigest()
+            row = self._session.scalar(
+                select(SpeechTranscriptionRequestModel)
+                .where(
+                    SpeechTranscriptionRequestModel.owner_user_id == owner_user_id,
+                    SpeechTranscriptionRequestModel.session_id == session_id,
+                    SpeechTranscriptionRequestModel.hmac_key_version == version,
+                    SpeechTranscriptionRequestModel.idempotency_key_hash == digest,
+                )
+                .with_for_update()
+            )
+            if row is not None:
+                return row
+        return None
+
+    def _raise_duplicate(
+        self,
+        row: SpeechTranscriptionRequestModel,
+        request_fingerprint: str | None,
+    ) -> None:
+        if row.request_fingerprint != request_fingerprint:
+            raise SpeechAdmissionError(SpeechErrorCode.IDEMPOTENCY_CONFLICT)
+        if row.state in _ACTIVE_SPEECH_STATES:
+            raise SpeechAdmissionError(SpeechErrorCode.TRANSCRIPTION_IN_PROGRESS)
+        raise SpeechAdmissionError(SpeechErrorCode.TRANSCRIPTION_RESULT_UNAVAILABLE)
+
+    def _cas_row(
+        self, token: SpeechAdmissionToken
+    ) -> SpeechTranscriptionRequestModel | None:
+        return self._session.scalar(
+            select(SpeechTranscriptionRequestModel)
+            .where(
+                SpeechTranscriptionRequestModel.request_id == token.request_id,
+                SpeechTranscriptionRequestModel.lease_owner == token.lease_owner,
+                SpeechTranscriptionRequestModel.lease_generation
+                == token.lease_generation,
+            )
+            .with_for_update()
+        )
+
+    def _cas_update(
+        self,
+        token: SpeechAdmissionToken,
+        values: Mapping[str, object],
+    ) -> bool:
+        result = cast(
+            CursorResult[Any],
+            self._session.execute(
+                update(SpeechTranscriptionRequestModel)
+                .where(
+                    SpeechTranscriptionRequestModel.request_id == token.request_id,
+                    SpeechTranscriptionRequestModel.lease_owner == token.lease_owner,
+                    SpeechTranscriptionRequestModel.lease_generation
+                    == token.lease_generation,
+                )
+                .values(**values)
+            ),
+        )
+        return result.rowcount == 1
+
+    def _hash(self, version: str, idempotency_key: str) -> str:
+        return hmac.new(
+            self._hmac_keys[version],
+            idempotency_key.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+    @staticmethod
+    def _token(row: SpeechTranscriptionRequestModel) -> SpeechAdmissionToken:
+        if row.lease_owner is None or row.lease_expires_at is None:
+            raise SpeechLeaseStateError("speech request has no active lease")
+        return SpeechAdmissionToken(
+            row.request_id,
+            row.owner_user_id,
+            row.session_id,
+            row.lease_owner,
+            row.lease_generation,
+            _aware(row.lease_expires_at),
+        )
+
+
+class SqlResourceSlotRepository:
+    def __init__(self, session: Session, *, lock_timeout_ms: int = 2_000) -> None:
+        self._session = session
+        self._lock_timeout_ms = lock_timeout_ms
+
+    def reconcile(
+        self,
+        resource_kind: str,
+        *,
+        configured_count: int,
+        config_generation: int,
+    ) -> None:
+        self._validate_resource(resource_kind)
+        if configured_count < 0 or config_generation <= 0:
+            raise ValueError("resource slot configuration is invalid")
+        self._serialize(resource_kind)
+        rows = list(
+            self._session.scalars(
+                select(SpeechResourceSlotModel)
+                .where(SpeechResourceSlotModel.resource_kind == resource_kind)
+                .order_by(SpeechResourceSlotModel.slot_number)
+                .with_for_update()
+            )
+        )
+        by_number = {row.slot_number: row for row in rows}
+        for slot_number in range(configured_count):
+            row = by_number.get(slot_number)
+            if row is None:
+                self._session.add(
+                    SpeechResourceSlotModel(
+                        resource_kind=resource_kind,
+                        slot_number=slot_number,
+                        lease_owner_token=None,
+                        work_kind=None,
+                        work_id=None,
+                        config_generation=config_generation,
+                        enabled=True,
+                        lease_generation=0,
+                        lease_expires_at=None,
+                    )
+                )
+            else:
+                row.enabled = True
+                row.config_generation = config_generation
+        for row in rows:
+            if row.slot_number >= configured_count:
+                row.enabled = False
+                row.config_generation = config_generation
+        self._session.flush()
+
+    def claim(
+        self,
+        resource_kind: str,
+        *,
+        work_kind: str,
+        work_id: str,
+        lease_seconds: int,
+        now: datetime | None = None,
+    ) -> ResourceSlotLease | None:
+        self._validate_resource(resource_kind)
+        if work_kind not in {"image", "speech"} or not work_id or lease_seconds <= 0:
+            raise ValueError("resource slot work metadata is invalid")
+        self._serialize(resource_kind)
+        actual_now = _aware(now or datetime.now(UTC))
+        self._session.execute(
+            update(SpeechResourceSlotModel)
+            .where(
+                SpeechResourceSlotModel.resource_kind == resource_kind,
+                SpeechResourceSlotModel.lease_owner_token.is_not(None),
+                SpeechResourceSlotModel.lease_expires_at <= actual_now,
+            )
+            .values(
+                lease_owner_token=None,
+                work_kind=None,
+                work_id=None,
+                lease_expires_at=None,
+            )
+        )
+        statement = (
+            select(SpeechResourceSlotModel)
+            .where(
+                SpeechResourceSlotModel.resource_kind == resource_kind,
+                SpeechResourceSlotModel.enabled.is_(True),
+                SpeechResourceSlotModel.lease_owner_token.is_(None),
+            )
+            .order_by(SpeechResourceSlotModel.slot_number)
+            .limit(1)
+        )
+        if self._session.get_bind().dialect.name == "postgresql":
+            statement = statement.with_for_update(skip_locked=True)
+        else:
+            statement = statement.with_for_update()
+        row = self._session.scalar(statement)
+        if row is None:
+            return None
+        token = str(uuid4())
+        row.lease_owner_token = token
+        row.work_kind = work_kind
+        row.work_id = work_id
+        row.lease_generation += 1
+        row.lease_expires_at = actual_now + timedelta(seconds=lease_seconds)
+        self._session.flush()
+        return ResourceSlotLease(
+            row.resource_kind,
+            row.slot_number,
+            token,
+            row.lease_generation,
+        )
+
+    def release(self, lease: ResourceSlotLease) -> bool:
+        result = cast(
+            CursorResult[Any],
+            self._session.execute(
+                update(SpeechResourceSlotModel)
+                .where(
+                    SpeechResourceSlotModel.resource_kind == lease.resource_kind,
+                    SpeechResourceSlotModel.slot_number == lease.slot_number,
+                    SpeechResourceSlotModel.lease_owner_token
+                    == lease.lease_owner_token,
+                    SpeechResourceSlotModel.lease_generation
+                    == lease.lease_generation,
+                )
+                .values(
+                    lease_owner_token=None,
+                    work_kind=None,
+                    work_id=None,
+                    lease_expires_at=None,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
+    def _serialize(self, resource_kind: str) -> None:
+        _begin_immediate(self._session)
+        _configure_postgres_transaction(self._session, self._lock_timeout_ms)
+        _take_advisory_lock(self._session, "speech-resource", resource_kind)
+
+    @staticmethod
+    def _validate_resource(resource_kind: str) -> None:
+        if resource_kind not in {"scan", "asr"}:
+            raise ValueError("resource kind must be scan or asr")
