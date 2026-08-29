@@ -347,7 +347,14 @@ def test_create_app_disabled_media_injects_no_contribution_and_keeps_media_modul
     (kwargs,) = LifecycleConversationManager.constructed
     assert kwargs["runtime_contributions"] == ()
     assert not hasattr(application.state, "media_ingestion_command")
-    assert application.state.product_capabilities == []
+    assert application.state.product_capabilities == [
+        {
+            "capabilityId": "speech_transcription",
+            "schemaVersion": 1,
+            "enabled": False,
+            "reasonCode": "asr_not_configured",
+        }
+    ]
     imported_during_disabled_startup = set(sys.modules) - before_modules
     assert (
         "focusproof.openhands_runtime.tools.media_evidence" not in imported_during_disabled_startup

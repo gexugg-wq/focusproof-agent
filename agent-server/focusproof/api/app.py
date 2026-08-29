@@ -52,6 +52,7 @@ from focusproof.api.models import (
     SubmitAnswerRequest,
     SubmitEvidenceRequest,
 )
+from focusproof.config.env import build_speech_capability
 from focusproof.config.identity import load_oidc_settings
 from focusproof.config.profiles import load_runtime_settings
 from focusproof.domain.plugins.base import (
@@ -125,6 +126,27 @@ _OPERATIONAL_FIELDS = frozenset(
         "outcome",
     }
 )
+_IMAGE_EVIDENCE_CAPABILITY: dict[str, Any] = {
+    "capabilityId": "image_evidence",
+    "enabled": True,
+    "formats": ["image/png", "image/jpeg", "image/webp"],
+    "maxCount": 4,
+    "maxOriginalBytes": 10_485_760,
+    "maxNormalizedBytesPerSession": 20_971_520,
+    "explanationRequired": True,
+}
+
+
+def _product_capabilities(
+    *,
+    media_enabled: bool,
+    speech_capability: dict[str, Any],
+) -> list[dict[str, Any]]:
+    capabilities: list[dict[str, Any]] = []
+    if media_enabled:
+        capabilities.append(dict(_IMAGE_EVIDENCE_CAPABILITY))
+    capabilities.append(dict(speech_capability))
+    return capabilities
 
 
 def _emit_operational_event(event: str, **fields: str | int | float | bool | None) -> None:
@@ -516,6 +538,7 @@ def create_app(
         configured_database_url = selected_storage.database_url
         resolved_data_dir = selected_storage.conversation_root.resolve()
     _validate_database_path(configured_database_url, resolved_data_dir)
+    speech_capability = dict(build_speech_capability(os.environ))
     configured_lock_timeout = (
         lock_timeout_seconds
         if lock_timeout_seconds is not None
@@ -536,6 +559,10 @@ def create_app(
         manager: ConversationManager | None = None
         application.state.readiness_error = None
         application.state.allow_anonymous_identity = False
+        application.state.product_capabilities = _product_capabilities(
+            media_enabled=media_enabled,
+            speech_capability=speech_capability,
+        )
         resolved_data_dir.mkdir(parents=True, exist_ok=True)
         try:
             try:
@@ -653,7 +680,6 @@ def create_app(
             application.state.audit_projection_store = audit_projection_store
             application.state.evidence_provider = evidence_provider
             application.state.plugin_providers = plugin_providers
-            application.state.product_capabilities = []
             if media_enabled:
                 from focusproof.bootstrap.media_composition import compose_media_command
 
@@ -662,17 +688,6 @@ def create_app(
                     data_dir=resolved_data_dir,
                     session_run_lock=run_lock,
                 )
-                application.state.product_capabilities = [
-                    {
-                        "capabilityId": "image_evidence",
-                        "enabled": True,
-                        "formats": ["image/png", "image/jpeg", "image/webp"],
-                        "maxCount": 4,
-                        "maxOriginalBytes": 10485760,
-                        "maxNormalizedBytesPerSession": 20971520,
-                        "explanationRequired": True,
-                    }
-                ]
             application.state.plugin_capabilities = collect_public_plugin_capabilities(
                 plugin_providers
             )

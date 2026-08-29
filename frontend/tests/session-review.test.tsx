@@ -214,7 +214,7 @@ describe("image capability validation", () => {
   ])("fails closed for malformed capability %j", (override) => {
     const malformed = { capabilityId: "image_evidence", enabled: true, formats: ["image/png"], maxCount: 4, maxOriginalBytes: 10_485_760, maxNormalizedBytesPerSession: 20_971_520, explanationRequired: true, ...override };
     const candidate = { ...session, view: { productCapabilities: [malformed] } };
-    expect(getImageCapability(candidate)).toBeNull();
+    expect(getImageCapability(candidate as unknown as SessionDetail)).toBeNull();
   });
 });
 

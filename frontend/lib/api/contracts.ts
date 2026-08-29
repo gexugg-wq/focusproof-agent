@@ -68,6 +68,35 @@ export type ImageEvidenceCapability = {
   explanationRequired: boolean;
 };
 
+export type SpeechTranscriptionCapabilityEnabled = {
+  capabilityId: "speech_transcription";
+  schemaVersion: 1;
+  enabled: true;
+  formats: Array<"audio/webm;codecs=opus" | "audio/wav" | "audio/mpeg">;
+  maxAudioBytes: number;
+  maxDurationSeconds: number;
+  languageHintsAccepted: Array<"auto" | "zh" | "en">;
+  languageHintEffect: "metadata_only";
+};
+
+export type SpeechTranscriptionCapabilityDisabled = {
+  capabilityId: "speech_transcription";
+  schemaVersion: 1;
+  enabled: false;
+  reasonCode:
+    | "asr_not_configured"
+    | "asr_configuration_invalid"
+    | "asr_prerequisites_unavailable";
+};
+
+export type SpeechTranscriptionCapability =
+  | SpeechTranscriptionCapabilityEnabled
+  | SpeechTranscriptionCapabilityDisabled;
+
+export type ProductCapability =
+  | ImageEvidenceCapability
+  | SpeechTranscriptionCapability;
+
 export type ImageEvidenceResponse = {
   evidenceId: string;
   mediaType: string;
@@ -77,7 +106,7 @@ export type ImageEvidenceResponse = {
 
 export type SessionView = {
   pluginCapabilities?: PluginCapability[];
-  productCapabilities?: unknown[];
+  productCapabilities?: ProductCapability[];
   [key: string]: unknown;
 };
 

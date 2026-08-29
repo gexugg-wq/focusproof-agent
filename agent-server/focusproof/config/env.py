@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from dotenv import dotenv_values
+
+from focusproof.speech_core.models import (
+    SPEECH_ACCEPTED_FORMATS,
+    SpeechCapability,
+    SpeechSettings,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _ENV_KEYS = (
@@ -14,7 +21,14 @@ _ENV_KEYS = (
     "DASHSCOPE_BASE_URL",
     "DASHSCOPE_MODEL",
     "OPENHANDS_SUPPRESS_BANNER",
+    "FOCUSPROOF_ASR_PROVIDER",
+    "FOCUSPROOF_ASR_MODEL",
+    "FOCUSPROOF_ASR_BASE_URL",
+    "FOCUSPROOF_ASR_E2E_TIMEOUT_SECONDS",
+    "FOCUSPROOF_ASR_MAX_CONCURRENCY",
+    "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEY",
 )
+_ASR_ACTIVATION_KEYS = tuple(key for key in _ENV_KEYS if key.startswith("FOCUSPROOF_ASR_"))
 
 
 def _env_file(project_root: Path | None = None) -> Path:
@@ -49,4 +63,68 @@ def get_env_status(project_root: Path | None = None) -> dict[str, Any]:
         "envFileExists": path.exists(),
         "dotenvFormatValid": path.exists() and not has_powershell,
         "hasPowerShellEnvSyntax": has_powershell,
+    }
+
+
+def load_speech_settings(environ: Mapping[str, str]) -> SpeechSettings | None:
+    if not any(environ.get(key) for key in _ASR_ACTIVATION_KEYS):
+        return None
+    required = (
+        "FOCUSPROOF_ASR_PROVIDER",
+        "FOCUSPROOF_ASR_MODEL",
+        "FOCUSPROOF_ASR_BASE_URL",
+        "DASHSCOPE_API_KEY",
+        "FOCUSPROOF_ASR_E2E_TIMEOUT_SECONDS",
+        "FOCUSPROOF_ASR_MAX_CONCURRENCY",
+        "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEY",
+    )
+    if any(not environ.get(key) for key in required):
+        raise ValueError("speech configuration is incomplete")
+    try:
+        e2e_timeout_seconds = int(environ["FOCUSPROOF_ASR_E2E_TIMEOUT_SECONDS"])
+        max_concurrency = int(environ["FOCUSPROOF_ASR_MAX_CONCURRENCY"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("speech numeric configuration is invalid") from exc
+    if (
+        environ["FOCUSPROOF_ASR_PROVIDER"] != "dashscope"
+        or environ["FOCUSPROOF_ASR_MODEL"] != "qwen3-asr-flash"
+    ):
+        raise ValueError("speech provider or model is invalid")
+    return SpeechSettings(
+        provider="dashscope",
+        model="qwen3-asr-flash",
+        base_url=environ["FOCUSPROOF_ASR_BASE_URL"],
+        api_key=environ["DASHSCOPE_API_KEY"],
+        idempotency_hmac_key=environ["FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEY"],
+        e2e_timeout_seconds=e2e_timeout_seconds,
+        max_concurrency=max_concurrency,
+    )
+
+
+def build_speech_capability(environ: Mapping[str, str]) -> SpeechCapability:
+    try:
+        settings = load_speech_settings(environ)
+    except (TypeError, ValueError):
+        return {
+            "capabilityId": "speech_transcription",
+            "schemaVersion": 1,
+            "enabled": False,
+            "reasonCode": "asr_configuration_invalid",
+        }
+    if settings is None:
+        return {
+            "capabilityId": "speech_transcription",
+            "schemaVersion": 1,
+            "enabled": False,
+            "reasonCode": "asr_not_configured",
+        }
+    return {
+        "capabilityId": "speech_transcription",
+        "schemaVersion": 1,
+        "enabled": True,
+        "formats": list(SPEECH_ACCEPTED_FORMATS),
+        "maxAudioBytes": 10_485_760,
+        "maxDurationSeconds": 120,
+        "languageHintsAccepted": ["auto", "zh", "en"],
+        "languageHintEffect": "metadata_only",
     }
