@@ -29,7 +29,6 @@ TEXT_SCAN_ROOTS = (
 )
 FAKE_SECRET_SENTINEL = "sk-" + "ai4b-not-a-real-secret"
 FAKE_SECRET_ALLOWLIST = {
-    Path("docs/superpowers/plans/2026-07-15-ai4b-general-quality-security-release.md"),
     Path("agent-server/tests/ai4b/test_api_security.py"),
 }
 PROVIDER_KEYS = {

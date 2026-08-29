@@ -8,8 +8,8 @@ Review gate: AI0 (do not proceed to AI3)
 
 AI2.1 now has durable product persistence, recoverable OpenHands conversations,
 idempotent synchronization and review projection, per-session run locks, bounded
-tool registration, and FastAPI lifespan ownership. The implementation follows the
-approved design and plan in `docs/superpowers/`.
+tool registration, and FastAPI lifespan ownership. The original design and
+implementation plan remain available through Git history.
 
 ## Fact Boundaries
 

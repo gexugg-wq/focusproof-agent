@@ -3,6 +3,10 @@
 Date: 2026-08-26
 Status: READY_FOR_AI0_REVIEW
 
+> Historical report note (2026-08-27): the optional Monad panel described
+> below was subsequently removed with the entire active Monad plugin slice.
+> The unified general evidence composer remains current.
+
 ## Scope and boundaries
 
 The implementation changes only the Create Session and evidence input UX plus corresponding frontend tests and E2E. It reuses the existing BFF allowlist, API client, server-authoritative evidence list, OpenHands runtime, and AI5.8 image idempotency path. No backend protocol, runtime, scoring, owner isolation, media gate, or `runtime_unavailable` semantics changed. Monad remains capability-driven and off by default.
@@ -40,19 +44,10 @@ The optional Monad panel remains outside the general composer and appears only f
 
 ## Screenshots
 
-Updated flow screenshots are under:
-
-- `docs/research/assets/ai3/01-create-session-desktop.png`
-- `docs/research/assets/ai3/02-general-evidence-desktop.png`
-- `docs/research/assets/ai3/04-review-completed-desktop.png`
-- `docs/research/assets/ai3/07-awaiting-user-mobile.png`
-- `docs/research/assets/ai3/08-review-completed-mobile.png`
-- `docs/research/assets/ai5/task7/chromium-selected.png`
-- `docs/research/assets/ai5/task7/chromium-retryable-error.png`
-- `docs/research/assets/ai5/task7/chromium-success.png`
-- `docs/research/assets/ai5/task7/mobile-selected.png`
-- `docs/research/assets/ai5/task7/mobile-retryable-error.png`
-- `docs/research/assets/ai5/task7/mobile-success.png`
+Playwright produces disposable visual evidence under
+`frontend/test-results/acceptance/`. These captures are intentionally ignored;
+the assertions and test results are authoritative, while historical screenshots
+remain available through Git history.
 
 ## Task changed files
 

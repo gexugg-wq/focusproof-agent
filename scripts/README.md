@@ -1,4 +1,4 @@
-# FocusProof AI4B Scripts
+# FocusProof Verification Scripts
 
 All commands run from the repository root with WSL Ubuntu Python 3.12. These
 helpers do not create another Runtime, Agent loop, EventLog, tool protocol,

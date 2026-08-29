@@ -23,7 +23,10 @@ def test_real_image_provider(tmp_path: Path) -> None:
             "--scanner-mode",
             "fake-clean",  # Local media-chain gate only; not a production malware-scan claim.
             "--image",
-            str(project_root / "docs/research/assets/ai5/task7/chromium-success.png"),
+            str(
+                project_root
+                / "agent-server/tests/fixtures/real-vision/focusproof-general-session.png"
+            ),
             "--provider",
             "openai",
             "--model",
@@ -56,10 +59,13 @@ def test_real_image_provider(tmp_path: Path) -> None:
     }
     assert report["image"] == {
         "path": str(
-            (project_root / "docs/research/assets/ai5/task7/chromium-success.png").resolve()
+            (
+                project_root
+                / "agent-server/tests/fixtures/real-vision/focusproof-general-session.png"
+            ).resolve()
         ),
-        "size": 93296,
-        "sha256": "7ee186d8b0efa5ca62039ab97655e811e748c86696fee1752f8c0fc7ef3f468e",
+        "size": 66594,
+        "sha256": "9a2fc6ac6864101e14e933e503840705392f5153fd2a4b2b7b9da246aeac4e67",
     }
     assert report["conversationId"]
     assert "ActionEvent" in report["eventTypes"]

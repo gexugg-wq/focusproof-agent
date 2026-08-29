@@ -1,7 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
 const sessionId = "sess_mock_ai3";
-const assetsDir = "../docs/research/assets/ai3/";
+const assetsDir = "test-results/acceptance/ai3/";
 
 const baseSession = {
   sessionId,

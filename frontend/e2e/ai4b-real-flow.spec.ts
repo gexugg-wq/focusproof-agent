@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
 import path from "node:path";
 
-const assetsDir = path.resolve(__dirname, "../../docs/research/assets/ai4b");
+const assetsDir = path.resolve(__dirname, "../test-results/acceptance/ai4b");
 const longGoal =
   "Explain how an append-only event history makes deterministic replay possible, including why immutable ordering preserves earlier facts, how a projection can be rebuilt from an empty state after a clean process restart, and which verification boundary prevents a mutable view from silently replacing the durable learning record.";
 const evidenceText =

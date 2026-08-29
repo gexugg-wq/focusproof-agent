@@ -120,7 +120,8 @@ health ok/ready; session created; evidence synced; awaiting_user; completed
 - Clamd engineering acceptance does not authorize public deployment.
 - Managed OIDC, public deployment, external long-term operations, monitoring,
   and SLO ownership remain unapproved.
-- Monad remains detachable/default-off; FocusProof remains general-purpose.
+- The former Monad plugin has since been removed; FocusProof remains
+  general-purpose.
 - Audio/PDF/OCR/ASR are not implemented.
 - Historical 114 frontend-format debt was not mechanically reformatted.
 - AI6 multimodal expansion requires separate AI0 approval.
@@ -133,3 +134,33 @@ empty, no secret/.env change from this task, and modifications limited to root
 README plus approved docs.
 
 AI5_FINAL_INDEPENDENT_ACCEPTED
+
+## 2026-08-27 Real-Provider Browser Addendum
+
+This addendum supersedes only the earlier statement that no real visual
+provider was called. It does not authorize public deployment.
+
+A visible-browser local acceptance used the production FastAPI and BFF paths,
+official OpenHands `Conversation`, and `openai/qwen3.7-plus` in
+`demo-real-vision` mode. One non-Web3 Python-learning session submitted one PNG
+plus a meaningful explanation through the unified composer. The product stored
+one `image/png` evidence carrying the explanation in `textContent`; it did not
+create a duplicate text evidence row. Refresh recovery preserved the session
+and evidence.
+
+The real provider completed the review in one round with:
+
+- status: `LikelyLearning`;
+- score: `65`;
+- confidence: `0.72`;
+- native provider calls: `3`;
+- Build Log sequence: `session.created`, `goal.submitted`,
+  `evidence.submitted`, `verification.requested`, `verification.completed`,
+  `score.calculated`, `review.completed`.
+
+No `TestLLM`, fallback runtime, `runtime_unavailable`, HTTP 503, data loss, or
+Monad UI appeared. The media scanner was deliberately `fake-clean` for this
+local browser test and therefore did not certify production malware scanning;
+the independent live-Clamd acceptance above remains the production-scanning
+evidence. Both services were stopped after acceptance and the repository was
+clean at `b18e14fbfe579667d970ea5c8a9248ec4aa233aa`.

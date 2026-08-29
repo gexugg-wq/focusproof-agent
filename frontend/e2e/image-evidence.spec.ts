@@ -21,7 +21,7 @@ async function mockSession(page: Page, enabled: boolean) {
   });
 }
 async function shot(page: Page, project: string, name: string) {
-  if (project === "chromium" || project === "mobile") await page.screenshot({ path: `../docs/research/assets/ai5/task7/${project}-${name}.png`, fullPage: true });
+  if (project === "chromium" || project === "mobile") await page.screenshot({ path: `test-results/acceptance/ai5/${project}-${name}.png`, fullPage: true });
 }
 
 test("image evidence is hidden when the backend capability is off", async ({ page }, info) => {

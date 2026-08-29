@@ -45,9 +45,9 @@ full commit and document anchor.
 | AI4C-ACCESSIBILITY | pass | accepted-evidence: 76ea0fddd60dc61cc34b3ffe1faad0d84875221e:docs/research/AI4C_PRODUCTION_READINESS_REPORT.md#accessibility | AI4C.4 | goal: keyboard/focus/zoom/automated checks | Historical accepted run only; local issuer fixture only. |
 | AI4C-DETERMINISTIC-GATES | pass | accepted-evidence: 76ea0fddd60dc61cc34b3ffe1faad0d84875221e:docs/research/AI4C_PRODUCTION_READINESS_REPORT.md#deterministic-gates-and-versions | AI4C.4 | goal: full deterministic regression | Historical accepted full-gate record; structure lint proves only report integrity. |
 | AI4C-REAL-PROVIDER | not-authorized | pytest-node: agent-server/tests/ai4c/test_real_provider.py::test_dashscope_smoke_uses_native_bounded_conversation | AI4C.1 | goal: authorized real-provider acceptance | Node was not run; no live call, cost, token, or latency evidence. |
-| AI4C-EXTERNAL-OIDC-STAGING | blocked | doc: docs/superpowers/plans/2026-07-17-ai4c4-final-acceptance.md#task-4-external-capability-recovery-and-cost-gates | AI4C.4 | goal: real external identity/staging | No approved issuer or non-public target. |
+| AI4C-EXTERNAL-OIDC-STAGING | blocked | doc: docs/research/AI4C_PRODUCTION_READINESS_REPORT.md#current-external-artifact-blockers | AI4C.4 | goal: real external identity/staging | No approved issuer or non-public target. |
 | AI4C-PROTOCOL-FREEZE | pass | pytest-node: agent-server/tests/ai4c/test_openhands_reuse_boundary.py::test_build_metadata_excludes_deleted_runtime_and_tracks_projection_stores | AI4C.1-3 | design: protocol freeze | SDK gaps remain version-sensitive and retain explicit deletion conditions. |
-| AI4C-EXCLUSIONS | pass | doc: docs/project-management/goals/AI4C_PRODUCTION_READINESS_CODEX_GOAL.md#product-boundary | AI4C.4 | goal: exclusions | Baseline intentionally spans accepted AI4A/AI4B foundations and AI4C. |
+| AI4C-EXCLUSIONS | pass | doc: docs/research/AI4C_PRODUCTION_READINESS_REPORT.md#product-boundary-and-explicit-exclusions | AI4C.4 | goal: exclusions | Baseline intentionally spans accepted AI4A/AI4B foundations and AI4C. |
 
 ## Evidence Provenance for This Repair Round
 

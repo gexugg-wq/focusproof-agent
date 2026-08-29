@@ -143,12 +143,11 @@ The pinned real input is
 `agent-server/tests/fixtures/real-vision/focusproof-general-session.png`, size
 `66594`, SHA-256
 `9a2fc6ac6864101e14e933e503840705392f5153fd2a4b2b7b9da246aeac4e67`.
-AI0's P1 repair decision copied the independently reviewed, content-valid PNG
-that was present at `docs/research/assets/ai5/task7/chromium-success.png` on
-2026-08-26 into this dedicated fixture. The former path is Playwright capture
-output and therefore is not an immutable gate input. The original V6 bytes
-recorded below were not recoverable from the current Git object/index history;
-no image was generated or fabricated for this repair.
+AI0's P1 repair decision promoted the independently reviewed, content-valid PNG
+into this dedicated fixture. Playwright capture output is disposable and is not
+an immutable gate input. The original V6 bytes recorded below were not
+recoverable from the current Git object/index history; no image was generated
+or fabricated for this repair.
 
 V6 evidence:
 

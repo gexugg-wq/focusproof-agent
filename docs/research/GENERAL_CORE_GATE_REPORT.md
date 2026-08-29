@@ -1,15 +1,13 @@
 # General Core Gate Report
 
-Status: PASS (2026-08-12)
+Status: PASS (2026-08-12; historical gate)
 
-> Current-status note (2026-08-14): This is a historical General Core report.
-> Its Next Stage statement is superseded. Current roadmap and acceptance
-> status are maintained in
-> [TASK_BOARD](../project-management/TASK_BOARD.md) and
-> [AI5_IMAGE_GATE_REPORT](AI5_IMAGE_GATE_REPORT.md): image input and real visual
-> interpretation passed, AI5.3 implementation/code gates passed, and the real
-> external clamd clean/EICAR gate remains blocked. No later formal phase name is
-> approved.
+> Current-status note (2026-08-27): This is a historical General Core report.
+> Its `Next Stage`, source-present Monad, and external-Clamd-blocked statements
+> are superseded. The Monad plugin has been removed; AI5 image, real-vision,
+> live-Clamd and browser acceptance are complete. Current status is maintained
+> in [TASK_BOARD](../project-management/TASK_BOARD.md) and the architecture
+> documents.
 
 ## Scope
 

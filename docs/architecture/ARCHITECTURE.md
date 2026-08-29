@@ -1,6 +1,6 @@
 # FocusProof Agent Architecture
 
-Version: Architecture Baseline v0.9 (2026-08-26 P1 repair)
+Version: Architecture Baseline v0.9 (2026-08-28 knowledge sync)
 Primary runtime: Python Agent Server
 Frontend: Next.js and TypeScript
 Optional domain plugin backlog: domain-specific verification, deferred
@@ -30,11 +30,14 @@ The accepted product is the domain-general text/URL learning flow. Web3 was
 considered in an early design, but is not a current architecture dependency,
 runtime capability, or AI4C production-readiness deliverable.
 
-Current authoritative status (2026-08-25): AI4C engineering and AI5
+Current authoritative status (2026-08-27): AI4C engineering and AI5
 image-foundation/runtime acceptance are complete. The AI5.8 independent audit
 was initially rejected, then accepted after three fix rounds and an independent
 Round 3 re-verification. Media remains default-off and detachable. The former chain-specific plugin has been removed from active runtime, UI, configuration, dependencies, and contract sources.
-Real visual-provider use is still default-off; public deployment, managed OIDC,
+An explicitly enabled local acceptance completed one text-plus-PNG learning
+session through the official OpenHands runtime and `openai/qwen3.7-plus`, then
+persisted the review and seven-event Build Log. Real visual-provider use is
+still default-off; public deployment, managed OIDC,
 and external long-term operations/SLOs are not authorized. Audio/PDF/OCR/ASR
 are not implemented. AI6 multimodal expansion requires separate AI0 approval.
 
@@ -337,21 +340,26 @@ Default scoring dimensions:
   agent-server/
     focusproof/
       api/
+      bootstrap/
+      config/
+      contracts/
+      database/
+      domain/
+      media_adapters/
+      media_core/
+      media_projection/
+      openhands_adapter/
+      openhands_runtime/
+      persistence/
       runtime/
       agents/
-      domain/
-      tools/
-      database/
-      contracts/
-      config/
     tests/
+      fixtures/
   contracts/
-    src/
-    test/
-    script/
-  fixtures/
-    sessions/
-    evidence/
+    README.md
+  deploy/
+  docs/
+  frontend/
   scripts/
 ```
 

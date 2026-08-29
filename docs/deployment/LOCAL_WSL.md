@@ -32,10 +32,10 @@ python3.12 -m venv .venv
 .venv/bin/python3.12 -m pip install -e '.[dev]'
 ```
 
-The current repository build references a local OpenHands SDK source checkout.
-A new machine must provide the approved SDK source or an approved vendor
-artifact before installation. Do not silently substitute another SDK version
-or edit SDK source as part of deployment.
+The repository pins the published `openhands-sdk==1.31.0` distribution in
+`pyproject.toml` and `uv.lock`. Install that exact resolved version; do not
+silently substitute another SDK version, copy SDK source into this repository,
+or patch SDK internals as part of deployment.
 
 For frontend-only work:
 

@@ -76,7 +76,7 @@ work cannot be confused:
 - AI4C: production identity, real-LLM operations and reproducible staging deployment.
 - AI5: multimodal image foundation, owned as a conditional media capability on the existing OpenHands runtime.
 
-### AI5 final status (2026-08-25 authoritative sync)
+### AI5 final status (2026-08-27 authoritative sync)
 
 This section supersedes older AI5 completion wording elsewhere in this board,
 including AI5.7 pending, external-Clamd-blocked, and whole-AI5-incomplete
@@ -84,9 +84,10 @@ statements. Historical sections remain for provenance.
 
 1. The deterministic image foundation and the OpenHands SDK 1.31.0 native
    `ImageContent` -> `MessageEvent` -> `Conversation` event chain are complete.
-2. The pinned real-PNG acceptance is complete. Its immutable input is
-   `docs/research/assets/ai5/task7/chromium-success.png`, SHA-256
-   `7ee186d8b0efa5ca62039ab97655e811e748c86696fee1752f8c0fc7ef3f468e`.
+2. The pinned real-PNG acceptance is complete. Its current immutable fixture is
+   `agent-server/tests/fixtures/real-vision/focusproof-general-session.png`,
+   SHA-256
+   `9a2fc6ac6864101e14e933e503840705392f5153fd2a4b2b7b9da246aeac4e67`.
    V6 used `openai/qwen3.7-plus`: exactly one visual provider completion,
    zero agent-decision completions, and no retry. It produced eight structured
    visual facts with `parseStage=complete`, `errorCategory=none`, review
@@ -115,6 +116,11 @@ statements. Historical sections remain for provenance.
    active runtime capability; active plugin count=0. Audio/PDF/OCR/ASR are not
    implemented. Public deployment, managed OIDC, and
    external long-term operations/SLOs remain unauthorized.
+9. A visible-browser local acceptance completed a general text-plus-PNG session
+   through the official OpenHands runtime and `openai/qwen3.7-plus`. The unified
+   composer persisted one `image/png` evidence carrying its explanation in
+   `textContent`; refresh recovery, the final `LikelyLearning` review
+   (`65`, confidence `0.72`), and the seven-event Build Log were verified.
 
 AI5 quality-gate closure is represented by `scripts/run_quality_gate.py`.
 `--tier fast` is the default deterministic no-Docker/no-network/no-real-LLM
@@ -138,9 +144,9 @@ Conversation, EventLog, Message/Action/Observation, or Tool abstractions.
 |---|---|---|---|
 | AI0 | Controller / Architect | `docs/` | Unreviewed product implementation |
 | AI1 | Scaffold + OpenHands Feasibility | root config, `agent-server/` scaffold, `frontend/` scaffold, `contracts/` scaffold, `docs/research/` | Product logic, scoring, Web3 RPC implementation |
-| AI2 | Python Agent Server + OpenHands Conversation Runtime | `agent-server/`, `fixtures/`, dependency config, `docs/research/` runtime reports | Frontend UI ownership, Solidity contract ownership |
+| AI2 | Python Agent Server + OpenHands Conversation Runtime | `agent-server/`, `agent-server/tests/fixtures/`, dependency config, `docs/research/` runtime reports | Frontend UI ownership, Solidity contract ownership |
 | AI3 | Frontend + Wallet UX | `frontend/` | LLM secrets, database direct writes, server-side scoring |
-| AI4A | General Verification Framework | `agent-server/focusproof/openhands_runtime/`, narrowly affected `agent-server/focusproof/domain/` modules, `agent-server/tests/`, `fixtures/`, `docs/research/`, necessary Python dependency declarations | `frontend/`, `contracts/`, `.env`, `var/`, OpenHands SDK source, public protocol or architecture changes without AI0 approval |
+| AI4A | General Verification Framework | `agent-server/focusproof/openhands_runtime/`, narrowly affected `agent-server/focusproof/domain/` modules, `agent-server/tests/`, `agent-server/tests/fixtures/`, `docs/research/`, necessary Python dependency declarations | `frontend/`, `contracts/`, `.env`, `var/`, OpenHands SDK source, public protocol or architecture changes without AI0 approval |
 | AI4B | General QA + Security + Release Readiness | cross-system tests, narrowly affected backend/frontend fixes, `docs/security/`, `docs/deployment/`, `docs/research/` | New product features, multimodal work, public deployment |
 | AI4C | Production Readiness | identity/runtime/deployment modules approved by AI4C.0, their tests, deployment config and reports | Multimodal work, Web3 specialization, OpenHands mirror implementations, scoring rewrites without AI0 approval |
 | AI5 | Multimodal Image Foundation | image media modules under `agent-server/focusproof/media_*`, conditional API/bootstrap/runtime contribution files, scoped media tests, frontend image evidence flow, and AI5 docs/reports | OpenHands SDK source, `.env` or secrets, `var/`, unapproved public protocol changes, second Runtime/Conversation/EventLog/Tool protocol, retired Monad/Web3 history |
@@ -179,7 +185,7 @@ Must create or verify:
 - `frontend/` skeleton,
 - `agent-server/` Python package skeleton,
 - `contracts/` skeleton,
-- `fixtures/` skeleton,
+- test fixtures under `agent-server/tests/fixtures/`,
 - `scripts/` skeleton,
 - root README,
 - `.gitignore`,
@@ -365,11 +371,6 @@ registry, deterministic per-session tool assembly, and safe text and URL evidenc
 verification. AI4A must not replace Conversation, Agent.step, the native EventLog,
 or the SDK Action/Observation/Tool protocol.
 
-Required design and plan:
-
-- `docs/superpowers/specs/2026-07-13-ai4a-general-verification-framework-design.md`
-- `docs/superpowers/plans/2026-07-13-ai4a-general-verification-framework.md`
-
 Must implement:
 
 - FocusProof capability metadata over the OpenHands SDK tool registry,
@@ -396,13 +397,10 @@ Core constraints:
 - Code execution, Web3 RPC, OCR, ASR, PDF, contracts and deployment are out of scope.
 - Default tests must not consume a real LLM key.
 
-Deliverable:
-
-- `docs/research/AI4A_GENERAL_VERIFICATION_FRAMEWORK_REPORT.md`
-
-AI4A stops after local commits and AI0 review. It must not push or begin AI4B.
-
 Status: completed and accepted at AI4A.3.1. Accepted commits end at `4387333`.
+The former implementation plan and per-round report remain available in Git
+history; current behavior is defined by the code, tests, architecture documents,
+and final acceptance reports.
 
 ## 9. AI4B: General QA + Security + Release Readiness
 
@@ -517,7 +515,7 @@ Historical acceptance evidence retained for context:
 | 5 | general verification tool framework: registry, text and URL | AI4A | done |
 | 6 | general integration, security and release-readiness baseline | AI4B | done |
 | 7 | production identity, real-LLM operations and reproducible staging | AI4C | done / AI0 accepted (engineering phase complete; not public production release) |
-| 8 | AI5 image evidence foundation | AI5 | layered: image foundation + real vision accepted; production scanning implementation and acceptance incomplete; fake-clean isolation only |
+| 8 | AI5 image evidence foundation | AI5 | done: image foundation, real vision, live Clamd boundary, migration/concurrency, recovery and browser closure accepted; capability remains default-off |
 | P1 | optional Web3 specialization and on-chain proof | domain plugin owners | backlog |
 
 ## 13. Next Execution Task
@@ -537,13 +535,13 @@ image facts. The corrected nested `reviewResult.score/summary` consumer and
 fail-closed review state machine are independently `APPROVED_CONTRACT_GATE`
 with 19 tests. The Review API, persistence, and OpenHands path had no defect.
 
-Historical code-gate claim (superseded/non-production): deterministic scanner tests passed, but they established no production implementation or acceptance. Current evidence verifies only `fake-clean` isolation with `productionMalwareScanningVerified=false`; AI5.7 owns `ScannerPort`, `ScanResult`, the replaceable production adapter, and the fail-closed production boundary.
-The separate external clean/EICAR run is `BLOCKED_EXTERNAL_SERVICE_GATE` /
-`REAL_CLAMD_GATE_BLOCKED`: the pinned
-`clamav/clamav:1.5.3-debian@sha256:e6243e...828c` pull timed out to
-`registry-1.docker.io:443`; no probes ran and no container/image remains.
-Network recovery or a reachable clamd endpoint is required. AI5 is therefore
-not fully complete and public production upload remains unauthorized.
+The earlier external-Clamd block was recovered and is now historical. AI5.7
+completed two live five-case matrices and a fresh final clean/malicious/
+timeout/unavailable/daemon-error acceptance; oversize remains proven at the
+adapter boundary. Fake-clean remains local-test-only and can never certify
+production scanning. AI5 engineering is complete, while public production
+upload remains unauthorized for the separate identity, deployment, and
+long-term operations/SLO blockers above.
 
 
 ## 14. General Core Gate Closure Addendum
@@ -574,9 +572,9 @@ Formal real-provider product acceptance passed on 2026-08-12 with
 path. The redacted results and native Action/Observation/Build Log evidence are
 recorded in `docs/research/GENERAL_CORE_GATE_REPORT.md`.
 
-AI5 image foundation engineering is accepted. Real visual-provider acceptance,
-public-production malicious-file virus scanning, and future audio/PDF expansion
-remain separate gates.
+AI5 image foundation engineering, bounded real visual-provider acceptance, and
+the live Clamd production-scanning boundary are accepted. Public deployment and
+future audio/PDF/OCR/ASR expansion remain separate gates.
 
 OpenHands is reused directly through the official Conversation, `Agent.step`,
 native Action/Observation, and EventLog path. No mirror loop, second EventLog,
@@ -585,8 +583,9 @@ or alternate runtime or tool protocol is introduced.
 ### AI5.3 production media security
 
 - Historical code-gate claim (superseded/non-production): 288 focused and 341 expanded tests passed with Ruff/Mypy clean.
-- This did not implement or accept production scanning; only `fake-clean` isolation is verified with `productionMalwareScanningVerified=false`, and AI5.7 owns the production boundary.
-- Guarded real-clamd clean + EICAR gate:
-  `BLOCKED_EXTERNAL_SERVICE_GATE` / `REAL_CLAMD_GATE_BLOCKED`.
-- External staging clamd endpoint and health gate remain operator-required.
+- AI5.7 subsequently accepted the fail-closed Clamd boundary with two live
+  five-case matrices. `fake-clean` remains explicitly local-test-only with
+  `productionMalwareScanningVerified=false`.
+- An external staging clamd endpoint and health gate remain operator-required
+  for any future public deployment.
 - Production rollout/acceptance: not authorized.
