@@ -97,6 +97,7 @@ from focusproof.recovery import (
 )
 
 if TYPE_CHECKING:
+    from focusproof.bootstrap.media_composition import SharedMediaSecurity
     from focusproof.openhands_runtime.factory import LLMFactory
     from focusproof.openhands_runtime.handle import RuntimeMode, RuntimeReviewResult
     from focusproof.openhands_runtime.manager import ConversationManager
@@ -557,11 +558,20 @@ def create_app(
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         engine: Engine | None = None
         manager: ConversationManager | None = None
+        shared_media_security: SharedMediaSecurity | None = None
         application.state.readiness_error = None
         application.state.allow_anonymous_identity = False
+        effective_speech_capability = dict(speech_capability)
+        if effective_speech_capability.get("enabled") is True and not media_enabled:
+            effective_speech_capability = {
+                "capabilityId": "speech_transcription",
+                "schemaVersion": 1,
+                "enabled": False,
+                "reasonCode": "asr_prerequisites_unavailable",
+            }
         application.state.product_capabilities = _product_capabilities(
             media_enabled=media_enabled,
-            speech_capability=speech_capability,
+            speech_capability=effective_speech_capability,
         )
         resolved_data_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -582,6 +592,28 @@ def create_app(
             engine = create_database_engine(configured_database_url)
             check_schema_revision(engine, PROJECT_ROOT / "alembic.ini")
             uow_factory = UnitOfWorkFactory(create_session_factory(engine))
+            if media_enabled:
+                from focusproof.bootstrap.media_composition import (
+                    compose_shared_media_security,
+                )
+
+                shared_media_security = compose_shared_media_security(
+                    uow_factory=uow_factory,
+                )
+                if (
+                    effective_speech_capability.get("enabled") is True
+                    and not shared_media_security.speech_prerequisites_available
+                ):
+                    effective_speech_capability = {
+                        "capabilityId": "speech_transcription",
+                        "schemaVersion": 1,
+                        "enabled": False,
+                        "reasonCode": "asr_prerequisites_unavailable",
+                    }
+                    application.state.product_capabilities = _product_capabilities(
+                        media_enabled=True,
+                        speech_capability=effective_speech_capability,
+                    )
             effective_principal_resolver = principal_resolver or UowPrincipalResolver(uow_factory)
             security_audit_sink = (
                 PersistentSecurityAuditSink(
@@ -681,13 +713,18 @@ def create_app(
             application.state.evidence_provider = evidence_provider
             application.state.plugin_providers = plugin_providers
             if media_enabled:
+                assert shared_media_security is not None
                 from focusproof.bootstrap.media_composition import compose_media_command
 
                 application.state.media_ingestion_command = compose_media_command(
                     uow_factory=uow_factory,
                     data_dir=resolved_data_dir,
                     session_run_lock=run_lock,
+                    malware_scanner=shared_media_security.malware_scanner,
+                    resource_slot_controller=shared_media_security.scan_slots,
                 )
+                application.state.malware_scanner = shared_media_security.malware_scanner
+                application.state.scan_slot_controller = shared_media_security.scan_slots
             application.state.plugin_capabilities = collect_public_plugin_capabilities(
                 plugin_providers
             )
