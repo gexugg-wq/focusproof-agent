@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from math import ceil
 import threading
 from time import monotonic, sleep
 from typing import TypeVar
@@ -26,6 +27,11 @@ from focusproof.persistence.unit_of_work import UnitOfWorkFactory
 
 
 _T = TypeVar("_T")
+_RESOURCE_SLOT_RELEASE_TIMEOUT_SECONDS = 2.0
+
+
+def _remaining_timeout_ms(deadline: float) -> int:
+    return max(1, ceil(max(0.0, deadline - monotonic()) * 1000))
 
 
 class ResourceSlotController:
@@ -62,12 +68,13 @@ class ResourceSlotController:
                     "scan",
                     work_kind=work_kind,
                     work_id=work_id,
+                    timeout_ms=_remaining_timeout_ms(deadline),
                     lease_seconds=self._lease_seconds,
                 )
                 uow.commit()
             if lease is not None:
                 if deadline <= monotonic():
-                    self.release(lease)
+                    self.release(lease, deadline=deadline)
                     return None
                 return lease
             remaining = deadline - monotonic()
@@ -76,9 +83,17 @@ class ResourceSlotController:
             sleep(min(0.01, remaining))
         return None
 
-    def release(self, lease: ResourceSlotLease) -> bool:
+    def release(
+        self,
+        lease: ResourceSlotLease,
+        *,
+        deadline: float | None = None,
+    ) -> bool:
         with self._uow_factory() as uow:
-            released = uow.resource_slots.release(lease)
+            released = uow.resource_slots.release(
+                lease,
+                timeout_ms=(_remaining_timeout_ms(deadline) if deadline is not None else None),
+            )
             uow.commit()
             return released
 
@@ -101,6 +116,11 @@ class SlotBoundMalwareScanner:
     def audit_snapshot(self) -> MediaScanAuditSnapshot:
         return self._scanner.audit_snapshot
 
+    @property
+    def max_duration_seconds(self) -> float:
+        scanner_seconds = self.audit_snapshot.deadline_ms / 1000
+        return (2 * scanner_seconds) + _RESOURCE_SLOT_RELEASE_TIMEOUT_SECONDS
+
     def scan(self, source: ReadOnlyMediaSource) -> MalwareScanVerdict:
         snapshot = self.audit_snapshot
         deadline = monotonic() + snapshot.deadline_ms / 1000
@@ -114,7 +134,10 @@ class SlotBoundMalwareScanner:
         try:
             verdict = self._scanner.scan(source)
         finally:
-            released = self._controller.release(lease)
+            released = self._controller.release(
+                lease,
+                deadline=monotonic() + _RESOURCE_SLOT_RELEASE_TIMEOUT_SECONDS,
+            )
         if not released:
             return MalwareScanVerdict(status="error", engine=snapshot.scanner_backend)
         return verdict

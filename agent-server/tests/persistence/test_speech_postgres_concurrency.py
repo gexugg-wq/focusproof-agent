@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from focusproof.persistence.repositories import (
     SpeechQuotaExceededError,
+    SqlResourceSlotRepository,
     SqlSpeechRequestRepository,
 )
 from focusproof.persistence.unit_of_work import UnitOfWorkFactory
@@ -351,3 +352,74 @@ def test_postgres_recovery_fences_stale_generation(
             outcome_code="invalid_audio",
         )
         uow.commit()
+
+
+def test_postgres_asr_slot_claim_and_release_waits_are_bounded(
+    postgres_factory: UnitOfWorkFactory,
+    postgres_url: str,
+) -> None:
+    with postgres_factory() as uow:
+        uow.resource_slots.reconcile("asr", configured_count=1, config_generation=1)
+        uow.commit()
+
+    digest = hashlib.sha256(b"speech-resource:asr").digest()
+    resource_lock = int.from_bytes(digest[:8], byteorder="big", signed=True)
+    holder_engine = create_engine(postgres_url, pool_size=1)
+    contender_engine = create_engine(postgres_url, pool_size=1)
+    try:
+        with holder_engine.connect() as holder:
+            transaction = holder.begin()
+            holder.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_key)"),
+                {"lock_key": resource_lock},
+            )
+            contender = Session(contender_engine, expire_on_commit=False)
+            repository = SqlResourceSlotRepository(contender)
+            started = monotonic()
+            with pytest.raises(OperationalError):
+                repository.claim(
+                    "asr",
+                    work_kind="speech",
+                    work_id="deadline-contender",
+                    lease_seconds=5,
+                    timeout_ms=100,
+                )
+            assert monotonic() - started < 1
+            contender.rollback()
+            contender.close()
+            transaction.rollback()
+
+        with postgres_factory() as uow:
+            lease = uow.resource_slots.claim(
+                "asr",
+                work_kind="speech",
+                work_id="release-contender",
+                lease_seconds=5,
+            )
+            assert lease is not None
+            uow.commit()
+
+        with holder_engine.connect() as holder:
+            transaction = holder.begin()
+            holder.execute(
+                text(
+                    "SELECT 1 FROM speech_resource_slots "
+                    "WHERE resource_kind = 'asr' AND slot_number = 0 FOR UPDATE"
+                )
+            )
+            contender = Session(contender_engine, expire_on_commit=False)
+            repository = SqlResourceSlotRepository(contender)
+            started = monotonic()
+            with pytest.raises(OperationalError):
+                repository.release(lease, timeout_ms=100)
+            assert monotonic() - started < 1
+            contender.rollback()
+            contender.close()
+            transaction.rollback()
+
+        with postgres_factory() as uow:
+            assert uow.resource_slots.release(lease)
+            uow.commit()
+    finally:
+        holder_engine.dispose()
+        contender_engine.dispose()

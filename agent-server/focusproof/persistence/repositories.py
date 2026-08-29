@@ -1503,9 +1503,10 @@ class ResourceSlotRepository(Protocol):
         work_id: str,
         lease_seconds: int,
         now: datetime | None = None,
+        timeout_ms: int | None = None,
     ) -> ResourceSlotLease | None: ...
 
-    def release(self, lease: ResourceSlotLease) -> bool: ...
+    def release(self, lease: ResourceSlotLease, *, timeout_ms: int | None = None) -> bool: ...
 
 
 _ACTIVE_SPEECH_STATES = {
@@ -2012,11 +2013,12 @@ class SqlResourceSlotRepository:
         work_id: str,
         lease_seconds: int,
         now: datetime | None = None,
+        timeout_ms: int | None = None,
     ) -> ResourceSlotLease | None:
         self._validate_resource(resource_kind)
         if work_kind not in {"image", "speech"} or not work_id or lease_seconds <= 0:
             raise ValueError("resource slot work metadata is invalid")
-        self._serialize(resource_kind)
+        self._serialize(resource_kind, timeout_ms=timeout_ms)
         actual_now = _aware(now or datetime.now(UTC))
         self._session.execute(
             update(SpeechResourceSlotModel)
@@ -2063,7 +2065,11 @@ class SqlResourceSlotRepository:
             row.lease_generation,
         )
 
-    def release(self, lease: ResourceSlotLease) -> bool:
+    def release(self, lease: ResourceSlotLease, *, timeout_ms: int | None = None) -> bool:
+        bounded_timeout_ms = self._bounded_timeout_ms(timeout_ms)
+        _begin_immediate(self._session)
+        _configure_postgres_transaction(self._session, bounded_timeout_ms)
+
         result = cast(
             CursorResult[Any],
             self._session.execute(
@@ -2071,10 +2077,8 @@ class SqlResourceSlotRepository:
                 .where(
                     SpeechResourceSlotModel.resource_kind == lease.resource_kind,
                     SpeechResourceSlotModel.slot_number == lease.slot_number,
-                    SpeechResourceSlotModel.lease_owner_token
-                    == lease.lease_owner_token,
-                    SpeechResourceSlotModel.lease_generation
-                    == lease.lease_generation,
+                    SpeechResourceSlotModel.lease_owner_token == lease.lease_owner_token,
+                    SpeechResourceSlotModel.lease_generation == lease.lease_generation,
                 )
                 .values(
                     lease_owner_token=None,
@@ -2086,10 +2090,16 @@ class SqlResourceSlotRepository:
         )
         return result.rowcount == 1
 
-    def _serialize(self, resource_kind: str) -> None:
+    def _serialize(self, resource_kind: str, *, timeout_ms: int | None = None) -> None:
+        bounded_timeout_ms = self._bounded_timeout_ms(timeout_ms)
         _begin_immediate(self._session)
-        _configure_postgres_transaction(self._session, self._lock_timeout_ms)
+        _configure_postgres_transaction(self._session, bounded_timeout_ms)
         _take_advisory_lock(self._session, "speech-resource", resource_kind)
+
+    def _bounded_timeout_ms(self, timeout_ms: int | None) -> int:
+        if timeout_ms is None:
+            return self._lock_timeout_ms
+        return max(1, min(timeout_ms, self._lock_timeout_ms))
 
     @staticmethod
     def _validate_resource(resource_kind: str) -> None:
