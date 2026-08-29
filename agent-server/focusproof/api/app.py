@@ -553,12 +553,18 @@ def create_app(
         if effective_llm_factory is not None
         else "openhands-local-real"
     )
+    from focusproof.api.speech_admission import SpeechAdmissionGate
+
+    speech_admission_gate = SpeechAdmissionGate()
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         engine: Engine | None = None
         manager: ConversationManager | None = None
         shared_media_security: SharedMediaSecurity | None = None
+        speech_provider: Any | None = None
+        speech_sweeper: Any | None = None
+        speech_registry: Any | None = None
         application.state.readiness_error = None
         application.state.allow_anonymous_identity = False
         effective_speech_capability = dict(speech_capability)
@@ -573,6 +579,10 @@ def create_app(
             media_enabled=media_enabled,
             speech_capability=effective_speech_capability,
         )
+        application.state.speech_capability = effective_speech_capability
+        application.state.speech_service = None
+        application.state.speech_task_registry = None
+        speech_admission_gate.close()
         resolved_data_dir.mkdir(parents=True, exist_ok=True)
         try:
             try:
@@ -614,6 +624,7 @@ def create_app(
                         media_enabled=True,
                         speech_capability=effective_speech_capability,
                     )
+                    application.state.speech_capability = effective_speech_capability
             effective_principal_resolver = principal_resolver or UowPrincipalResolver(uow_factory)
             security_audit_sink = (
                 PersistentSecurityAuditSink(
@@ -725,6 +736,67 @@ def create_app(
                 )
                 application.state.malware_scanner = shared_media_security.malware_scanner
                 application.state.scan_slot_controller = shared_media_security.scan_slots
+            if effective_speech_capability.get("enabled") is True:
+                assert shared_media_security is not None
+                from focusproof.api.speech_admission import (
+                    SpeechRecoverySweeper,
+                    SpeechTaskRegistry,
+                )
+                from focusproof.config.env import load_speech_settings
+                from focusproof.speech_adapters.dashscope_asr import (
+                    DashScopeSpeechTranscriptionProvider,
+                )
+                from focusproof.speech_adapters.mediainfo_inspector import (
+                    MediainfoAudioInspector,
+                )
+                from focusproof.speech_application import TranscriptionService
+                from focusproof.api.speech_routes import SuffixAwareAudioInspector
+
+                settings = load_speech_settings(os.environ)
+                if settings is None:
+                    raise RuntimeConfigurationError
+                uow_factory.configure_speech(
+                    active_hmac_key_version="v1",
+                    hmac_keys={"v1": settings.idempotency_hmac_key.encode("utf-8")},
+                )
+                with uow_factory() as speech_uow:
+                    readiness_check = getattr(
+                        speech_uow.speech_requests, "assert_hmac_readiness", None
+                    )
+                    if not callable(readiness_check):
+                        raise RuntimeConfigurationError
+                    readiness_check()
+                    speech_uow.resource_slots.reconcile(
+                        "asr",
+                        configured_count=settings.max_concurrency,
+                        config_generation=1,
+                    )
+                    speech_uow.commit()
+                speech_provider = DashScopeSpeechTranscriptionProvider(
+                    api_key=settings.api_key
+                )
+                speech_temp_dir = (resolved_data_dir / "speech" / "temp").resolve()
+                application.state.speech_service = TranscriptionService(
+                    uow_factory=uow_factory,
+                    malware_scanner=shared_media_security.malware_scanner,
+                    scan_slots=shared_media_security.scan_slots,
+                    audio_inspector=SuffixAwareAudioInspector(
+                        MediainfoAudioInspector()
+                    ),
+                    provider=speech_provider,
+                    temp_dir=speech_temp_dir,
+                )
+                speech_registry = SpeechTaskRegistry()
+                speech_sweeper = SpeechRecoverySweeper(
+                    uow_factory=uow_factory,
+                    temp_dir=speech_temp_dir,
+                    stale_after_seconds=125,
+                    interval_seconds=30,
+                )
+                application.state.speech_task_registry = speech_registry
+                await speech_sweeper.recover_once()
+                await speech_sweeper.start()
+                speech_admission_gate.open()
             application.state.plugin_capabilities = collect_public_plugin_capabilities(
                 plugin_providers
             )
@@ -754,6 +826,21 @@ def create_app(
             yield
         finally:
             try:
+                speech_admission_gate.close()
+                if speech_registry is not None:
+                    async def fence_speech() -> None:
+                        if speech_sweeper is not None:
+                            await speech_sweeper.recover_once()
+
+                    await speech_registry.close(
+                        gate=speech_admission_gate,
+                        grace_seconds=5.0,
+                        fence=fence_speech,
+                    )
+                if speech_sweeper is not None:
+                    await speech_sweeper.close()
+                if speech_provider is not None:
+                    await speech_provider.aclose()
                 if manager is not None:
                     manager.close_all()
             finally:
@@ -768,12 +855,17 @@ def create_app(
     application.add_exception_handler(SessionBusyError, _session_busy_handler)
 
     application.state.recovery_data_dir = resolved_data_dir
+    application.state.speech_admission_gate = speech_admission_gate
     media_enabled = os.environ.get("FOCUSPROOF_MEDIA_ENABLED") == "true"
     if media_enabled:
         from focusproof.api.media_routes import build_media_router
 
         application.include_router(build_media_router())
+    from focusproof.api.speech_routes import build_speech_router
+
+    application.include_router(build_speech_router())
     from focusproof.api.request_limits import BodyLimitResolver
+    from focusproof.api.speech_admission import SpeechAdmissionMiddleware
 
     application.add_middleware(
         RequestBodyLimitMiddleware,
@@ -782,6 +874,11 @@ def create_app(
     application.add_middleware(
         OperationalTelemetryMiddleware,
         data_dir=resolved_data_dir,
+    )
+    application.add_middleware(
+        SpeechAdmissionMiddleware,
+        application=application,
+        gate=speech_admission_gate,
     )
     _install_exception_handlers(application)
     _install_routes(application, configured_runtime_mode)

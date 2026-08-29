@@ -12,6 +12,7 @@ const allowed = [
   ["GET", ["sessions", "sess_1"]],
   ["POST", ["sessions", "sess_1", "evidence"]],
   ["POST", ["sessions", "sess_1", "evidence", "image"]],
+  ["POST", ["sessions", "sess_1", "transcriptions"]],
   ["POST", ["sessions", "sess_1", "answer"]],
   ["POST", ["sessions", "sess_1", "review"]],
   ["GET", ["sessions", "sess_1", "events"]],
@@ -36,6 +37,10 @@ describe("FocusProof BFF policy", () => {
 
   it("gives image uploads a bounded extended timeout", () => {
     expect(getProxyTimeoutMs("POST", ["sessions", "sess_1", "evidence", "image"])).toBeGreaterThan(15_000);
+  });
+
+  it("gives transcription uploads the provider's 130 second deadline", () => {
+    expect(getProxyTimeoutMs("POST", ["sessions", "sess_1", "transcriptions"])).toBe(130_000);
   });
 });
 
@@ -153,6 +158,259 @@ describe("API errors", () => {
     expect(response.status).toBe(200);
     const [, init] = upstreamFetch.mock.calls[0];
     expect(await new Response(init.body).text()).toBe(json);
+  });
+});
+
+describe("transcription BFF boundary", () => {
+  const transcriptionPath = { params: Promise.resolve({ path: ["sessions", "sess_1", "transcriptions"] }) };
+  const audioLimit = 11 * 1024 * 1024;
+
+  it("streams multipart transcription requests without reading them as text", async () => {
+    const upstreamFetch = vi.fn().mockResolvedValue(new Response("{}", { headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", upstreamFetch);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([0, 255, 7]));
+        controller.close();
+      }
+    });
+    const request = new NextRequest("http://localhost/api/focusproof/sessions/sess_1/transcriptions", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer valid.token",
+        "content-type": "multipart/form-data; boundary=audio-boundary",
+        "idempotency-key": "c2d4a7a4-6d14-4a03-9a27-42f7d0116c4f"
+      },
+      body: stream
+    });
+    const text = vi.spyOn(request, "text").mockRejectedValue(new Error("multipart audio must not be buffered as text"));
+
+    const response = await POST(request, transcriptionPath);
+
+    expect(response.status).toBe(200);
+    expect(text).not.toHaveBeenCalled();
+    const [, init] = upstreamFetch.mock.calls[0];
+    const headers = new Headers(init.headers);
+    expect(init.body).toBeInstanceOf(ReadableStream);
+    expect(init.duplex).toBe("half");
+    expect(headers.get("content-type")).toBe("multipart/form-data; boundary=audio-boundary");
+    expect(headers.get("authorization")).toBe("Bearer valid.token");
+    expect(headers.get("idempotency-key")).toBe("c2d4a7a4-6d14-4a03-9a27-42f7d0116c4f");
+  });
+
+  it("allows exactly the declared 11 MiB transcription ceiling and rejects one byte more", async () => {
+    const upstreamFetch = vi.fn().mockResolvedValue(new Response("{}", { headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", upstreamFetch);
+    const exact = await POST(new NextRequest("http://localhost/upload", {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data; boundary=x", "content-length": String(audioLimit) },
+      body: new Uint8Array([1])
+    }), transcriptionPath);
+    const over = await POST(new NextRequest("http://localhost/upload", {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data; boundary=x", "content-length": String(audioLimit + 1) },
+      body: new Uint8Array([1])
+    }), transcriptionPath);
+
+    expect(exact.status).toBe(200);
+    expect(over.status).toBe(413);
+    expect(upstreamFetch).toHaveBeenCalledTimes(1);
+    await expect(over.json()).resolves.toEqual({ code: "request_too_large", retryable: false });
+  });
+
+  it("rejects an over-limit chunked transcription stream without forwarding a success", async () => {
+    const upstreamFetch = vi.fn(async (_url: string, init: RequestInit) => {
+      await new Response(init.body).arrayBuffer();
+      return new Response("{}", { headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", upstreamFetch);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(audioLimit));
+        controller.enqueue(new Uint8Array([1]));
+        controller.close();
+      }
+    });
+
+    const response = await POST(new NextRequest("http://localhost/upload", {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data; boundary=x" },
+      body: stream
+    }), transcriptionPath);
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({ code: "request_too_large", retryable: false });
+  });
+
+  it("waits for a chunked transcription upload before accepting an early upstream response", async () => {
+    const upstreamFetch = vi.fn().mockResolvedValue(new Response("{}", { headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", upstreamFetch);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(audioLimit));
+        controller.enqueue(new Uint8Array([1]));
+        controller.close();
+      }
+    });
+    const response = await POST(new NextRequest("http://localhost/upload", { method: "POST", headers: { "content-type": "multipart/form-data; boundary=x" }, body: stream }), transcriptionPath);
+    expect(response.status).toBe(413);
+    expect(upstreamFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts a stalled chunked upload at 130 seconds after an early upstream response", async () => {
+    vi.useFakeTimers();
+    try {
+      const upstreamFetch = vi.fn().mockResolvedValue(new Response("{}", { headers: { "content-type": "application/json" } }));
+      vi.stubGlobal("fetch", upstreamFetch);
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new Uint8Array([1])); },
+        pull() { return new Promise<void>(() => undefined); }
+      });
+      const pending = POST(new NextRequest("http://localhost/upload", {
+        method: "POST",
+        headers: { "content-type": "multipart/form-data; boundary=x" },
+        body: stream
+      }), transcriptionPath);
+      let settled = false;
+      void pending.then(() => { settled = true; });
+
+      await vi.advanceTimersByTimeAsync(129_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.runAllTicks();
+      expect(settled).toBe(true);
+      if (!settled) return;
+      const response = await pending;
+
+      expect(response.status).toBe(503);
+      expect(upstreamFetch.mock.calls[0]?.[1].signal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns 413 without waiting for a noncooperative source cancel", async () => {
+    let releaseCancel: () => void = () => undefined;
+    let markCancelStarted: () => void = () => undefined;
+    const cancelStarted = new Promise<void>((resolve) => { markCancelStarted = resolve; });
+    const upstreamFetch = vi.fn().mockResolvedValue(new Response("{}", { headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", upstreamFetch);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(audioLimit));
+        controller.enqueue(new Uint8Array([1]));
+      },
+      cancel() {
+        markCancelStarted();
+        return new Promise<void>((resolve) => { releaseCancel = resolve; });
+      }
+    });
+    const pending = POST(new NextRequest("http://localhost/upload", {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data; boundary=x" },
+      body: stream
+    }), transcriptionPath);
+    let settled = false;
+    void pending.then(() => { settled = true; });
+
+    await cancelStarted;
+    await Promise.resolve();
+    await Promise.resolve();
+    try {
+      expect(settled).toBe(true);
+      if (!settled) return;
+      const response = await pending;
+      expect(response.status).toBe(413);
+    } finally {
+      releaseCancel();
+      await pending;
+    }
+  });
+
+  it("does not abort a transcription before 130 seconds and aborts it at that deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const upstreamFetch = vi.fn((_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      }));
+      vi.stubGlobal("fetch", upstreamFetch);
+      const pending = POST(new NextRequest("http://localhost/upload", {
+        method: "POST",
+        headers: { "content-type": "multipart/form-data; boundary=x" },
+        body: new Uint8Array([1])
+      }), transcriptionPath);
+      let settled = false;
+      void pending.then(() => { settled = true; });
+
+      await vi.advanceTimersByTimeAsync(129_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const response = await pending;
+
+      expect(response.status).toBe(503);
+      expect(upstreamFetch.mock.calls[0]?.[1].signal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the 130-second timeout active through upstream response body consumption", async () => {
+    vi.useFakeTimers();
+    try {
+      const stalledBody = new ReadableStream<Uint8Array>({
+        pull() { return new Promise<void>(() => undefined); }
+      });
+      const upstreamFetch = vi.fn((_url: string, init: RequestInit) => Promise.resolve(new Response(stalledBody, {
+        headers: { "content-type": "application/json" }
+      })));
+      vi.stubGlobal("fetch", upstreamFetch);
+      const pending = POST(new NextRequest("http://localhost/upload", {
+        method: "POST",
+        headers: { "content-type": "multipart/form-data; boundary=x" },
+        body: new Uint8Array([1])
+      }), transcriptionPath);
+      let settled = false;
+      void pending.then(() => { settled = true; });
+
+      await vi.advanceTimersByTimeAsync(129_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.runAllTicks();
+      expect(settled).toBe(true);
+      if (!settled) return;
+      const response = await pending;
+
+      expect(response.status).toBe(503);
+      expect(upstreamFetch.mock.calls[0]?.[1].signal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps speech error codes and retryability without exposing upstream request details", () => {
+    const secret = "/sessions/sess_1/transcriptions?key=super-secret";
+    const tooLarge = mapApiError(413, { code: "audio_too_large", retryable: false, detail: secret });
+    const timeout = mapApiError(504, { code: "transcription_timeout", retryable: true, detail: secret });
+
+    expect(tooLarge).toMatchObject({ code: "audio_too_large", retryable: false, message: "The selected audio is too large." });
+    expect(timeout).toMatchObject({ code: "transcription_timeout", retryable: true });
+    expect(tooLarge.message).not.toContain(secret);
+    expect(timeout.message).not.toContain(secret);
+  });
+
+  it("applies the bounded JSON reader to transcription responses", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("x".repeat(1024 * 1024 + 1), {
+      headers: { "content-length": String(1024 * 1024 + 1), "content-type": "application/json" }
+    })));
+
+    const response = await POST(new NextRequest("http://localhost/upload", {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data; boundary=x" },
+      body: new Uint8Array([1])
+    }), transcriptionPath);
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ code: "upstream_response_too_large", retryable: false });
   });
 });
 
