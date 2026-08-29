@@ -197,7 +197,7 @@ describe("SessionWorkspace recovery query refresh", () => {
     });
   });
 });
-import { getImageCapability } from "@/features/session/SessionWorkspace";
+import { getImageCapability, getSpeechCapability } from "@/features/session/SessionWorkspace";
 
 describe("image capability validation", () => {
   it.each([
@@ -215,6 +215,18 @@ describe("image capability validation", () => {
     const malformed = { capabilityId: "image_evidence", enabled: true, formats: ["image/png"], maxCount: 4, maxOriginalBytes: 10_485_760, maxNormalizedBytesPerSession: 20_971_520, explanationRequired: true, ...override };
     const candidate = { ...session, view: { productCapabilities: [malformed] } };
     expect(getImageCapability(candidate as unknown as SessionDetail)).toBeNull();
+  });
+});
+
+describe("speech capability validation", () => {
+  const capability = { capabilityId: "speech_transcription", schemaVersion: 1, enabled: true, formats: ["audio/webm;codecs=opus"], maxAudioBytes: 11 * 1024 * 1024, maxDurationSeconds: 120, languageHintsAccepted: ["auto"], languageHintEffect: "metadata_only" };
+  it("accepts only the declared bounded speech capability", () => {
+    const candidate = { ...session, view: { productCapabilities: [capability] } };
+    expect(getSpeechCapability(candidate as unknown as SessionDetail)).toEqual(capability);
+  });
+  it.each([{ maxDurationSeconds: 121 }, { formats: ["audio/ogg"] }, { languageHintsAccepted: ["fr"] }, { enabled: false }])("fails closed for malformed speech capability %j", (override) => {
+    const candidate = { ...session, view: { productCapabilities: [{ ...capability, ...override }] } };
+    expect(getSpeechCapability(candidate as unknown as SessionDetail)).toBeNull();
   });
 });
 

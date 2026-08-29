@@ -58,6 +58,22 @@ describe("multipart client", () => {
     expect(init?.body).toBe(form);
     expect(new Headers(init?.headers).has("content-type")).toBe(false);
   });
+
+  it("sends exactly one audio file and language hint through the transcription BFF with a UUID key", async () => {
+    const browserFetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ requestId: "req_1", transcript: "  raw transcript\\n", provider: "dashscope", model: "qwen3-asr-flash" }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", browserFetch);
+    const controller = new AbortController();
+
+    await focusProofApi.transcribe("sess_1", new File(["audio"], "recording.webm", { type: "audio/webm;codecs=opus" }), "auto", "c2d4a7a4-6d14-4a03-9a27-42f7d0116c4f", controller.signal);
+
+    const [, init] = browserFetch.mock.calls.at(-1)!;
+    const form = init?.body as FormData;
+    expect([...form.keys()]).toEqual(["file", "languageHint"]);
+    expect((form.get("file") as File).type).toBe("audio/webm;codecs=opus");
+    expect(form.get("languageHint")).toBe("auto");
+    expect(new Headers(init?.headers).get("Idempotency-Key")).toBe("c2d4a7a4-6d14-4a03-9a27-42f7d0116c4f");
+    expect(init?.signal).toBe(controller.signal);
+  });
 });
 
 describe("API errors", () => {

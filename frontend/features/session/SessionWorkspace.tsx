@@ -5,7 +5,7 @@ import { Activity, BookOpen } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { focusProofApi, getSafeErrorMessage, isApiError } from "@/lib/api/client";
-import type { ImageEvidenceCapability, SessionDetail, SubmitEvidenceRequest } from "@/lib/api/contracts";
+import type { ImageEvidenceCapability, SessionDetail, SpeechTranscriptionCapabilityEnabled, SubmitEvidenceRequest } from "@/lib/api/contracts";
 import { BuildLog } from "@/features/build-log/BuildLog";
 import { EvidencePanel } from "@/features/evidence/EvidencePanel";
 import { ReviewPanel } from "@/features/review/ReviewPanel";
@@ -13,6 +13,8 @@ import { WalletPanel } from "@/features/wallet/WalletPanel";
 import { saveRecentSession } from "@/lib/storage/recent-sessions";
 
 const allowedImageFormats = new Set(["image/png", "image/jpeg", "image/webp"]);
+const allowedSpeechFormats = new Set(["audio/webm;codecs=opus", "audio/wav", "audio/mpeg"]);
+const allowedSpeechLanguageHints = new Set(["auto", "zh", "en"]);
 const positiveInteger = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value > 0;
 
 export function getImageCapability(session: SessionDetail): ImageEvidenceCapability | null {
@@ -23,6 +25,15 @@ export function getImageCapability(session: SessionDetail): ImageEvidenceCapabil
   if (!Array.isArray(item.formats) || item.formats.length === 0 || !item.formats.every((format) => typeof format === "string" && allowedImageFormats.has(format))) return null;
   if (!positiveInteger(item.maxCount) || !positiveInteger(item.maxOriginalBytes) || !positiveInteger(item.maxNormalizedBytesPerSession) || typeof item.explanationRequired !== "boolean") return null;
   return value as ImageEvidenceCapability;
+}
+
+export function getSpeechCapability(session: SessionDetail): SpeechTranscriptionCapabilityEnabled | null {
+  const values = Array.isArray(session.view?.productCapabilities) ? session.view.productCapabilities : [];
+  const value = values.find((item) => !!item && typeof item === "object" && (item as Record<string, unknown>).capabilityId === "speech_transcription" && (item as Record<string, unknown>).enabled === true);
+  if (!value) return null;
+  const item = value as Record<string, unknown>;
+  if (item.schemaVersion !== 1 || !Array.isArray(item.formats) || item.formats.length === 0 || !item.formats.every((format) => typeof format === "string" && allowedSpeechFormats.has(format)) || !positiveInteger(item.maxAudioBytes) || item.maxAudioBytes > 11 * 1024 * 1024 || !positiveInteger(item.maxDurationSeconds) || item.maxDurationSeconds > 120 || !Array.isArray(item.languageHintsAccepted) || item.languageHintsAccepted.length === 0 || !item.languageHintsAccepted.every((hint) => typeof hint === "string" && allowedSpeechLanguageHints.has(hint)) || item.languageHintEffect !== "metadata_only") return null;
+  return value as SpeechTranscriptionCapabilityEnabled;
 }
 
 export function SessionWorkspace({ sessionId }: { sessionId: string }) {
@@ -64,6 +75,7 @@ export function SessionWorkspace({ sessionId }: { sessionId: string }) {
   saveRecentSession({ sessionId, title: session.state.goal.title, domain: session.state.goal.domain, visitedAt: new Date().toISOString() });
   const web3Context = session.state.goal.domain.toLowerCase() === "web3";
   const imageCapability = getImageCapability(session);
+  const speechCapability = getSpeechCapability(session);
   return (
     <main className="grid min-h-screen gap-4 p-4 lg:grid-cols-[280px_minmax(0,1fr)_340px]">
       <header className="lg:col-span-3 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
@@ -88,6 +100,7 @@ export function SessionWorkspace({ sessionId }: { sessionId: string }) {
           walletAddress={walletAddress}
           submittedEvidence={session.state.evidence}
           imageCapability={imageCapability}
+          speechCapability={speechCapability}
           onUploadImage={(form) => focusProofApi.submitImageEvidence(sessionId, form).then((response) => { void queryClient.invalidateQueries({ queryKey: ["session", sessionId] }); return response; })}
           onSubmitEvidence={(payload) => evidence.mutateAsync(payload)}
         />

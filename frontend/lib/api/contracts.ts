@@ -169,3 +169,10 @@ export type SyncResponse = {
   questionId?: string;
   syncPending: boolean;
 };
+
+export type TranscriptionResponse = {
+  requestId: string;
+  transcript: string;
+  provider: "dashscope";
+  model: "qwen3-asr-flash";
+};

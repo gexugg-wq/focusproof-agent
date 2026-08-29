@@ -1,10 +1,10 @@
 import { webcrypto } from "node:crypto";
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { EvidencePanel } from "@/features/evidence/EvidencePanel";
-import type { ImageEvidenceCapability } from "@/lib/api/contracts";
+import type { ImageEvidenceCapability, SpeechTranscriptionCapabilityEnabled } from "@/lib/api/contracts";
 
 const capability: ImageEvidenceCapability = {
   capabilityId: "image_evidence", enabled: true,
@@ -20,6 +20,39 @@ const props = (override: Record<string, unknown> = {}) => ({
   onUploadImage: vi.fn().mockResolvedValue({ evidenceId: "ev_image", mediaType: "image/png", normalizedBytes: 4, replayed: false }),
   ...override
 });
+
+const speechCapability: SpeechTranscriptionCapabilityEnabled = {
+  capabilityId: "speech_transcription", schemaVersion: 1, enabled: true,
+  formats: ["audio/webm;codecs=opus"], maxAudioBytes: 11 * 1024 * 1024,
+  maxDurationSeconds: 120, languageHintsAccepted: ["auto"], languageHintEffect: "metadata_only"
+};
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => { resolve = res; });
+  return { promise, resolve };
+};
+class RaceRecorder extends EventTarget {
+  static isTypeSupported = () => true;
+  state: RecordingState = "inactive";
+  readonly mimeType: string;
+  constructor(_stream: MediaStream, options: MediaRecorderOptions) {
+    super();
+    this.mimeType = options.mimeType ?? "audio/webm;codecs=opus";
+  }
+  start() { this.state = "recording"; }
+  stop() {
+    if (this.state === "inactive") return;
+    this.state = "inactive";
+    const event = new Event("dataavailable") as BlobEvent;
+    Object.defineProperty(event, "data", { value: new Blob(["audio"], { type: this.mimeType }) });
+    this.dispatchEvent(event);
+    this.dispatchEvent(new Event("stop"));
+  }
+}
+const installRaceRecorder = (getUserMedia: ReturnType<typeof vi.fn>) => {
+  vi.stubGlobal("MediaRecorder", RaceRecorder);
+  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+};
 
 beforeAll(() => {
   vi.stubGlobal("crypto", {
@@ -100,5 +133,119 @@ describe("unified evidence composer", () => {
     expect(screen.getByLabelText(/learning evidence/i)).toHaveValue("Three diagrams.");
     await userEvent.click(screen.getByRole("button", { name: /submit evidence/i }));
     await waitFor(() => expect(calls).toEqual(["first.png", "second.png", "second.png", "third.png"]));
+  });
+
+
+  it("keeps one composer, disables Submit while recording, and inserts raw transcript without auto-submit", async () => {
+    const track = { stop: vi.fn() };
+    class Recorder extends EventTarget {
+      static isTypeSupported = () => true;
+      state: RecordingState = "inactive";
+      constructor(_stream: MediaStream, _options: MediaRecorderOptions) { super(); }
+      start() { this.state = "recording"; }
+      stop() {
+        this.state = "inactive";
+        const event = new Event("dataavailable") as BlobEvent;
+        Object.defineProperty(event, "data", { value: new Blob(["audio"], { type: "audio/webm;codecs=opus" }) });
+        this.dispatchEvent(event);
+        this.dispatchEvent(new Event("stop"));
+      }
+    }
+    vi.stubGlobal("MediaRecorder", Recorder);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [track] }) } });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ requestId: "req_1", transcript: "  raw transcript\n", provider: "dashscope", model: "qwen3-asr-flash" }), { headers: { "content-type": "application/json" } })));
+    const submit = vi.fn().mockResolvedValue({ syncPending: false });
+    render(<EvidencePanel {...props({ onSubmitEvidence: submit, speechCapability: { capabilityId: "speech_transcription", schemaVersion: 1, enabled: true, formats: ["audio/webm;codecs=opus"], maxAudioBytes: 11 * 1024 * 1024, maxDurationSeconds: 120, languageHintsAccepted: ["auto"], languageHintEffect: "metadata_only" } })} />);
+    const textarea = screen.getByLabelText(/learning evidence/i) as HTMLTextAreaElement;
+    await userEvent.type(textarea, "prefix suffix");
+    textarea.setSelectionRange(7, 7);
+    fireEvent.select(textarea, { target: { selectionStart: 7, selectionEnd: 7 } });
+    expect(screen.getAllByRole("button", { name: /submit evidence/i })).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: /start recording/i }));
+    expect(screen.getByRole("button", { name: /submit evidence/i })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: /stop recording/i }));
+    await waitFor(() => expect(textarea).toHaveValue("prefix   raw transcript\nsuffix"));
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("blocks microphone start while evidence submission is pending", async () => {
+    const submission = deferred<{ syncPending: boolean }>();
+    const submit = vi.fn().mockReturnValue(submission.promise);
+    const track = { stop: vi.fn() };
+    const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [track] });
+    installRaceRecorder(getUserMedia);
+    render(<EvidencePanel {...props({ onSubmitEvidence: submit, speechCapability })} />);
+
+    await userEvent.type(screen.getByLabelText(/learning evidence/i), "Evidence being submitted.");
+    await userEvent.click(screen.getByRole("button", { name: /submit evidence/i }));
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+
+    const start = screen.getByRole("button", { name: /start recording/i });
+    expect(start).toBeDisabled();
+    fireEvent.click(start);
+    expect(getUserMedia).not.toHaveBeenCalled();
+
+    await act(async () => { submission.resolve({ syncPending: false }); });
+  });
+
+  it("synchronously rejects microphone start when evidence submit wins the same tick", async () => {
+    const submission = deferred<{ syncPending: boolean }>();
+    const submit = vi.fn().mockReturnValue(submission.promise);
+    const getUserMedia = vi.fn();
+    installRaceRecorder(getUserMedia);
+    render(<EvidencePanel {...props({ onSubmitEvidence: submit, speechCapability })} />);
+    await userEvent.type(screen.getByLabelText(/learning evidence/i), "Submit wins this race.");
+
+    const form = screen.getByTestId("evidence-dropzone");
+    const start = screen.getByRole("button", { name: /start recording/i });
+    act(() => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      (start as HTMLButtonElement).click();
+    });
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(getUserMedia).not.toHaveBeenCalled();
+    await act(async () => { submission.resolve({ syncPending: false }); });
+  });
+
+  it("synchronously rejects programmatic evidence submit when recording start wins the same tick", async () => {
+    const microphone = deferred<MediaStream>();
+    const getUserMedia = vi.fn().mockReturnValue(microphone.promise);
+    installRaceRecorder(getUserMedia);
+    const submit = vi.fn().mockResolvedValue({ syncPending: false });
+    const view = render(<EvidencePanel {...props({ onSubmitEvidence: submit, speechCapability })} />);
+    await userEvent.type(screen.getByLabelText(/learning evidence/i), "Keep this draft.");
+
+    const start = screen.getByRole("button", { name: /start recording/i });
+    const form = screen.getByTestId("evidence-dropzone");
+    act(() => {
+      (start as HTMLButtonElement).click();
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(submit).not.toHaveBeenCalled();
+    const track = { stop: vi.fn() };
+    await act(async () => { microphone.resolve({ getTracks: () => [track] } as unknown as MediaStream); });
+    await waitFor(() => expect(screen.getByRole("button", { name: /stop recording/i })).toBeVisible());
+    view.unmount();
+    expect(track.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the parent recorder lock when speech capability is revoked", async () => {
+    const track = { stop: vi.fn() };
+    const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [track] });
+    installRaceRecorder(getUserMedia);
+    const componentProps = props({ speechCapability });
+    const view = render(<EvidencePanel {...componentProps} />);
+    await userEvent.type(screen.getByLabelText(/learning evidence/i), "Draft remains editable.");
+    await userEvent.click(screen.getByRole("button", { name: /start recording/i }));
+    expect(screen.getByRole("button", { name: /submit evidence/i })).toBeDisabled();
+
+    view.rerender(<EvidencePanel {...componentProps} speechCapability={null} />);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /submit evidence/i })).toBeEnabled());
+    expect(screen.queryByRole("button", { name: /start recording/i })).not.toBeInTheDocument();
+    expect(track.stop).toHaveBeenCalledTimes(1);
   });
 });

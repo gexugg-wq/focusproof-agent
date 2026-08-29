@@ -1,8 +1,9 @@
 "use client";
-import React, { useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ImagePlus, Paperclip, Send, Trash2, Upload } from "lucide-react";
-import type { Evidence, ImageEvidenceCapability, ImageEvidenceResponse, SubmitEvidenceRequest, SyncResponse } from "@/lib/api/contracts";
+import type { Evidence, ImageEvidenceCapability, ImageEvidenceResponse, SpeechTranscriptionCapabilityEnabled, SubmitEvidenceRequest, SyncResponse } from "@/lib/api/contracts";
 import { getSafeErrorMessage, isApiError } from "@/lib/api/client";
+import { SpeechRecorderControl } from "./SpeechRecorderControl";
 
 const mib = 1024 * 1024;
 const labelForFormat = (format: string) => format.split("/")[1]?.replace("jpeg", "JPEG").toUpperCase() ?? format;
@@ -49,6 +50,7 @@ const writePending = (key: string, value: PendingIntent) => {
 
 type ImageEvidenceFormProps = {
   ownerUserId?: string; sessionId: string; capability: ImageEvidenceCapability;
+  speechCapability?: SpeechTranscriptionCapabilityEnabled | null;
   submittedEvidence: Evidence[]; onUpload: (form: FormData) => Promise<ImageEvidenceResponse>;
   unified?: boolean;
   allowAttachments?: boolean;
@@ -60,15 +62,27 @@ const supportedUrl = (value: string) => {
   catch { return false; }
 };
 
-export function ImageEvidenceForm({ ownerUserId = "current-owner", sessionId, capability, submittedEvidence, onUpload, unified = false, allowAttachments = true, onSubmitEvidence }: ImageEvidenceFormProps) {
+export function ImageEvidenceForm({ ownerUserId = "current-owner", sessionId, capability, speechCapability = null, submittedEvidence, onUpload, unified = false, allowAttachments = true, onSubmitEvidence }: ImageEvidenceFormProps) {
   const [files, setFiles] = useState<File[]>([]);
   const [explanation, setExplanation] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [failed, setFailed] = useState(false);
+  const [composerRevision, setComposerRevision] = useState(0);
+  const [recorderBusy, setRecorderBusy] = useState(false);
+  const [selection, setSelection] = useState({ start: 0, end: 0 });
   const submitting = useRef(false);
+  const recorderBusyRef = useRef(false);
+  const handleRecorderBusy = useCallback((nextBusy: boolean) => {
+    recorderBusyRef.current = nextBusy;
+    setRecorderBusy(nextBusy);
+  }, []);
+  useEffect(() => {
+    if (!speechCapability) handleRecorderBusy(false);
+  }, [handleRecorderBusy, speechCapability]);
   const images = submittedEvidence.filter((item) => item.evidenceType === "image");
   const remaining = Math.max(0, capability.maxCount - images.length);
+  const clearComposer = () => { setExplanation(""); setSelection({ start: 0, end: 0 }); setComposerRevision((current) => current + 1); };
   const choose = (selected: FileList | readonly File[] | null, append = false) => {
     const selectedFiles = Array.from(selected ?? []);
     const unsupported = selectedFiles.find((file) => !capability.formats.includes(file.type));
@@ -86,7 +100,7 @@ export function ImageEvidenceForm({ ownerUserId = "current-owner", sessionId, ca
   };
   const submit = async (event?: React.FormEvent) => {
     event?.preventDefault();
-    if (submitting.current || (files.length === 0 && !explanation.trim()) || (files.length > 0 && !explanation.trim())) return;
+    if (recorderBusyRef.current || submitting.current || (files.length === 0 && !explanation.trim()) || (files.length > 0 && !explanation.trim())) return;
     submitting.current = true;
     setBusy(true); setMessage(""); setFailed(false);
     const normalizedExplanation = explanation.trim();
@@ -96,7 +110,7 @@ export function ImageEvidenceForm({ ownerUserId = "current-owner", sessionId, ca
           ? { evidenceType: "url", sourceUrl: normalizedExplanation, textContent: "", metadata: {} }
           : { evidenceType: "text", textContent: normalizedExplanation, metadata: {} };
         const response = await onSubmitEvidence(payload);
-        setExplanation("");
+        clearComposer();
         setMessage(response.syncPending ? "Evidence saved, waiting for Agent sync." : "Evidence submitted.");
       } catch (error) { setFailed(true); setMessage(getSafeErrorMessage(error)); }
       finally { submitting.current = false; setBusy(false); }
@@ -122,7 +136,7 @@ export function ImageEvidenceForm({ ownerUserId = "current-owner", sessionId, ca
         pending.shift();
         setFiles([...pending]);
       }
-      setExplanation("");
+      clearComposer();
       setMessage("Image evidence uploaded.");
     } catch (error) {
       const retryable = isApiError(error) ? error.retryable : true;
@@ -138,9 +152,11 @@ export function ImageEvidenceForm({ ownerUserId = "current-owner", sessionId, ca
       <label htmlFor={`${sessionId}-composer`}>Learning evidence</label>
       <textarea id={`${sessionId}-composer`} className="input min-h-32 resize-y" value={explanation}
         placeholder="Write or paste notes, an explanation, or a single URL"
-        onChange={(event) => setExplanation(event.target.value)}
+        onChange={(event) => { setExplanation(event.target.value); setComposerRevision((current) => current + 1); }}
+        onSelect={(event) => { setSelection({ start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd }); }}
         onPaste={(event) => { const pasted = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (allowAttachments && pasted.length) { event.preventDefault(); choose(pasted, true); } }} />
     </div>
+    {speechCapability ? <div className="flex flex-wrap items-center gap-2"><SpeechRecorderControl sessionId={sessionId} composerRevision={composerRevision} selectionStart={selection.start} selectionEnd={selection.end} capability={speechCapability} disabled={busy} canStart={() => !submitting.current} onBusyChange={handleRecorderBusy} onTranscript={(text, fence) => { if (fence.sessionId !== sessionId || fence.composerRevision !== composerRevision) return; setExplanation((current) => current.slice(0, fence.selectionStart) + text + current.slice(fence.selectionEnd)); setComposerRevision((current) => current + 1); }} /></div> : null}
     {files.length ? <ul aria-label="Images ready to upload" className="grid gap-2">{files.map((file, index) => <li key={`${index}-${file.name}-${file.size}`} className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-line px-3 py-2 text-sm">
       <span className="min-w-0"><span className="block truncate font-medium">{file.name}</span><span className="text-xs text-slate-600">{file.type} · {Math.max(1, Math.ceil(file.size / 1024))} KB</span></span>
       <button type="button" className="btn secondary h-10 w-10 shrink-0 p-0" aria-label={`Remove ${file.name}`} title={`Remove ${file.name}`} disabled={busy} onClick={() => setFiles((items) => items.filter((item) => item !== file))}><Trash2 size={16} aria-hidden /></button>
@@ -152,7 +168,7 @@ export function ImageEvidenceForm({ ownerUserId = "current-owner", sessionId, ca
       </label>
       <span className="text-xs text-slate-600">Drop or paste images · {capability.maxCount} max</span>
     </div> : null}
-    <button className="btn w-fit" type="submit" disabled={busy || (files.length === 0 && !explanation.trim())}><Send size={16} aria-hidden />{busy ? "Submitting..." : "Submit evidence"}</button>
+    <button className="btn w-fit" type="submit" disabled={busy || recorderBusy || (files.length === 0 && !explanation.trim())}><Send size={16} aria-hidden />{busy ? "Submitting..." : "Submit evidence"}</button>
     {message ? <p role={failed ? "alert" : "status"} aria-live="polite" className={failed ? "text-sm text-red-700" : "text-sm text-slate-700"}>{message}</p> : null}
   </form>;
   return <section className="grid gap-4 border-t border-line pt-4" aria-labelledby={`${sessionId}-image-heading`}>

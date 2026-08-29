@@ -1,5 +1,5 @@
 import { ApiError, mapApiError } from "./errors";
-import type { CreateSessionInput, FocusProofEvent, ImageEvidenceResponse, ReviewProjection, RuntimeReviewResult, SessionDetail, SubmitEvidenceRequest, SyncResponse } from "./contracts";
+import type { CreateSessionInput, FocusProofEvent, ImageEvidenceResponse, ReviewProjection, RuntimeReviewResult, SessionDetail, SubmitEvidenceRequest, SyncResponse, TranscriptionResponse } from "./contracts";
 import { fetchWithOidcAccessToken } from "@/lib/auth/browser";
 
 async function parseResponsePayload(response: Response): Promise<unknown> {
@@ -36,10 +36,10 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-async function requestMultipart<T>(path: string, body: FormData): Promise<T> {
+async function requestMultipart<T>(path: string, body: FormData, init?: Omit<RequestInit, "body" | "method">): Promise<T> {
   let response: Response;
   try {
-    response = await fetchWithOidcAccessToken("/api/focusproof" + path, { method: "POST", body });
+    response = await fetchWithOidcAccessToken("/api/focusproof" + path, { ...init, method: "POST", body });
   } catch (error) {
     throw mapApiError(0, { code: "network_error", retryable: true, error: String(error) });
   }
@@ -63,6 +63,12 @@ export const focusProofApi = {
   getSession: (sessionId: string) => requestJson<SessionDetail>("/sessions/" + encodeURIComponent(sessionId)),
   submitEvidence: (sessionId: string, input: SubmitEvidenceRequest) => requestJson<SyncResponse>("/sessions/" + encodeURIComponent(sessionId) + "/evidence", { method: "POST", body: JSON.stringify(input) }),
   submitImageEvidence: (sessionId: string, form: FormData) => requestMultipart<ImageEvidenceResponse>("/sessions/" + encodeURIComponent(sessionId) + "/evidence/image", form),
+  transcribe: (sessionId: string, file: File, languageHint: "auto" | "zh" | "en", idempotencyKey: string, signal: AbortSignal) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("languageHint", languageHint);
+    return requestMultipart<TranscriptionResponse>("/sessions/" + encodeURIComponent(sessionId) + "/transcriptions", form, { headers: { "Idempotency-Key": idempotencyKey }, signal });
+  },
   submitAnswer: (sessionId: string, input: { questionId: string; answer: string }) => requestJson<SyncResponse>("/sessions/" + encodeURIComponent(sessionId) + "/answer", { method: "POST", body: JSON.stringify(input) }),
   requestReview: (sessionId: string) => requestJson<RuntimeReviewResult>("/sessions/" + encodeURIComponent(sessionId) + "/review", { method: "POST", body: JSON.stringify({}) }),
   getEvents: (sessionId: string) => requestJson<{ events: FocusProofEvent[] }>("/sessions/" + encodeURIComponent(sessionId) + "/events"),

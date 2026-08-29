@@ -1,13 +1,14 @@
 "use client";
 
 import React from "react";
-import type { Evidence, ImageEvidenceCapability, ImageEvidenceResponse, SubmitEvidenceRequest, SyncResponse } from "@/lib/api/contracts";
+import type { Evidence, ImageEvidenceCapability, ImageEvidenceResponse, SpeechTranscriptionCapabilityEnabled, SubmitEvidenceRequest, SyncResponse } from "@/lib/api/contracts";
 import { ImageEvidenceForm } from "./ImageEvidenceForm";
 
 export function EvidencePanel({
   sessionId, ownerUserId,
   submittedEvidence = [],
   imageCapability = null,
+  speechCapability = null,
   onUploadImage,
   onSubmitEvidence
 }: {
@@ -15,6 +16,7 @@ export function EvidencePanel({
   submittedEvidence?: Evidence[];
   includeWeb3Mode?: boolean;
   imageCapability?: ImageEvidenceCapability | null;
+  speechCapability?: SpeechTranscriptionCapabilityEnabled | null;
   onUploadImage?: (form: FormData) => Promise<ImageEvidenceResponse>;
   onSubmitEvidence: (payload: SubmitEvidenceRequest) => Promise<Pick<SyncResponse, "syncPending">>;
 }) {
@@ -22,7 +24,7 @@ export function EvidencePanel({
   return (
     <section className="panel grid gap-4 p-4" aria-labelledby="evidence-heading">
       <h2 id="evidence-heading" className="text-base font-semibold">Submit evidence</h2>
-      <ImageEvidenceForm unified allowAttachments={Boolean(imageCapability && onUploadImage)} ownerUserId={ownerUserId} sessionId={sessionId} capability={fallbackCapability} submittedEvidence={submittedEvidence} onUpload={onUploadImage ?? (async () => { throw new Error("Image evidence is unavailable."); })} onSubmitEvidence={onSubmitEvidence} />
+      <ImageEvidenceForm unified allowAttachments={Boolean(imageCapability && onUploadImage)} ownerUserId={ownerUserId} sessionId={sessionId} capability={fallbackCapability} speechCapability={speechCapability} submittedEvidence={submittedEvidence} onUpload={onUploadImage ?? (async () => { throw new Error("Image evidence is unavailable."); })} onSubmitEvidence={onSubmitEvidence} />
       {submittedEvidence.length > 0 ? (
         <div aria-label="Submitted evidence" className="grid gap-2">
           <h3 className="font-medium">Submitted evidence</h3>
