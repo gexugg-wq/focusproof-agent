@@ -24,7 +24,7 @@ def real_asr_env() -> dict[str, str]:
         "FOCUSPROOF_ASR_BASE_URL": (
             "https://dashscope.aliyuncs.com/compatible-mode/v1"
         ),
-        "DASHSCOPE_API_KEY": "test-asr-secret",
+        "DASHSCOPE_API_KEY": "placeholder",
         "FOCUSPROOF_ASR_E2E_TIMEOUT_SECONDS": "120",
         "FOCUSPROOF_ASR_MAX_CONCURRENCY": "4",
         "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEY": "test-hmac-secret",
@@ -43,7 +43,7 @@ def test_missing_real_asr_configuration_disables_only_speech() -> None:
 def test_review_llm_settings_cannot_silently_enable_speech() -> None:
     capability = build_speech_capability(
         {
-            "DASHSCOPE_API_KEY": "review-secret",
+            "DASHSCOPE_API_KEY": "placeholder",
             "DASHSCOPE_BASE_URL": "https://example.invalid/v1",
             "DASHSCOPE_MODEL": "openai/qwen-plus",
         }
@@ -77,7 +77,7 @@ def test_invalid_real_asr_configuration_fails_closed_without_secret_leakage() ->
         "enabled": False,
         "reasonCode": "asr_configuration_invalid",
     }
-    assert "test-asr-secret" not in repr(capability)
+    assert "placeholder" not in repr(capability)
 
 
 def test_speech_settings_are_frozen_and_keep_secrets_out_of_repr() -> None:
@@ -89,7 +89,7 @@ def test_speech_settings_are_frozen_and_keep_secrets_out_of_repr() -> None:
     assert settings.e2e_timeout_seconds == 120
     assert settings.business_timeout_seconds == 115
     assert settings.max_concurrency == 4
-    assert "test-asr-secret" not in repr(settings)
+    assert "placeholder" not in repr(settings)
     assert "test-hmac-secret" not in repr(settings)
     with pytest.raises(FrozenInstanceError):
         settings.model = "different"  # type: ignore[misc]

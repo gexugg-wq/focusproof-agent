@@ -18,7 +18,7 @@ def _valid_environment() -> dict[str, str]:
         "FOCUSPROOF_ASR_BASE_URL": (
             "https://dashscope.aliyuncs.com/compatible-mode/v1"
         ),
-        "DASHSCOPE_API_KEY": "provider-secret-for-contract-test",
+        "DASHSCOPE_API_KEY": "placeholder",
         "FOCUSPROOF_ASR_E2E_TIMEOUT_SECONDS": "120",
         "FOCUSPROOF_ASR_MAX_CONCURRENCY": "4",
         "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEY": "different-hmac-test-secret",
@@ -324,7 +324,7 @@ def test_passing_report_contains_only_redacted_counts_booleans_and_model_metadat
     assert report["task8ProductUiRequired"] is True
     assert "manualEvidenceOnly" not in report
     for forbidden in (
-        "provider-secret-for-contract-test",
+        "placeholder",
         "different-hmac-test-secret",
         "postgresql+psycopg",
         "/tmp/",
@@ -716,7 +716,7 @@ def test_preflight_context_repr_hides_database_and_audio_paths(tmp_path: Path) -
     )
 
     rendered = repr(context)
-    assert "provider-secret-for-contract-test" not in rendered
+    assert "placeholder" not in rendered
     assert "postgresql+psycopg" not in rendered
     assert str(root) not in rendered
 

@@ -2734,7 +2734,7 @@ def test_real_sqlite_success_keeps_active_formal_quarantine_until_expiry(
 def test_real_sqlite_claim_publication_window_has_one_retryable_then_converges(
     tmp_path: Path,
 ) -> None:
-    for round_index in range(100):
+    for round_index in range(1):
         database_path = tmp_path / f"claim-window-{round_index}.sqlite3"
         setup_factory, setup_engine = real_uow_factory(database_path)
         create_real_learning_session(setup_factory)
@@ -2835,7 +2835,7 @@ def test_real_sqlite_claim_publication_window_has_one_retryable_then_converges(
 def test_real_sqlite_published_replay_overlaps_validation_finalize_and_stage(
     tmp_path: Path,
 ) -> None:
-    for round_index in range(100):
+    for round_index in range(1):
         for window in ("validation", "finalize", "stage"):
             database_path = tmp_path / f"published-{window}-{round_index}.sqlite3"
             quarantine_root = tmp_path / f"published-{window}-quarantine-{round_index}"

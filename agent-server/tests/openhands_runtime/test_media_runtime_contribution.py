@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from collections.abc import Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar, Self
 
 import pytest
@@ -268,13 +269,27 @@ def _install_lifespan_doubles(
     if media_enabled:
         import focusproof.bootstrap.media_composition as media_composition
 
+        shared_security = SimpleNamespace(
+            malware_scanner=object(),
+            scan_slots=object(),
+            speech_prerequisites_available=False,
+        )
+
+        def fake_shared_media_security(*, uow_factory: object) -> SimpleNamespace:
+            assert isinstance(uow_factory, LifecycleUnitOfWorkFactory)
+            return shared_security
+
         def fake_media_command(
             *,
             uow_factory: object,
             data_dir: Path,
             session_run_lock: object,
+            malware_scanner: object,
+            resource_slot_controller: object,
         ) -> object:
             del uow_factory, data_dir
+            assert malware_scanner is shared_security.malware_scanner
+            assert resource_slot_controller is shared_security.scan_slots
             captured_media_locks.append(session_run_lock)
             return object()
 
@@ -286,6 +301,11 @@ def _install_lifespan_doubles(
             return contribution
 
         monkeypatch.setattr(media_composition, "compose_media_command", fake_media_command)
+        monkeypatch.setattr(
+            media_composition,
+            "compose_shared_media_security",
+            fake_shared_media_security,
+        )
         monkeypatch.setattr(
             media_composition,
             "compose_optional_media_runtime_contribution",

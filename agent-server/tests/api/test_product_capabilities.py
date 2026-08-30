@@ -23,15 +23,13 @@ IMAGE_CAPABILITY = {
     "explanationRequired": True,
 }
 
-FORBIDDEN_FOCUSPROOF_MEDIA_MODULE_PREFIXES = (
+FORBIDDEN_IMAGE_DELIVERY_MODULE_PREFIXES = (
     "focusproof.api.media_models",
     "focusproof.api.media_routes",
     "focusproof.bootstrap.media_composition",
     "focusproof.media_adapters",
     "focusproof.media_api",
-    "focusproof.media_application",
     "focusproof.media_contribution",
-    "focusproof.media_core",
     "focusproof.media_projection",
     "focusproof.openhands_runtime.media_evidence_facts",
     "focusproof.openhands_runtime.tools.media_evidence",
@@ -119,7 +117,7 @@ if {create_app!r}:
     app = create_app()
     routes = [getattr(route, "path", None) for route in app.routes]
 
-forbidden_prefixes = {list(FORBIDDEN_FOCUSPROOF_MEDIA_MODULE_PREFIXES)!r}
+forbidden_prefixes = {list(FORBIDDEN_IMAGE_DELIVERY_MODULE_PREFIXES)!r}
 loaded = sorted(
     name
     for name in sys.modules
@@ -156,7 +154,7 @@ print(json.dumps({{
         ("focusproof.persistence.unit_of_work",),
     ],
 )
-def test_disabled_clean_process_imports_do_not_load_focusproof_media_modules(
+def test_disabled_clean_process_imports_do_not_load_image_delivery_modules(
     media_env: str | None,
     imports: tuple[str, ...],
 ) -> None:

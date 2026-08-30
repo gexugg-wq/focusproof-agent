@@ -23,7 +23,7 @@ def _real_asr_env() -> dict[str, str]:
         "FOCUSPROOF_ASR_BASE_URL": (
             "https://dashscope.aliyuncs.com/compatible-mode/v1"
         ),
-        "DASHSCOPE_API_KEY": "test-asr-secret",
+        "DASHSCOPE_API_KEY": "placeholder",
         "FOCUSPROOF_ASR_E2E_TIMEOUT_SECONDS": "120",
         "FOCUSPROOF_ASR_MAX_CONCURRENCY": "4",
         "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEY": "test-hmac-secret",

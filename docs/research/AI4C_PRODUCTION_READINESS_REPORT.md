@@ -65,10 +65,10 @@ accepted-evidence anchors, and artifact digest binding; it does not prove that
 every mapped gate ran in this round. No real LLM is authorized or run.
 
 Current final-acceptance collected nodes: 18
-Current marker-policy collected nodes: 5
+Current marker-policy collected nodes: 7
 
-The fresh combined marker-policy and final-acceptance gate passed **23 tests**;
-its dynamically checked current split is 5 marker-policy nodes and 18
+The fresh combined marker-policy and final-acceptance gate passed **25 tests**;
+its dynamically checked current split is 7 marker-policy nodes and 18
 final-acceptance nodes. The complete default-marker AI4C directory run covered
 every test file and reported **410 passed, 13 deselected, 3 warnings in
 228.85s**, with zero failures. The non-AI4C agent-server regression reported
