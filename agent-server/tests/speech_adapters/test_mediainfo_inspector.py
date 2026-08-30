@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import gzip
+from hashlib import sha256
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -76,6 +77,24 @@ def _metadata(
         audio["Format_Profile"] = profile
     return json.dumps(
         {"media": {"track": [general, *[dict(audio) for _ in range(audio_tracks)]]}}
+    ).encode()
+
+
+def _streaming_webm_metadata(*, size: int = 16) -> bytes:
+    return json.dumps(
+        {
+            "media": {
+                "track": [
+                    {
+                        "@type": "General",
+                        "Format": "WebM",
+                        "FileSize": str(size),
+                        "extra": {"IsTruncated": "Yes"},
+                    },
+                    {"@type": "Audio", "Format": "Opus"},
+                ]
+            }
+        }
     ).encode()
 
 
@@ -251,6 +270,79 @@ async def test_command_is_networkless_read_only_bounded_and_uses_one_input(
 
 
 @pytest.mark.anyio
+async def test_missing_duration_is_rejected_after_one_mediainfo_call(tmp_path: Path) -> None:
+    path = tmp_path / "input.webm"
+    path.write_bytes(b"x" * 16)
+    runner = RecordingRunner(_streaming_webm_metadata())
+
+    with pytest.raises(AudioValidationError) as caught:
+        await _inspector(runner).inspect(
+            path,
+            declared_media_type="audio/webm;codecs=opus",
+            deadline=time.monotonic() + 30,
+        )
+
+    assert caught.value.code is SpeechErrorCode.INVALID_AUDIO
+    assert len(runner.calls) == 1
+
+
+def test_prerequisites_require_only_mediainfo_and_sandbox_tools(tmp_path: Path) -> None:
+    executables = [
+        *(tmp_path / name for name in ("mediainfo", "bwrap", "prlimit")),
+    ]
+    for path in executables:
+        path.write_bytes(b"tool")
+        path.chmod(0o700)
+
+    assert MediainfoAudioInspector.prerequisites_available(
+        mediainfo_path=executables[0],
+        bubblewrap_path=executables[1],
+        prlimit_path=executables[2],
+    )
+
+    executables[0].chmod(0o600)
+    assert not MediainfoAudioInspector.prerequisites_available(
+        mediainfo_path=executables[0],
+        bubblewrap_path=executables[1],
+        prlimit_path=executables[2],
+    )
+
+
+@pytest.mark.anyio
+async def test_real_linux_sandbox_accepts_chromium_complete_fixture(tmp_path: Path) -> None:
+    fixture_root = Path(__file__).resolve().parents[1] / "fixtures" / "audio"
+    encoded = (fixture_root / "chromium-complete.webm.gz.b64").read_bytes()
+    path = tmp_path / "input.webm"
+    path.write_bytes(gzip.decompress(base64.b64decode(encoded, validate=False)))
+
+    facts = await MediainfoAudioInspector().inspect(
+        path,
+        declared_media_type="audio/webm;codecs=opus",
+        deadline=time.monotonic() + 2,
+    )
+
+    assert facts.audio_format is AudioFormat.WEBM_OPUS
+    assert 0 < facts.duration_ms <= 120_000
+
+
+@pytest.mark.anyio
+async def test_real_linux_sandbox_rejects_chromium_timeslice_fixture(tmp_path: Path) -> None:
+    fixture_root = Path(__file__).resolve().parents[1] / "fixtures" / "audio"
+    encoded = (fixture_root / "chromium-streaming.webm.gz.b64").read_bytes()
+    path = tmp_path / "input.webm"
+    path.write_bytes(gzip.decompress(base64.b64decode(encoded, validate=False)))
+
+    with pytest.raises(AudioValidationError) as caught:
+        await MediainfoAudioInspector().inspect(
+            path,
+            declared_media_type="audio/webm;codecs=opus",
+            deadline=time.monotonic() + 2,
+        )
+
+    assert caught.value.code is SpeechErrorCode.INVALID_AUDIO
+
+
+@pytest.mark.anyio
 async def test_process_runner_never_uses_shell_or_inherited_environment() -> None:
     observed: dict[str, object] = {}
 
@@ -313,6 +405,8 @@ async def test_process_runner_terminates_the_group_at_deadline() -> None:
         ("valid.webm.gz.b64", b"\x1aE\xdf\xa3", None),
         ("multitrack.webm.gz.b64", b"\x1aE\xdf\xa3", None),
         ("truncated.webm.gz.b64", b"\x1aE\xdf\xa3", 64),
+        ("chromium-complete.webm.gz.b64", b"\x1aE\xdf\xa3", 688),
+        ("chromium-streaming.webm.gz.b64", b"\x1aE\xdf\xa3", 15_727),
     ],
 )
 def test_synthetic_fixture_sources_decode_to_expected_container_headers(
@@ -329,3 +423,27 @@ def test_synthetic_fixture_sources_decode_to_expected_container_headers(
     assert len(payload) > len(magic)
     if exact_size is not None:
         assert len(payload) == exact_size
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "expected_hash"),
+    [
+        (
+            "chromium-complete.webm.gz.b64",
+            "f0fcf8a8f9f1ab4043d31ae22dc28011f31bea195b012198b3f3e148d2d697d6",
+        ),
+        (
+            "chromium-streaming.webm.gz.b64",
+            "46b10fa72e126ee22e8610c76b5e1c26a4434de4f90fce32b07729d84522d313",
+        ),
+    ],
+)
+def test_chromium_fixtures_match_documented_provenance_hashes(
+    fixture_name: str,
+    expected_hash: str,
+) -> None:
+    fixture_root = Path(__file__).resolve().parents[1] / "fixtures" / "audio"
+    encoded = (fixture_root / fixture_name).read_bytes()
+    payload = gzip.decompress(base64.b64decode(encoded, validate=False))
+
+    assert sha256(payload).hexdigest() == expected_hash

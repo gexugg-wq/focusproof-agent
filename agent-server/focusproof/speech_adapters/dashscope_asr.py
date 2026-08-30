@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import time
 from types import TracebackType
@@ -16,18 +17,12 @@ from focusproof.speech_core.errors import (
 from focusproof.speech_core.models import (
     DASHSCOPE_ASR_BASE_URL,
     DASHSCOPE_ASR_MODEL,
-    AudioFormat,
     TranscriptionRequest,
     TranscriptionResult,
 )
 
-_TRANSCRIPTIONS_URL = f"{DASHSCOPE_ASR_BASE_URL}/audio/transcriptions"
+_CHAT_COMPLETIONS_URL = f"{DASHSCOPE_ASR_BASE_URL}/chat/completions"
 _MAX_RESPONSE_BYTES = 256 * 1024
-_SAFE_FILENAMES = {
-    AudioFormat.WEBM_OPUS: "audio.webm",
-    AudioFormat.WAV_PCM: "audio.wav",
-    AudioFormat.MP3: "audio.mp3",
-}
 
 
 class DashScopeSpeechTranscriptionProvider:
@@ -52,21 +47,28 @@ class DashScopeSpeechTranscriptionProvider:
         if deadline <= time.monotonic():
             raise SpeechProviderError(SpeechErrorCode.TRANSCRIPTION_TIMEOUT)
         try:
-            with request.audio_path.open("rb") as audio:
-                async with asyncio.timeout_at(deadline):
-                    async with self._client.stream(
-                        "POST",
-                        _TRANSCRIPTIONS_URL,
-                        headers={"Authorization": f"Bearer {self._api_key}"},
-                        data={"model": DASHSCOPE_ASR_MODEL},
-                        files={
-                            "file": (
-                                _SAFE_FILENAMES[request.facts.audio_format],
-                                audio,
-                                request.facts.media_type,
-                            )
-                        },
-                    ) as response:
+            async with asyncio.timeout_at(deadline):
+                audio_data = await asyncio.to_thread(request.audio_path.read_bytes)
+                encoded_audio = await asyncio.to_thread(base64.b64encode, audio_data)
+                request_payload = {
+                    "model": DASHSCOPE_ASR_MODEL,
+                    "messages": [{
+                        "role": "user",
+                        "content": [{
+                            "type": "input_audio",
+                            "input_audio": {
+                                "data": f"data:{request.facts.media_type};base64,{encoded_audio.decode('ascii')}"
+                            },
+                        }],
+                    }],
+                    "stream": False,
+                }
+                async with self._client.stream(
+                    "POST",
+                    _CHAT_COMPLETIONS_URL,
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    json=request_payload,
+                ) as response:
                         self._raise_for_status(response.status_code)
                         payload = await self._read_bounded(response)
         except SpeechProviderError:
@@ -132,7 +134,16 @@ class DashScopeSpeechTranscriptionProvider:
             raise SpeechProviderError(SpeechErrorCode.TRANSCRIPTION_FAILED) from None
         if not isinstance(decoded, dict):
             raise SpeechProviderError(SpeechErrorCode.TRANSCRIPTION_FAILED)
-        transcript = decoded.get("text")
+        choices = decoded.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise SpeechProviderError(SpeechErrorCode.TRANSCRIPTION_FAILED)
+        first_choice = choices[0]
+        if not isinstance(first_choice, dict):
+            raise SpeechProviderError(SpeechErrorCode.TRANSCRIPTION_FAILED)
+        message = first_choice.get("message")
+        if not isinstance(message, dict):
+            raise SpeechProviderError(SpeechErrorCode.TRANSCRIPTION_FAILED)
+        transcript = message.get("content")
         if not isinstance(transcript, str):
             raise SpeechProviderError(SpeechErrorCode.TRANSCRIPTION_FAILED)
         if not transcript.strip():

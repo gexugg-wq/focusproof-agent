@@ -11,6 +11,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 STAGING_FILE = "agent-server/tests/ai4c/test_staging_stack.py"
 EXTERNAL_TEST = "test_staging_external_stack_builds_runs_and_preserves_ids"
 EXTERNAL_NODE = f"{STAGING_FILE}::{EXTERNAL_TEST}"
+REAL_ASR_FILE = "agent-server/tests/speech_acceptance/test_real_speech_gate_external.py"
+REAL_ASR_NODE = REAL_ASR_FILE + "::test_authorized_real_speech_gate"
 
 
 def _collect(*arguments: str) -> subprocess.CompletedProcess[str]:
@@ -69,12 +71,31 @@ def test_explicit_staging_external_marker_overrides_default_for_collection_only(
     assert collected_nodes == [EXTERNAL_NODE]
 
 
+def test_default_pytest_policy_excludes_real_asr_from_whole_file() -> None:
+    result = _collect(REAL_ASR_FILE)
+
+    assert result.returncode == 5
+    assert REAL_ASR_NODE not in result.stdout
+    assert "1 deselected" in result.stdout
+
+
+def test_explicit_real_asr_marker_selects_only_authorized_node_for_collection() -> None:
+    result = _collect(REAL_ASR_FILE, "-m", "real_asr")
+
+    assert result.returncode == 0, result.stderr
+    collected_nodes = [
+        line
+        for line in result.stdout.splitlines()
+        if line.startswith(REAL_ASR_FILE + "::")
+    ]
+    assert collected_nodes == [REAL_ASR_NODE]
+
 def test_marker_policy_uses_pytest_configuration_without_collection_hooks() -> None:
     configuration = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     addopts = configuration["tool"]["pytest"]["ini_options"]["addopts"]
 
     assert "-m" in addopts
-    for marker in ("real_llm", "postgres", "staging_external"):
+    for marker in ("real_llm", "real_asr", "postgres", "staging_external"):
         assert f"not {marker}" in addopts
 
     conftests = (PROJECT_ROOT / "agent-server" / "tests").rglob("conftest.py")

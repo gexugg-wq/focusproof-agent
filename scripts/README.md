@@ -95,3 +95,68 @@ Build Log comes only from the official events endpoint; native Action/Observatio
 validated independently from the review response. The helper inherits a pre-bound loopback
 socket and sets LiteLLM's official `LITELLM_MODE=PRODUCTION` switch to prevent implicit `.env`
 loading.
+
+# Real speech acceptance gate
+
+Run this gate only on Linux/Python 3.12 after deliberately provisioning all
+production dependencies: a disposable PostgreSQL database named with the
+`focusproof_test_task3_` prefix, a healthy real Clamd endpoint, and executable
+`/usr/bin/bwrap`, `/usr/bin/mediainfo`, and `/usr/bin/prlimit`. Production
+inspection executes one sandboxed MediaInfo command and rejects audio when
+MediaInfo cannot prove a positive duration, including truncated seekless WebM.
+The browser recorder therefore emits one complete WebM/Opus chunk without a
+timeslice or `requestData()`. Configure the existing speech and media settings
+through the process environment or the
+project's allowlisted environment loader. Never place credentials on the
+command line.
+
+The default invocation refuses to execute. A real run requires explicit
+authorization, three absolute recordings under
+`/tmp/focusproof-real-speech/`, and explicit authorization:
+
+```bash
+.venv/bin/python scripts/run_real_speech_gate.py \
+  --authorized \
+  --report /tmp/focusproof-real-speech-report.json \
+  --chinese /tmp/focusproof-real-speech/chinese.webm \
+  --english /tmp/focusproof-real-speech/english.webm \
+  --mixed /tmp/focusproof-real-speech/mixed.webm
+```
+
+The gate reuses the production DashScope ASR adapter, TranscriptionService,
+Clamd scanner, UoW, repositories, and shared resource slots. It performs one
+provider call per clip with no retry; the model remains the configured
+`qwen3-asr-flash` Beijing ASR model. It also runs the real Clamd
+clean/EICAR/timeout/unavailable/error/oversize matrix and four real PostgreSQL
+concurrency/idempotency/slot/recovery checks. Task 7 requires exactly-once nonblank candidates; languageFeatureCount is diagnostic only.
+
+Exit 0 means every real stage passed. Exit 1 is a redacted failure. Exit 2 is a
+redacted refusal or missing prerequisite. The JSON report contains only status,
+model metadata, bounded durations, counts, and booleans—never credentials,
+endpoints, database URLs, local paths, audio, or candidate text.
+The gate never writes candidates to Evidence, the database, OpenHands, scoring,
+logs, or the report. The report always sets `productManualSubmitProved` to false.
+It does not prove that a user edited a candidate and clicked the product's
+Submit Evidence control. That browser-to-product Evidence journey remains an
+explicit Task 8 acceptance requirement and must not be inferred from this
+script's report.
+
+Ordinary pytest runs exclude the external test. After separately authorizing
+the same environment and three path variables, collect or run it explicitly:
+
+```bash
+PYTHONPATH=.:agent-server .venv/bin/pytest -m real_asr \
+  agent-server/tests/speech_acceptance/test_real_speech_gate_external.py
+```
+
+The gate does not start or remove Docker resources. The operator must use
+fresh, uniquely named PostgreSQL and Clamd containers, health-check them, and
+remove only those containers and volumes in a finally-style cleanup after the
+run.
+
+The PostgreSQL database must be newly created, use the `public` current schema,
+and contain no user objects in any non-system schema. Database URL options that
+override schema or search path are rejected. Freshness is checked again
+immediately before the destructive PostgreSQL acceptance nodes. Discard the
+explicitly named database container and volume after the run; never reuse that
+database for another gate.

@@ -46,10 +46,11 @@ mypy_path = ["agent-server"]
 explicit_package_bases = true
 exclude = ["^agent-server/tests/"]
 [tool.pytest.ini_options]
-addopts = "-m 'not real_llm and not postgres and not staging_external'"
+addopts = "-m 'not real_llm and not real_asr and not postgres and not staging_external'"
 markers = [
     "real_llm: runs the separately authorized bounded OpenHands provider smoke",
     "postgres: requires an explicitly provided disposable PostgreSQL target",
+    "real_asr: runs the separately authorized real DashScope speech acceptance gate",
     "postgres_media: requires an explicitly provided disposable PostgreSQL media target",
     "staging_external: requires explicitly authorized external staging services",
 ]

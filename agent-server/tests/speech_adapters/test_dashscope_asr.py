@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import time
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -43,7 +45,7 @@ class CaptureTransport(httpx.AsyncBaseTransport):
         self,
         *,
         status_code: int = 200,
-        chunks: tuple[bytes, ...] = (b'{"text":"hello"}',),
+        chunks: tuple[bytes, ...] = (b'{"choices":[{"message":{"content":"hello"}}]}',),
         failure: Exception | None = None,
     ) -> None:
         self.status_code = status_code
@@ -110,8 +112,8 @@ async def _call(
 async def test_posts_exact_beijing_contract_and_returns_only_text(tmp_path: Path) -> None:
     transport = CaptureTransport(
         chunks=(
-            b'{"text":"hello world","emotion":"happy",',
-            b'"acoustic":{"speaker":"x"}}',
+            b'{"choices":[{"message":{"content":"hello world"}}],',
+            b'"emotion":"happy","acoustic":{"speaker":"x"}}',
         )
     )
 
@@ -124,21 +126,28 @@ async def test_posts_exact_beijing_contract_and_returns_only_text(tmp_path: Path
     request = transport.request
     assert request is not None
     assert str(request.url) == (
-        "https://dashscope.aliyuncs.com/compatible-mode/v1/audio/transcriptions"
+        "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
     )
     assert request.headers["authorization"] == "Bearer provider-secret"
-    assert request.headers["content-type"].startswith("multipart/form-data; boundary=")
-    assert b'name="model"' in transport.request_body
-    assert b"qwen3-asr-flash" in transport.request_body
-    assert b'name="file"; filename="audio.wav"' in transport.request_body
-    assert b"RIFF-private-audio" in transport.request_body
-    assert b'name="language"' not in transport.request_body
-    assert b'name="prompt"' not in transport.request_body
+    assert request.headers["content-type"] == "application/json"
+    encoded = json.loads(transport.request_body)
+    assert encoded["model"] == "qwen3-asr-flash"
+    assert encoded["stream"] is False
+    audio = encoded["messages"][0]["content"][0]["input_audio"]
+    assert audio["data"].startswith("data:audio/wav;base64,")
+    assert "language" not in encoded
+    assert "prompt" not in encoded
     assert not hasattr(result, "emotion")
     assert not hasattr(result, "acoustic")
 
 
-@pytest.mark.parametrize("payload", [b'{"text":""}', b'{"text":"  \\n"}'])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b'{"choices":[{"message":{"content":""}}]}',
+        b'{"choices":[{"message":{"content":"  \\n"}}]}',
+    ],
+)
 async def test_blank_transcript_maps_to_no_speech(tmp_path: Path, payload: bytes) -> None:
     with pytest.raises(SpeechProviderError) as caught:
         await _call(tmp_path, CaptureTransport(chunks=(payload,)))
@@ -151,9 +160,10 @@ async def test_blank_transcript_maps_to_no_speech(tmp_path: Path, payload: bytes
     [
         b"not-json",
         b"{",
-        b'{"other":"field"}',
-        b'{"text":42}',
-        b'{"text":"\\xff"}',
+        b'{"choices":[]}',
+        b'{"choices":[{"message":{}}]}',
+        b'{"choices":[{"message":{"content":42}}]}',
+        b'{"choices":[{"message":{"content":"\\xff"}}]}',
         b"\xff",
     ],
 )
@@ -253,8 +263,31 @@ async def test_expired_deadline_never_calls_provider(tmp_path: Path) -> None:
     assert transport.calls == 0
 
 
+async def test_file_read_and_encoding_obey_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import focusproof.speech_adapters.dashscope_asr as adapter
+
+    async def delayed_to_thread(function: Any, *args: Any) -> Any:
+        await asyncio.sleep(0.05)
+        return function(*args)
+
+    monkeypatch.setattr(adapter.asyncio, "to_thread", delayed_to_thread)
+    transport = CaptureTransport()
+
+    with pytest.raises(SpeechAmbiguousError):
+        await _call(
+            tmp_path,
+            transport,
+            deadline=time.monotonic() + 0.005,
+        )
+
+    assert transport.calls == 0
+
+
 async def test_valid_utf16_json_is_rejected_as_non_utf8(tmp_path: Path) -> None:
-    payload = '{"text":"private candidate"}'.encode("utf-16")
+    payload = '{"choices":[{"message":{"content":"private candidate"}}]}'.encode("utf-16")
 
     with pytest.raises(SpeechProviderError) as caught:
         await _call(tmp_path, CaptureTransport(chunks=(payload,)))

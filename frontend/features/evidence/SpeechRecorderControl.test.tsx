@@ -14,12 +14,15 @@ const capability: SpeechTranscriptionCapabilityEnabled = {
 
 class FakeRecorder extends EventTarget {
   static last: FakeRecorder | null = null;
+  static startArguments: unknown[][] = [];
+  static requestDataCalls = 0;
   static isTypeSupported = vi.fn((type: string) => type === "audio/webm;codecs=opus");
   state: RecordingState = "inactive";
   static payload = "audio";
   mimeType: string;
   constructor(_stream: MediaStream, options: MediaRecorderOptions) { super(); this.mimeType = options.mimeType ?? ""; FakeRecorder.last = this; }
-  start() { this.state = "recording"; }
+  start(...args: unknown[]) { FakeRecorder.startArguments.push(args); this.state = "recording"; }
+  requestData() { FakeRecorder.requestDataCalls += 1; }
   stop() {
     if (this.state === "inactive") return;
     this.state = "inactive";
@@ -46,6 +49,8 @@ describe("SpeechRecorderControl", () => {
     current = makeStream();
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     FakeRecorder.payload = "audio";
+    FakeRecorder.startArguments = [];
+    FakeRecorder.requestDataCalls = 0;
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn().mockImplementation(() => Promise.resolve(current.stream)) } });
   });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -59,6 +64,16 @@ describe("SpeechRecorderControl", () => {
     await waitFor(() => expect(transcript).toHaveBeenCalledWith("  raw transcript\n", expect.objectContaining({ sessionId: "sess_1", selectionStart: 2 })));
     expect(transcribe).toHaveBeenCalledTimes(1);
     expect(current.track.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("records one complete WebM chunk without timeslices or requestData", async () => {
+    render(<SpeechRecorderControl sessionId="sess_1" composerRevision={0} selectionStart={0} selectionEnd={0} capability={capability} onTranscript={vi.fn()} transcribe={vi.fn().mockResolvedValue({ transcript: "raw" })} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /start recording/i }));
+    await userEvent.click(screen.getByRole("button", { name: /stop recording/i }));
+
+    expect(FakeRecorder.startArguments).toEqual([[]]);
+    expect(FakeRecorder.requestDataCalls).toBe(0);
   });
 
   it("shows a stable permission error without attempting transcription", async () => {
