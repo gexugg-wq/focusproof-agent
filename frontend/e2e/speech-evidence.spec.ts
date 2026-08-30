@@ -104,6 +104,7 @@ async function installFakeRecorder(page: Page, mode: MediaMode = "allowed") {
 type MockApiOptions = {
   transcript?: string;
   transcriptionStatus?: number;
+  transcriptionError?: { status: number; code: string; retryable?: boolean };
   onTranscription?: (route: Route, attempt: number) => Promise<void>;
 };
 
@@ -119,6 +120,11 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       transcriptionAttempts += 1;
       if (options.onTranscription) {
         await options.onTranscription(route, transcriptionAttempts);
+        return;
+      }
+      if (options.transcriptionError) {
+        const { status, code, retryable } = options.transcriptionError;
+        await route.fulfill({ status, json: { code, ...(retryable === undefined ? {} : { retryable }) } });
         return;
       }
       const status = options.transcriptionStatus ?? 200;
@@ -209,17 +215,69 @@ test("shows a permission denial without attempting transcription", async ({ page
   expect(api.transcriptionAttempts()).toBe(0);
 });
 
-test("preserves existing composer text when transcription fails", async ({ page }) => {
+test("preserves existing composer text and refuses retry for a non-retryable failure", async ({ page }) => {
   await installFakeRecorder(page);
-  const api = await mockApi(page, { transcriptionStatus: 503 });
+  const api = await mockApi(page, {
+    transcriptionError: { status: 422, code: "transcription_ambiguous", retryable: false }
+  });
   await page.goto(`/sessions/${sessionId}`);
 
   const composer = page.getByRole("textbox", { name: "Learning evidence" });
   await composer.fill("Existing user notes stay here.");
   await recordAndStop(page);
-  await expect(page.getByRole("alert").filter({ hasText: "Transcription is temporarily unavailable" })).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "ambiguous" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry transcription" })).toHaveCount(0);
   await expect(composer).toHaveValue("Existing user notes stay here.");
+  expect(api.transcriptionAttempts()).toBe(1);
   expect(api.evidenceSubmissions()).toBe(0);
+});
+
+test("retries the retained clip only after user action and submits only edited text", async ({ page }) => {
+  let releaseRetry!: () => void;
+  const retryCanFinish = new Promise<void>((resolve) => { releaseRetry = resolve; });
+  const idempotencyKeys: string[] = [];
+  await installFakeRecorder(page);
+  const api = await mockApi(page, {
+    onTranscription: async (route, attempt) => {
+      idempotencyKeys.push(route.request().headers()["idempotency-key"] ?? "");
+      if (attempt === 1) {
+        await route.fulfill({ status: 503, json: { code: "transcription_provider_unavailable", retryable: true } });
+        return;
+      }
+      await retryCanFinish;
+      await route.fulfill({ json: { requestId: "speech-retry", transcript: rawTranscript, provider: "dashscope", model: "qwen3-asr-flash" } });
+    }
+  });
+  await page.goto(`/sessions/${sessionId}`);
+
+  const composer = page.getByRole("textbox", { name: "Learning evidence" });
+  await recordAndStop(page);
+  await expect(page.getByRole("button", { name: "Retry transcription" })).toBeVisible();
+  await expect(composer).toHaveValue("");
+  expect(api.transcriptionAttempts()).toBe(1);
+  expect(api.evidenceSubmissions()).toBe(0);
+
+  await page.getByRole("button", { name: "Retry transcription" }).evaluate((button) => {
+    (button as HTMLButtonElement).click();
+    (button as HTMLButtonElement).click();
+  });
+  await expect.poll(api.transcriptionAttempts).toBe(2);
+  const counters = await page.evaluate(() => (window as typeof window & { __speechE2E?: { getUserMediaCalls: number; recorderStarts: number } }).__speechE2E);
+  expect(counters).toMatchObject({ getUserMediaCalls: 1, recorderStarts: 1 });
+  expect(api.evidenceSubmissions()).toBe(0);
+  releaseRetry();
+  await expect(composer).toHaveValue(rawTranscript);
+  expect(idempotencyKeys).toHaveLength(2);
+  expect(idempotencyKeys[0]).not.toBe("");
+  expect(idempotencyKeys[1]).not.toBe(idempotencyKeys[0]);
+
+  const editedText = `${rawTranscript}\n[edited after retry]`;
+  await composer.fill(editedText);
+  expect(api.evidenceSubmissions()).toBe(0);
+  await page.getByRole("button", { name: "Submit evidence" }).click();
+  await expect(page.getByText(/Evidence saved, waiting for Agent sync/i)).toBeVisible();
+  expect(api.evidenceSubmissions()).toBe(1);
+  expect(api.submittedText()).toBe(editedText.trim());
 });
 
 test("deduplicates start clicks and ignores a cancelled operation's late response after re-recording", async ({ page }) => {

@@ -16,8 +16,8 @@ default-off and detachable. The former chain-specific plugin slice has been
 removed. This is engineering/runtime acceptance, not public production
 authorization: real-provider use remains explicit and disabled by default,
 and managed OIDC, public deployment, and external long-term operations/SLOs
-remain unapproved. Audio/PDF/OCR/ASR are not implemented. AI6 multimodal
-expansion requires separate AI0 approval.
+remain unapproved. AI6 voice-to-text input is implemented as an optional,
+detachable candidate-input path; PDF/OCR remain unimplemented.
 
 ## Why Python Agent Server
 
@@ -31,6 +31,34 @@ Media security remains outside Agent decisions and generic scoring; scoring does
 ## Domain-General Scope
 
 FocusProof keeps learning evidence domain-general. Text, URL and image evidence are current product paths; optional wallet metadata can remain generic evidence context but no chain-specific verifier is active. Future domain plugins require separate approval.
+
+## Optional voice-to-text input (AI6 V1)
+
+Voice is an input aid, not a new evidence type. In the existing unified
+Submit Evidence composer, a learner may grant the browser microphone permission,
+record up to 120 seconds, and wait for a DashScope `qwen3-asr-flash` candidate.
+The candidate is inserted unchanged into the same editable text box. Nothing is
+submitted, scored, reviewed, or added to OpenHands until the learner edits or
+accepts the text and clicks the existing Submit Evidence control.
+
+The browser supports desktop Chrome/Edge and Android Chromium through native
+`getUserMedia`/`MediaRecorder`; unsupported browsers lose only this optional
+control. Audio is scanned and inspected before provider dispatch, held only in
+request/component memory and temporary files. Server request memory and temporary
+files are cleaned after every outcome. After a retryable transcription failure,
+the browser retains exactly one File for explicit same-mount retry; a
+non-retryable or unknown failure clears it. Success, cancellation, a new
+recording, or unmount also clears it. Audio and candidate text are not stored in
+Evidence, the database, EventLog, OpenHands, scoring, logs, reports, object
+storage, or Git.
+
+Speech requires the real provider, HMAC key, Clamd, and `mediainfo` when enabled;
+production deployments also require the configured bubblewrap boundary. SQLite
+is supported for single-process development, including local speech development.
+PostgreSQL is required for production multi-worker or cross-process quota and
+concurrency enforcement. Fake ASR/fake-clean are deterministic test doubles only.
+The real gate requires explicit operator authorization and user-supplied clips;
+its report is redacted and never contains candidate text or credentials.
 
 ## Project Structure
 
@@ -117,5 +145,5 @@ current change must still pass a targeted `ruff format --check` before handoff.
 - AI4B owns the completed general quality, security and release-readiness baseline.
 - AI4C engineering and AI5 image-foundation/runtime acceptance are complete,
   including the 2026-08-27 real-provider browser closure.
-- AI6 multimodal expansion requires separate AI0 approval. Audio/PDF/OCR/ASR remain unimplemented.
+- AI6 voice input is approved and implemented as optional text-composer input; PDF/OCR remain deferred.
 - Optional Web3 proof recording remains a domain-plugin backlog and cannot redefine the general runtime.

@@ -25,6 +25,17 @@ describe("speech recorder reducer", () => {
     expect(speechRecorderReducer(failed, { type: "SESSION_CHANGED" }).status).toBe("idle");
   });
 
+  it("starts an explicit retry from failure with a fresh operation fence", () => {
+    const failed = speechRecorderReducer(initialSpeechRecorderState, { type: "REQUEST_FAILED", fence, message: "Network unavailable." });
+    const retryFence: SpeechOperationFence = { ...fence, generation: 2, composerRevision: 3, selectionStart: 7, selectionEnd: 7 };
+
+    expect(speechRecorderReducer(failed, { type: "RETRY_REQUESTED", fence: retryFence })).toEqual({
+      status: "transcribing",
+      fence: retryFence
+    });
+    expect(speechRecorderReducer(initialSpeechRecorderState, { type: "RETRY_REQUESTED", fence: retryFence })).toEqual(initialSpeechRecorderState);
+  });
+
   it("rejects illegal transitions and every nonmatching cancellation fence", () => {
     const requesting = speechRecorderReducer(initialSpeechRecorderState, { type: "REQUEST_PERMISSION", fence });
     expect(speechRecorderReducer(requesting, { type: "RECORDING_READY", fence })).toEqual(requesting);

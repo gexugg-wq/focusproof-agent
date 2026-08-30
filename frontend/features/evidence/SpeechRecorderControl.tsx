@@ -28,13 +28,19 @@ const formatDuration = (seconds: number) => `${Math.floor(seconds / 60)}:${Strin
 
 function errorMessage(error: unknown): string {
   if (isApiError(error)) {
-    if (error.status === 409) return "Transcription is already in progress. Record a new clip.";
-    if (error.status === 413) return "The recording is too large. Record a shorter clip.";
-    if (error.status === 415) return "This audio format is not supported.";
-    if (error.status === 422) return "The recording could not be transcribed. Record again.";
-    if (error.status === 429) return "Transcription is temporarily busy. Record again shortly.";
-    if (error.status === 503 || error.status === 504) return "Transcription is temporarily unavailable. Record again shortly.";
-    if (error.status === 0) return "Network error while transcribing. Record a new clip.";
+    const recovery = error.retryable ? "Retry this clip or record a new clip." : "Record a new clip.";
+    if (error.code === "transcription_in_progress") return `Transcription is already in progress. ${recovery}`;
+    if (error.code === "idempotency_conflict") return `This transcription request conflicts with a prior request. ${recovery}`;
+    if (error.code === "transcription_ambiguous") return `The recording is ambiguous. ${recovery}`;
+    if (error.code === "transcription_no_speech") return `No speech was detected. ${recovery}`;
+    if (error.code === "invalid_audio") return `The recording could not be read. ${recovery}`;
+    if (error.code === "audio_too_large" || error.status === 413) return "The recording is too large. Record a shorter clip.";
+    if (error.code === "unsupported_audio_format" || error.status === 415) return "This audio format is not supported. Record a new clip.";
+    if (error.status === 409) return `The transcription request could not be completed because of a conflict. ${recovery}`;
+    if (error.status === 422) return `The recording could not be transcribed. ${recovery}`;
+    if (error.status === 429) return `Transcription is temporarily busy. ${recovery}`;
+    if (error.status === 503 || error.status === 504) return `Transcription is temporarily unavailable. ${recovery}`;
+    if (error.status === 0) return `Network error while transcribing. ${recovery}`;
   }
   if (error instanceof TypeError) return "Network error while transcribing. Record a new clip.";
   return "Transcription failed. Record a new clip.";
@@ -56,6 +62,7 @@ export function SpeechRecorderControl({
   const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const elapsedTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const aborter = useRef<AbortController | null>(null);
+  const retainedFile = useRef<File | null>(null);
   const previousSession = useRef(sessionId);
   const maximumSeconds = Math.min(capability.maxDurationSeconds, 120);
 
@@ -70,6 +77,9 @@ export function SpeechRecorderControl({
   const releaseTracks = () => {
     stream.current?.getTracks().forEach((track) => track.stop());
     stream.current = null;
+  };
+  const clearRetainedFile = () => {
+    retainedFile.current = null;
   };
   const isCurrent = (fence: SpeechOperationFence) =>
     mounted.current
@@ -88,6 +98,7 @@ export function SpeechRecorderControl({
     recorder.current = null;
     if (instance?.state === "recording") instance.stop();
     releaseTracks();
+    clearRetainedFile();
     if (mounted.current) {
       setElapsedSeconds(0);
       if (fence) dispatch({ type: "CANCELLED", fence });
@@ -100,16 +111,38 @@ export function SpeechRecorderControl({
     try {
       const response = await transcribe(fence.sessionId, file, "auto", crypto.randomUUID(), controller.signal);
       if (!isCurrent(fence)) return;
+      clearRetainedFile();
       onTranscript(response.transcript, fence);
       dispatch({ type: "TRANSCRIBED", fence });
       activeFence.current = null;
     } catch (error) {
       if (!isCurrent(fence) || isAbort(error)) return;
+      if (!isApiError(error) || !error.retryable) clearRetainedFile();
       dispatch({ type: "REQUEST_FAILED", fence, message: errorMessage(error) });
       activeFence.current = null;
     } finally {
       if (aborter.current === controller) aborter.current = null;
     }
+  };
+
+  const retry = () => {
+    const file = retainedFile.current;
+    if (!file || state.status !== "failed" || disabled || !canStart() || startPending.current || isBusy(state.status)) return;
+    onBusyChange?.(true);
+    const fence: SpeechOperationFence = {
+      generation: generation.current + 1,
+      sessionId,
+      composerRevision,
+      selectionStart,
+      selectionEnd
+    };
+    generation.current = fence.generation;
+    activeFence.current = fence;
+    startPending.current = true;
+    dispatch({ type: "RETRY_REQUESTED", fence });
+    void sendForTranscription(file, fence).finally(() => {
+      startPending.current = false;
+    });
   };
 
   const stop = (fenceOverride?: SpeechOperationFence) => {
@@ -152,6 +185,7 @@ export function SpeechRecorderControl({
 
   const start = async () => {
     if (disabled || !canStart() || startPending.current || isBusy(state.status)) return;
+    clearRetainedFile();
     onBusyChange?.(true);
     const fence: SpeechOperationFence = {
       generation: generation.current + 1,
@@ -207,8 +241,10 @@ export function SpeechRecorderControl({
           activeFence.current = null;
           return;
         }
+        const file = new File([blob], "focusproof-recording", { type: mimeType });
+        retainedFile.current = file;
         dispatch({ type: "RECORDING_READY", fence });
-        void sendForTranscription(new File([blob], "focusproof-recording", { type: mimeType }), fence);
+        void sendForTranscription(file, fence);
       });
       instance.start();
       startPending.current = false;
@@ -245,6 +281,7 @@ export function SpeechRecorderControl({
       : <button className="btn secondary h-10 w-10 p-0" type="button" aria-label="Start recording" title="Start recording" disabled={disabled || busy} onClick={() => void start()}><Mic size={16} aria-hidden /></button>}
     {busy ? <span className="text-sm text-slate-600">{state.status === "transcribing" ? "Transcribing..." : state.status === "recording" ? `Recording... ${formatDuration(elapsedSeconds)} / ${formatDuration(maximumSeconds)}` : "Preparing microphone..."}</span> : null}
     {busy ? <button className="btn secondary h-10 w-10 p-0" type="button" aria-label="Cancel recording" title="Cancel recording" onClick={cancelActive}><X size={16} aria-hidden /></button> : null}
+    {state.status === "failed" && retainedFile.current ? <button className="btn secondary" type="button" onClick={retry}>Retry transcription</button> : null}
     {state.status === "failed" && state.message ? <p className="text-sm text-red-700" role="alert">{state.message}</p> : null}
   </div>;
 }

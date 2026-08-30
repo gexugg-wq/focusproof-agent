@@ -18,6 +18,7 @@ export const initialSpeechRecorderState: SpeechRecorderState = { status: "idle" 
 
 type SpeechRecorderAction =
   | { type: "REQUEST_PERMISSION"; fence: SpeechOperationFence }
+  | { type: "RETRY_REQUESTED"; fence: SpeechOperationFence }
   | { type: "PERMISSION_GRANTED"; fence: SpeechOperationFence }
   | { type: "STOP_REQUESTED"; fence: SpeechOperationFence }
   | { type: "RECORDING_READY"; fence: SpeechOperationFence }
@@ -43,6 +44,9 @@ export function speechRecorderReducer(state: SpeechRecorderState, action: Speech
     return state.status === "idle" || state.status === "succeeded" || state.status === "failed"
       ? { status: "requesting_permission", fence: action.fence }
       : state;
+  }
+  if (action.type === "RETRY_REQUESTED") {
+    return state.status === "failed" ? { status: "transcribing", fence: action.fence } : state;
   }
   if (action.type === "PERMISSION_GRANTED") {
     return state.status === "requesting_permission" ? transition(state, "recording", action.fence) : state;

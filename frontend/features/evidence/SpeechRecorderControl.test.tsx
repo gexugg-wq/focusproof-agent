@@ -176,17 +176,16 @@ describe("SpeechRecorderControl", () => {
     expect(screen.getByRole("button", { name: /start recording/i })).toBeEnabled();
   });
   it.each([
-    [409, /already in progress/i],
-    [413, /too large/i],
-    [415, /format is not supported/i],
-    [422, /could not be transcribed/i],
-    [429, /temporarily busy/i],
-    [503, /temporarily unavailable/i],
-    [504, /temporarily unavailable/i],
-    [0, /network error/i],
-  ])("maps transcription failure status %s without emitting a transcript", async (status, message) => {
+    [413, "audio_too_large", /too large/i],
+    [415, "unsupported_audio_format", /format is not supported/i],
+    [422, "invalid_audio", /could not be read/i],
+    [422, "transcription_no_speech", /no speech was detected/i],
+    [422, "transcription_ambiguous", /ambiguous/i],
+    [409, "idempotency_conflict", /conflicts with a prior request/i],
+    [409, "unknown_conflict", /could not be completed because of a conflict/i],
+  ])("clears the retained clip after non-retryable %s %s", async (status, code, message) => {
     const transcribe = vi.fn().mockRejectedValue(
-      new ApiError({ status, code: "transcription_failed", retryable: true, message: "raw server error" })
+      new ApiError({ status, code, retryable: false, message: "raw server error" })
     );
     const transcript = vi.fn();
     render(
@@ -197,8 +196,79 @@ describe("SpeechRecorderControl", () => {
     await userEvent.click(screen.getByRole("button", { name: /stop recording/i }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(screen.queryByRole("button", { name: /retry transcription/i })).not.toBeInTheDocument();
     expect(transcript).not.toHaveBeenCalled();
     expect(current.track.stop).toHaveBeenCalledTimes(1);
+  });
+  it("fails closed without retaining a clip when transcription throws an unknown error", async () => {
+    const transcribe = vi.fn().mockRejectedValue(new Error("unknown failure"));
+    render(
+      <SpeechRecorderControl sessionId="sess_1" composerRevision={0} selectionStart={0} selectionEnd={0} capability={capability} onTranscript={vi.fn()} transcribe={transcribe} />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /start recording/i }));
+    await userEvent.click(screen.getByRole("button", { name: /stop recording/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/record a new clip/i);
+    expect(screen.queryByRole("button", { name: /retry transcription/i })).not.toBeInTheDocument();
+  });
+  it("retains a failed clip for one explicit retry with a fresh idempotency key", async () => {
+    const retry = deferred<{ transcript: string }>();
+    const transcribe = vi.fn()
+      .mockRejectedValueOnce(new ApiError({ status: 409, code: "transcription_in_progress", retryable: true, message: "in progress" }))
+      .mockReturnValueOnce(retry.promise);
+    const transcript = vi.fn();
+    const getUserMedia = vi.fn().mockResolvedValue(current.stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    render(
+      <SpeechRecorderControl sessionId="sess_1" composerRevision={0} selectionStart={0} selectionEnd={0} capability={capability} onTranscript={transcript} transcribe={transcribe} />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /start recording/i }));
+    await userEvent.click(screen.getByRole("button", { name: /stop recording/i }));
+    expect(await screen.findByRole("button", { name: /retry transcription/i })).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent(/already in progress/i);
+    expect(screen.getByRole("alert")).toHaveTextContent(/retry this clip/i);
+    const firstFile = transcribe.mock.calls[0][1];
+    const firstKey = transcribe.mock.calls[0][3];
+
+    const retryButton = screen.getByRole("button", { name: /retry transcription/i });
+    await act(async () => {
+      retryButton.click();
+      retryButton.click();
+    });
+
+    expect(transcribe).toHaveBeenCalledTimes(2);
+    expect(transcribe.mock.calls[1][1]).toBe(firstFile);
+    expect(transcribe.mock.calls[1][3]).not.toBe(firstKey);
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    await act(async () => retry.resolve({ transcript: "  retry raw\n" }));
+    expect(transcript).toHaveBeenCalledWith("  retry raw\n", expect.objectContaining({ generation: 2 }));
+    expect(screen.queryByRole("button", { name: /retry transcription/i })).not.toBeInTheDocument();
+  });
+  it("ignores a late retry response after the composer revision changes", async () => {
+    const retry = deferred<{ transcript: string }>();
+    const transcribe = vi.fn()
+      .mockRejectedValueOnce(new ApiError({ status: 503, code: "transcription_provider_unavailable", retryable: true, message: "unavailable" }))
+      .mockReturnValueOnce(retry.promise);
+    const transcript = vi.fn();
+    const { rerender } = render(
+      <SpeechRecorderControl sessionId="sess_1" composerRevision={0} selectionStart={0} selectionEnd={0} capability={capability} onTranscript={transcript} transcribe={transcribe} />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /start recording/i }));
+    await userEvent.click(screen.getByRole("button", { name: /stop recording/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /retry transcription/i }));
+    rerender(
+      <SpeechRecorderControl sessionId="sess_1" composerRevision={1} selectionStart={0} selectionEnd={0} capability={capability} onTranscript={transcript} transcribe={transcribe} />
+    );
+    await act(async () => retry.resolve({ transcript: "late retry transcript" }));
+
+    expect(transcribe).toHaveBeenCalledTimes(2);
+    expect((transcribe.mock.calls[1][4] as AbortSignal).aborted).toBe(true);
+    expect(transcript).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /retry transcription/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /start recording/i })).toBeEnabled();
   });
   it("rejects an empty recording without transcribing and releases its track", async () => {
     FakeRecorder.payload = "";

@@ -1,6 +1,6 @@
 # FocusProof Agent Architecture
 
-Version: Architecture Baseline v0.9 (2026-08-28 knowledge sync)
+Version: Architecture Baseline v0.10 (2026-08-31 knowledge sync)
 Primary runtime: Python Agent Server
 Frontend: Next.js and TypeScript
 Optional domain plugin backlog: domain-specific verification, deferred
@@ -38,8 +38,8 @@ An explicitly enabled local acceptance completed one text-plus-PNG learning
 session through the official OpenHands runtime and `openai/qwen3.7-plus`, then
 persisted the review and seven-event Build Log. Real visual-provider use is
 still default-off; public deployment, managed OIDC,
-and external long-term operations/SLOs are not authorized. Audio/PDF/OCR/ASR
-are not implemented. AI6 multimodal expansion requires separate AI0 approval.
+and external long-term operations/SLOs are not authorized. AI6 voice-to-text is
+an optional text-composer input path; PDF/OCR remain deferred.
 
 ### 1.1 AI4C Production-Readiness Boundary
 
@@ -76,13 +76,41 @@ projections and cannot schedule Agent steps, execute tools or replace native
 OpenHands restoration.
 
 Media admission security remains an application-owned boundary outside Agent
-decisions and generic scoring. Generic scoring does not branch by
-modality, and audio/PDF/OCR/ASR remain backlog/deferred pending AI0.
+decisions and generic scoring. Generic scoring does not branch by modality.
+Voice candidates are never Evidence, runtime events, scoring input, or review
+triggers until the learner uses the existing text Evidence submission.
 
 The product database owns sessions, evidence metadata, authorization,
 reviews, build logs, and a read/query audit projection. It does not restore or
 drive the Agent runtime. Native OpenHands persistence and EventLog own runtime
 events, ordering, replay, and Conversation restoration.
+
+### 1.2 AI6 voice-to-text boundary
+
+The speech boundary is deliberately detachable from the Agent runtime. The
+frontend records with native browser APIs and sends one multipart clip to
+`POST /sessions/{session_id}/transcriptions` through the streaming BFF. The
+backend authenticates and admits the request before multipart consumption,
+charges bounded quotas, scans with the shared Clamd/scan-slot boundary, and
+inspects one supported audio container with sandboxed MediaInfo. The only real
+provider in V1 is DashScope's Beijing OpenAI-compatible
+`qwen3-asr-flash` endpoint. The adapter parses only a bounded string transcript;
+extra provider fields are discarded.
+
+One monotonic 120-second request budget covers admission, upload, scanning,
+inspection, dispatch, and response handling; the final five seconds are reserved
+for shielded privacy cleanup. There is one provider attempt and no automatic
+retry after dispatch. Pre-dispatch cancellation is cancelled; post-dispatch
+transport uncertainty is ambiguous. Durable request and resource-slot tables
+contain metadata and leases only—never audio, transcript, upstream response,
+filesystem paths, or secrets. Startup recovery fences expired leases and removes
+orphan temporary files.
+
+The response is a live candidate only. No Evidence row, product EventLog entry,
+OpenHands event, score, review, or automatic submission is created by speech.
+Only the existing learner-controlled text submission path can turn edited text
+into Evidence. Speech is disabled when real deployment prerequisites are absent;
+fake ASR and fake-clean scanning are test-only doubles.
 
 ## 2. Historical/Superseded v0.1 Design Archive
 

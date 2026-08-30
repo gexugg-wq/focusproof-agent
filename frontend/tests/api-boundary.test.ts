@@ -74,6 +74,30 @@ describe("multipart client", () => {
     expect(new Headers(init?.headers).get("Idempotency-Key")).toBe("c2d4a7a4-6d14-4a03-9a27-42f7d0116c4f");
     expect(init?.signal).toBe(controller.signal);
   });
+
+  it.each([
+    ["explicit false", { code: "transcription_provider_unavailable", retryable: false }],
+    ["missing retryability", { code: "transcription_provider_unavailable" }]
+  ])("fails closed for a speech 503 with %s", async (_label, payload) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 503,
+      headers: { "content-type": "application/json" }
+    })));
+
+    const result = focusProofApi.transcribe(
+      "sess_1",
+      new File(["audio"], "recording.webm", { type: "audio/webm;codecs=opus" }),
+      "auto",
+      "c2d4a7a4-6d14-4a03-9a27-42f7d0116c4f",
+      new AbortController().signal
+    );
+
+    await expect(result).rejects.toMatchObject({
+      status: 503,
+      code: "transcription_provider_unavailable",
+      retryable: false
+    });
+  });
 });
 
 describe("API errors", () => {

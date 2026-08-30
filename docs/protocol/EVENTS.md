@@ -1,6 +1,6 @@
 # FocusProof Event and Agent Protocol
 
-Version: v0.4
+Version: v0.5
 Primary implementation language: Python
 Frontend API projection language: TypeScript
 
@@ -19,6 +19,7 @@ implementation.
 - Web3 不属于当前通用 runtime；任何未来 optional plugin 必须显式启用并与本协议投影隔离。
 - 本文件中的 TypeScript 风格接口用于描述 FocusProof 产品/API 投影，不是要求实现第二套 Agent、Conversation、EventLog、Action、Observation 或 Tool Runtime。
 - 运行时存在 OpenHands SDK 公共类型或生命周期 API 时必须直接复用；产品投影通过适配器从原生事件派生，不得替代原生运行事实。
+- 语音转写是统一文本 Evidence composer 的可选输入边界，不是新的 Event、Evidence 或评分协议。
 
 ## 1. 设计目标
 
@@ -27,6 +28,49 @@ implementation.
 以下是产品/API 投影流，不是第二套 runtime loop：
 
     OpenHands native EventLog -> FocusProof product projection -> API/frontend
+
+## 1.1 Optional speech transcription API (AI6 V1)
+
+The optional endpoint is:
+
+    POST /sessions/{session_id}/transcriptions
+    Headers: Authorization, Idempotency-Key: UUID
+    Multipart: exactly one `file`; optional `languageHint=auto|zh|en`
+
+The request is admitted and authenticated before multipart bytes are consumed.
+The response is a live, bounded projection and has no EventLog, Evidence,
+OpenHands, scoring, review, or automatic-submit side effect:
+
+    {
+      "requestId": "...",
+      "transcript": "provider text, unchanged",
+      "provider": "dashscope",
+      "model": "qwen3-asr-flash"
+    }
+
+`transcript` is a candidate for the existing controlled text composer. The
+frontend may display and let the learner edit it; only the existing Submit
+Evidence action can create a `text` Evidence record. The candidate is not an
+`audio` Evidence record. Raw audio and candidate text are ephemeral and must not
+be written to product tables, native EventLog, OpenHands messages, scores,
+reviews, logs, reports, object storage, or Git. `languageHint` is accepted
+metadata in schema version 1 and has no semantic effect in the pinned adapter.
+
+Transcription-processing outcome codes are `audio_too_large`, `audio_too_long`,
+`unsupported_audio_format`, `invalid_audio`, `transcription_no_speech`,
+`transcription_timeout`, `transcription_rate_limited`,
+`transcription_provider_unavailable`, `transcription_ambiguous`,
+`transcription_result_unavailable`, and `transcription_failed`. These are not
+the entire public error-code space. Admission, route, and idempotency handling
+also exposes `idempotency_conflict`, `transcription_in_progress`,
+`speech_disabled`, `invalid_idempotency_key`, `speech_session_unavailable`,
+`one_audio_file_required`, and `invalid_language_hint`, plus shared API codes
+such as `invalid_token`, `forbidden`, `identity_unavailable`,
+`database_unavailable`, and `request_too_large`. The frontend BFF may emit its
+own bounded proxy failures: `forbidden_proxy_path`, `backend_unavailable`,
+`upstream_response_too_large`, and `upstream_non_json`. The implementation's
+typed mappings and route/admission branches are authoritative. No provider body,
+URL, key, transcript, or stack trace is returned in an error.
 
 ## 2. Event 基础结构
 

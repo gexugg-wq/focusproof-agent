@@ -37,14 +37,15 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 async function requestMultipart<T>(path: string, body: FormData, init?: Omit<RequestInit, "body" | "method">): Promise<T> {
+  const errorMapping = { inferRetryableFromStatus: !path.endsWith("/transcriptions") };
   let response: Response;
   try {
     response = await fetchWithOidcAccessToken("/api/focusproof" + path, { ...init, method: "POST", body });
   } catch (error) {
-    throw mapApiError(0, { code: "network_error", retryable: true, error: String(error) });
+    throw mapApiError(0, { code: "network_error", retryable: true, error: String(error) }, errorMapping);
   }
   const payload = await parseResponsePayload(response);
-  if (!response.ok) throw mapApiError(response.status, payload);
+  if (!response.ok) throw mapApiError(response.status, payload, errorMapping);
   return payload as T;
 }
 

@@ -33,10 +33,14 @@ export function isAllowedFocusProofRequest(method: string, path: readonly string
   return false;
 }
 
-export function mapApiError(status: number, payload: unknown): ApiError {
+export function mapApiError(
+  status: number,
+  payload: unknown,
+  { inferRetryableFromStatus = true }: { inferRetryableFromStatus?: boolean } = {}
+): ApiError {
   const data = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
   const code = typeof data.code === "string" ? data.code : status === 0 ? "network_error" : "request_failed";
-  const retryable = data.retryable === true || status === 503 || status === 0;
+  const retryable = data.retryable === true || (inferRetryableFromStatus && (status === 503 || status === 0));
   if (code === "session_busy") {
     return new ApiError({ status, code: "session_busy", retryable: true, message: "Session processing is still in progress. Please retry shortly." });
   }
@@ -50,13 +54,13 @@ export function mapApiError(status: number, payload: unknown): ApiError {
     return new ApiError({ status, code, retryable: false, message: "This session is complete. New facts cannot be submitted." });
   }
   if (status === 503 || code === "backend_unavailable" || code === "runtime_unavailable") {
-    return new ApiError({ status: status || 503, code, retryable: true, message: "Agent Runtime current unavailable. Page data has been preserved." });
+    return new ApiError({ status: status || 503, code, retryable, message: "Agent Runtime current unavailable. Page data has been preserved." });
   }
   if (status === 403 || status === 404) {
     return new ApiError({ status, code, retryable: false, message: "This session is not accessible." });
   }
   if (status === 0 || code === "network_error") {
-    return new ApiError({ status, code: "network_error", retryable: true, message: "Connection failed. Nothing was submitted." });
+    return new ApiError({ status, code: "network_error", retryable, message: "Connection failed. Nothing was submitted." });
   }
   return new ApiError({ status, code, retryable, message: "FocusProof request failed. Please retry." });
 }
