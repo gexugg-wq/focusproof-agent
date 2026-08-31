@@ -181,6 +181,7 @@ describe("SpeechRecorderControl", () => {
     [422, "invalid_audio", /could not be read/i],
     [422, "transcription_no_speech", /no speech was detected/i],
     [422, "transcription_ambiguous", /ambiguous/i],
+    [409, "transcription_in_progress", /already in progress/i],
     [409, "idempotency_conflict", /conflicts with a prior request/i],
     [409, "unknown_conflict", /could not be completed because of a conflict/i],
   ])("clears the retained clip after non-retryable %s %s", async (status, code, message) => {
@@ -212,10 +213,41 @@ describe("SpeechRecorderControl", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/record a new clip/i);
     expect(screen.queryByRole("button", { name: /retry transcription/i })).not.toBeInTheDocument();
   });
-  it("retains a failed clip for one explicit retry with a fresh idempotency key", async () => {
+  it("does not retry an in-progress transcription even when the backend marks it retryable", async () => {
+    const transcribe = vi.fn().mockRejectedValue(
+      new ApiError({ status: 409, code: "transcription_in_progress", retryable: true, message: "in progress" })
+    );
+    render(
+      <SpeechRecorderControl sessionId="sess_1" composerRevision={0} selectionStart={0} selectionEnd={0} capability={capability} onTranscript={vi.fn()} transcribe={transcribe} />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /start recording/i }));
+    await userEvent.click(screen.getByRole("button", { name: /stop recording/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/already in progress/i);
+    expect(screen.queryByRole("button", { name: /retry transcription/i })).not.toBeInTheDocument();
+    expect(transcribe).toHaveBeenCalledTimes(1);
+    expect(transcribe.mock.calls.map((call) => call[3])).toHaveLength(1);
+  });
+
+  it("fails closed when an unrecognized API outcome is marked retryable", async () => {
+    const transcribe = vi.fn().mockRejectedValue(
+      new ApiError({ status: 500, code: "transcription_failed", retryable: true, message: "unknown outcome" })
+    );
+    render(
+      <SpeechRecorderControl sessionId="sess_1" composerRevision={0} selectionStart={0} selectionEnd={0} capability={capability} onTranscript={vi.fn()} transcribe={transcribe} />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /start recording/i }));
+    await userEvent.click(screen.getByRole("button", { name: /stop recording/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/record a new clip/i);
+    expect(screen.queryByRole("button", { name: /retry transcription/i })).not.toBeInTheDocument();
+  });
+  it("retains a clip only for an explicitly safe retry with a fresh idempotency key", async () => {
     const retry = deferred<{ transcript: string }>();
     const transcribe = vi.fn()
-      .mockRejectedValueOnce(new ApiError({ status: 409, code: "transcription_in_progress", retryable: true, message: "in progress" }))
+      .mockRejectedValueOnce(new ApiError({ status: 504, code: "transcription_timeout", retryable: true, message: "timeout" }))
       .mockReturnValueOnce(retry.promise);
     const transcript = vi.fn();
     const getUserMedia = vi.fn().mockResolvedValue(current.stream);
@@ -227,7 +259,7 @@ describe("SpeechRecorderControl", () => {
     await userEvent.click(screen.getByRole("button", { name: /start recording/i }));
     await userEvent.click(screen.getByRole("button", { name: /stop recording/i }));
     expect(await screen.findByRole("button", { name: /retry transcription/i })).toBeEnabled();
-    expect(screen.getByRole("alert")).toHaveTextContent(/already in progress/i);
+    expect(screen.getByRole("alert")).toHaveTextContent(/temporarily unavailable/i);
     expect(screen.getByRole("alert")).toHaveTextContent(/retry this clip/i);
     const firstFile = transcribe.mock.calls[0][1];
     const firstKey = transcribe.mock.calls[0][3];
@@ -249,7 +281,7 @@ describe("SpeechRecorderControl", () => {
   it("ignores a late retry response after the composer revision changes", async () => {
     const retry = deferred<{ transcript: string }>();
     const transcribe = vi.fn()
-      .mockRejectedValueOnce(new ApiError({ status: 503, code: "transcription_provider_unavailable", retryable: true, message: "unavailable" }))
+      .mockRejectedValueOnce(new ApiError({ status: 429, code: "transcription_rate_limited", retryable: true, message: "busy" }))
       .mockReturnValueOnce(retry.promise);
     const transcript = vi.fn();
     const { rerender } = render(

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from focusproof.api.app import _product_capabilities, _view
-from focusproof.config.env import build_speech_capability
+import pytest
+
+from focusproof.config.env import build_speech_capability, load_speech_settings
 from focusproof.runtime.evidence import LearningGoal
 
 
@@ -26,7 +30,11 @@ def _real_asr_env() -> dict[str, str]:
         "DASHSCOPE_API_KEY": "placeholder",
         "FOCUSPROOF_ASR_E2E_TIMEOUT_SECONDS": "120",
         "FOCUSPROOF_ASR_MAX_CONCURRENCY": "4",
-        "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEY": "test-hmac-secret",
+        "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_ACTIVE_VERSION": "2026-08",
+        "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEYRING_JSON": (
+            '{"2026-07":"retained-hmac-secret",'
+            '"2026-08":"active-hmac-secret"}'
+        ),
     }
 
 
@@ -60,6 +68,35 @@ def test_enabled_speech_appends_without_changing_image_capability() -> None:
     assert capabilities[1]["capabilityId"] == "speech_transcription"
     assert capabilities[1]["enabled"] is True
     assert capabilities[1]["languageHintEffect"] == "metadata_only"
+
+
+def test_speech_settings_exposes_explicit_active_hmac_version_and_keyring() -> None:
+    settings = load_speech_settings(_real_asr_env())
+
+    assert settings is not None
+    assert settings.idempotency_hmac_active_version == "2026-08"
+    assert dict(settings.idempotency_hmac_keyring) == {
+        "2026-07": "retained-hmac-secret",
+        "2026-08": "active-hmac-secret",
+    }
+
+
+def test_speech_settings_rejects_an_active_hmac_version_missing_from_keyring() -> None:
+    environ = _real_asr_env()
+    environ["FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_ACTIVE_VERSION"] = "2026-09"
+
+    with pytest.raises(ValueError, match="speech HMAC configuration is invalid"):
+        load_speech_settings(environ)
+
+
+def test_runtime_composition_uses_configured_hmac_version_and_keyring() -> None:
+    app_source = (
+        Path(__file__).resolve().parents[2] / "focusproof" / "api" / "app.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'active_hmac_key_version="v1"' not in app_source
+    assert "settings.idempotency_hmac_active_version" in app_source
+    assert "settings.idempotency_hmac_keyring" in app_source
 
 
 def test_session_view_projects_disabled_speech_without_affecting_plugins() -> None:

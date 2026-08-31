@@ -15,6 +15,71 @@ type NodeStreamRequestInit = RequestInit & { duplex?: "half" };
 class RequestTooLargeError extends Error {}
 class ProxyTimeoutError extends Error {}
 
+function awaitAbortable<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new ProxyTimeoutError());
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(new ProxyTimeoutError());
+    signal.addEventListener("abort", abort, { once: true });
+    Promise.resolve()
+      .then(() => {
+        if (signal.aborted) throw new ProxyTimeoutError();
+        return operation();
+      })
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
+async function readAbortableText(stream: ReadableStream<Uint8Array> | null, signal: AbortSignal): Promise<string> {
+  if (!stream) return "";
+  const reader = stream.getReader();
+  let released = false;
+  let cancelPromise: Promise<void> | undefined;
+  let rejectAbort!: (error: ProxyTimeoutError) => void;
+  const abortRead = new Promise<never>((_, reject) => { rejectAbort = reject; });
+  const releaseReader = () => {
+    if (released) return;
+    released = true;
+    try {
+      reader.releaseLock();
+    } catch {
+      return;
+    }
+  };
+  const cancelSource = () => {
+    if (!cancelPromise) {
+      cancelPromise = reader.cancel(new ProxyTimeoutError()).catch(() => undefined);
+      void cancelPromise.finally(releaseReader);
+    }
+    return cancelPromise;
+  };
+  const abort = () => {
+    rejectAbort(new ProxyTimeoutError());
+    void cancelSource();
+  };
+  if (signal.aborted) abort();
+  else signal.addEventListener("abort", abort, { once: true });
+
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await Promise.race([reader.read(), abortRead]);
+      if (done) break;
+      total += value.byteLength;
+      chunks.push(value);
+    }
+  } finally {
+    signal.removeEventListener("abort", abort);
+    if (signal.aborted) void cancelSource();
+    else releaseReader();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return new TextDecoder().decode(bytes);
+}
+
 type LimitedMediaStream = {
   body: ReadableStream<Uint8Array>;
   drain: () => Promise<void>;
@@ -30,23 +95,38 @@ function limitMediaStream(
   let total = 0;
   let finished = false;
   let exceeded = false;
+  let released = false;
   let readTail = Promise.resolve();
+  let cancelPromise: Promise<void> | undefined;
   let resolveAbort!: (result: ReadableStreamReadResult<Uint8Array>) => void;
   const abortRead = new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => { resolveAbort = resolve; });
 
+  const releaseReader = (): void => {
+    if (released) return;
+    released = true;
+    try {
+      reader.releaseLock();
+    } catch {
+      return;
+    }
+  };
   const cancelSource = (reason?: unknown): void => {
-    void reader.cancel(reason).catch(() => undefined);
+    if (!cancelPromise) {
+      cancelPromise = reader.cancel(reason).catch(() => undefined);
+      void cancelPromise.finally(releaseReader);
+    }
   };
   const finish = (): void => {
     if (finished) return;
     finished = true;
     signal.removeEventListener("abort", abortSource);
+    if (!cancelPromise) releaseReader();
   };
   const abortSource = (): void => {
     if (finished) return;
-    finished = true;
     resolveAbort({ done: true, value: undefined });
     cancelSource(new ProxyTimeoutError());
+    finish();
   };
   if (signal.aborted) abortSource();
   else signal.addEventListener("abort", abortSource, { once: true });
@@ -58,7 +138,7 @@ function limitMediaStream(
     readTail = new Promise<void>((resolve) => { release = resolve; });
     await previous;
     try {
-      if (signal.aborted) return { done: true, value: undefined };
+      if (finished || signal.aborted) return { done: true, value: undefined };
       return await Promise.race([reader.read(), abortRead]);
     } finally { release(); }
   }
@@ -68,8 +148,8 @@ function limitMediaStream(
       exceeded = true;
       onTooLarge();
     }
-    finish();
     cancelSource(new RequestTooLargeError());
+    finish();
   }
 
   const drain = async (): Promise<void> => {
@@ -99,7 +179,7 @@ function limitMediaStream(
       }
     },
     async cancel(reason) {
-      if (signal.aborted) { finish(); cancelSource(reason); return; }
+      if (signal.aborted) { cancelSource(reason); finish(); return; }
       await drain();
     }
   });
@@ -148,23 +228,32 @@ async function proxy(request: NextRequest, context: RouteContext): Promise<NextR
   const isTranscription = request.method === "POST" && path.length === 3 && path[0] === "sessions" && path[2] === "transcriptions";
   const isMedia = isImage || isTranscription;
   const controller = new AbortController();
-  const declaredLength = Number(request.headers.get("content-length") ?? "0");
+  const abortFromInbound = () => controller.abort(request.signal.reason);
+  if (request.signal.aborted) abortFromInbound();
+  else request.signal.addEventListener("abort", abortFromInbound, { once: true });
+  try {
+    const declaredLength = Number(request.headers.get("content-length") ?? "0");
   if (isMedia && declaredLength > mediaFallbackLimit) return NextResponse.json({ code: "request_too_large", retryable: false }, { status: 413 });
   let body: BodyInit | undefined;
   let limitedBody: LimitedMediaStream | undefined;
   let mediaLimitExceeded = false;
-  if (request.method !== "GET" && request.method !== "HEAD") {
-    if (isMedia) {
-      limitedBody = request.body ? limitMediaStream(request.body, () => { mediaLimitExceeded = true; }, controller.signal) : undefined;
-      body = limitedBody?.body;
-      if (!body) {
-        const buffer = await request.arrayBuffer();
-        if (buffer.byteLength > mediaFallbackLimit) return NextResponse.json({ code: "request_too_large", retryable: false }, { status: 413 });
-        body = buffer;
+  try {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      if (isMedia) {
+        limitedBody = request.body ? limitMediaStream(request.body, () => { mediaLimitExceeded = true; }, controller.signal) : undefined;
+        body = limitedBody?.body;
+        if (!body) {
+          const buffer = await awaitAbortable(() => request.arrayBuffer(), controller.signal);
+          if (buffer.byteLength > mediaFallbackLimit) return NextResponse.json({ code: "request_too_large", retryable: false }, { status: 413 });
+          body = buffer;
+        }
+      } else {
+        body = await readAbortableText(request.body, controller.signal);
       }
-    } else {
-      body = await request.text();
     }
+  } catch (error) {
+    if (controller.signal.aborted) return NextResponse.json({ code: "backend_unavailable", retryable: true }, { status: 503 });
+    throw error;
   }
   const headers = new Headers({
     "content-type": request.headers.get("content-type") ?? "application/json"
@@ -184,7 +273,7 @@ async function proxy(request: NextRequest, context: RouteContext): Promise<NextR
       signal: controller.signal
     };
     if (body instanceof ReadableStream) init.duplex = "half";
-    upstream = await fetch(target, init);
+    upstream = await awaitAbortable(() => fetch(target, init), controller.signal);
     if (limitedBody) await limitedBody.drain();
     if (limitedBody?.exceeded) return NextResponse.json({ code: "request_too_large", retryable: false }, { status: 413 });
     if (controller.signal.aborted) throw new ProxyTimeoutError();
@@ -211,6 +300,9 @@ async function proxy(request: NextRequest, context: RouteContext): Promise<NextR
     status: upstream.status,
     headers: responseHeaders
   });
+  } finally {
+    request.signal.removeEventListener("abort", abortFromInbound);
+  }
 }
 
 export const GET = proxy;

@@ -768,17 +768,22 @@ async def _cleanup_gate_resources(
     return service_clean, residue_free
 
 
+def _configure_speech_hmac_keyring(
+    factory: UnitOfWorkFactory,
+    settings: SpeechSettings,
+) -> None:
+    factory.configure_speech(
+        active_hmac_key_version=settings.idempotency_hmac_active_version,
+        hmac_keys={version: key.encode("utf-8") for version, key in settings.idempotency_hmac_keyring},
+    )
+
+
 async def _run_speech_acceptance_with_engine(
     context: PreflightContext,
     engine: Any,
 ) -> SpeechAcceptanceSummary:
     factory = UnitOfWorkFactory(create_session_factory(engine))
-    factory.configure_speech(
-        active_hmac_key_version="v1",
-        hmac_keys={
-            "v1": context.settings.idempotency_hmac_key.encode("utf-8"),
-        },
-    )
+    _configure_speech_hmac_keyring(factory, context.settings)
     owner_id = "real-speech-gate"
     session_id = "sess_" + uuid4().hex
     with factory() as uow:

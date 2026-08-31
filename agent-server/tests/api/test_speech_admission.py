@@ -106,6 +106,7 @@ async def _run(
     chunks: list[bytes] | None = None,
     gate: SpeechAdmissionGate | None = None,
     disconnect: bool = False,
+    downstream_failure: Exception | None = None,
     total_timeout_seconds: float = 120.0,
 ) -> tuple[list[Message], int, list[Scope]]:
     application = FastAPI()
@@ -144,6 +145,8 @@ async def _run(
                 return
             if not message.get("more_body", False):
                 break
+        if downstream_failure is not None:
+            raise downstream_failure
         await inner_send({"type": "http.response.start", "status": 204, "headers": []})
         await inner_send({"type": "http.response.body", "body": b""})
 
@@ -231,12 +234,14 @@ async def test_declared_overflow_is_admitted_then_rejected_without_receive() -> 
     assert receives == 0
     assert observed == []
     assert sent[0]["status"] == 413
+    assert repo.finalizations == [("failed_terminal", "upload_failed")]
 
 
 @pytest.mark.anyio
 async def test_chunked_total_over_11_mib_is_streamed_then_rejected() -> None:
+    repo = _Repo()
     sent, receives, observed = await _run(
-        repo=_Repo(),
+        repo=repo,
         key=str(uuid4()),
         chunks=[b"a" * (11 * 1024 * 1024), b"b"],
     )
@@ -244,12 +249,14 @@ async def test_chunked_total_over_11_mib_is_streamed_then_rejected() -> None:
     assert receives == 2
     assert len(observed) == 1
     assert sent[0]["status"] == 413
+    assert repo.finalizations == [("failed_terminal", "upload_failed")]
 
 
 @pytest.mark.anyio
 async def test_scope_receives_immutable_token_and_one_entry_deadline() -> None:
     key = str(uuid4())
-    sent, _, observed = await _run(repo=_Repo(), key=key)
+    repo = _Repo()
+    sent, _, observed = await _run(repo=repo, key=key)
 
     assert sent[0]["status"] == 204
     admission = observed[0]["state"]["speech_admission"]
@@ -260,16 +267,27 @@ async def test_scope_receives_immutable_token_and_one_entry_deadline() -> None:
     assert observed[0]["state"]["registry_active_during_receive"] == 1
     with pytest.raises((AttributeError, TypeError)):
         admission.deadline = 999.0
+    assert repo.finalizations == [("failed_terminal", "upload_failed")]
+
+
+@pytest.mark.anyio
+async def test_downstream_exception_finalizes_admission_before_reraising() -> None:
+    repo = _Repo()
+
+    with pytest.raises(RuntimeError, match="downstream failed"):
+        await _run(
+            repo=repo,
+            key=str(uuid4()),
+            downstream_failure=RuntimeError("downstream failed"),
+        )
+
+    assert repo.finalizations == [("failed_terminal", "upload_failed")]
 
 
 @pytest.mark.anyio
 async def test_duplicate_result_unavailable_uses_shared_410_mapping() -> None:
     sent, receives, _ = await _run(
-        repo=_Repo(
-            failure=SpeechAdmissionError(
-                SpeechErrorCode.TRANSCRIPTION_RESULT_UNAVAILABLE
-            )
-        ),
+        repo=_Repo(failure=SpeechAdmissionError(SpeechErrorCode.TRANSCRIPTION_RESULT_UNAVAILABLE)),
         key=str(uuid4()),
     )
 
@@ -318,9 +336,7 @@ async def test_pre_parser_slow_receive_uses_business_deadline_and_cleanup_reserv
 
     async def identity_resolver(*args: Any, **kwargs: Any) -> VerifiedIdentity:
         del args, kwargs
-        return VerifiedIdentity(
-            verified_user_id="user-1", token_fingerprint="fingerprint"
-        )
+        return VerifiedIdentity(verified_user_id="user-1", token_fingerprint="fingerprint")
 
     middleware = SpeechAdmissionMiddleware(
         downstream,

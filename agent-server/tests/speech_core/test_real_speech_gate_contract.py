@@ -21,7 +21,10 @@ def _valid_environment() -> dict[str, str]:
         "DASHSCOPE_API_KEY": "placeholder",
         "FOCUSPROOF_ASR_E2E_TIMEOUT_SECONDS": "120",
         "FOCUSPROOF_ASR_MAX_CONCURRENCY": "4",
-        "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEY": "different-hmac-test-secret",
+        "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_ACTIVE_VERSION": "v1",
+        "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEYRING_JSON": (
+            '{"v1":"different-hmac-test-secret"}'
+        ),
         "DATABASE_URL": "postgresql+psycopg://gate:secret@example.invalid/focusproof_test_task3_real_speech_gate",
         "FOCUSPROOF_PROFILE": "staging",
         "FOCUSPROOF_MEDIA_SCANNER_MODE": "clamd",
@@ -54,6 +57,23 @@ def _passing_summary() -> gate.GateExecutionSummary:
         cleanup_passed=True,
         residue_free=True,
     )
+
+
+def test_real_gate_configures_the_explicit_active_hmac_keyring() -> None:
+    settings = gate.load_speech_settings(_valid_environment())
+    assert settings is not None
+    recorded: dict[str, object] = {}
+
+    class Factory:
+        def configure_speech(
+            self, *, active_hmac_key_version: str, hmac_keys: dict[str, bytes]
+        ) -> None:
+            recorded["active"] = active_hmac_key_version
+            recorded["keys"] = hmac_keys
+
+    gate._configure_speech_hmac_keyring(Factory(), settings)
+
+    assert recorded == {"active": "v1", "keys": {"v1": b"different-hmac-test-secret"}}
 
 
 def test_gate_refuses_without_authorization_before_any_preflight_or_external_call(
@@ -362,7 +382,10 @@ def test_postgres_verification_runs_exact_real_nodes_with_bounded_redacted_captu
 ) -> None:
     calls: list[tuple[list[str], dict[str, Any]]] = []
     monkeypatch.setenv("DASHSCOPE_API_KEY", "provider-child-secret")
-    monkeypatch.setenv("FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEY", "hmac-child-secret")
+    monkeypatch.setenv(
+        "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEYRING_JSON",
+        '{"v1":"hmac-child-secret"}',
+    )
     monkeypatch.setenv("FOCUSPROOF_REAL_SPEECH_CHINESE", "/private/zh.wav")
 
     def runner(command: list[str], **kwargs: Any) -> SimpleNamespace:

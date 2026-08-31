@@ -158,6 +158,69 @@ describe("API errors", () => {
     await expect(response.json()).resolves.toEqual({ code: "backend_unavailable", retryable: true });
   });
 
+  it("BFF promptly aborts the upstream request when the inbound request is cancelled", async () => {
+    const inbound = new AbortController();
+    let resolveUpstream!: (response: Response) => void;
+    const upstreamFetch = vi.fn().mockImplementation(
+      () => new Promise<Response>((resolve) => { resolveUpstream = resolve; })
+    );
+    vi.stubGlobal("fetch", upstreamFetch);
+    const pending = GET(
+      new NextRequest("http://localhost/api/focusproof/health", { signal: inbound.signal }),
+      { params: Promise.resolve({ path: ["health"] }) }
+    );
+
+    await vi.waitFor(() => expect(upstreamFetch).toHaveBeenCalledTimes(1));
+    const upstreamSignal = upstreamFetch.mock.calls[0]?.[1]?.signal as AbortSignal;
+    inbound.abort();
+    const response = await Promise.race([
+      pending,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("cancelled upstream fetch did not settle promptly")), 100))
+    ]);
+
+    expect(response.status).toBe(503);
+    expect(upstreamSignal.aborted).toBe(true);
+  });
+
+  it("BFF settles a cancelled JSON POST during body buffering without an upstream fetch", async () => {
+    const inbound = new AbortController();
+    const upstreamFetch = vi.fn();
+    let bodyReadStarted!: () => void;
+    let cancelCalls = 0;
+    const bodyStarted = new Promise<void>((resolve) => { bodyReadStarted = resolve; });
+    const body = new ReadableStream<Uint8Array>({
+      pull() {
+        bodyReadStarted();
+        return new Promise<void>(() => undefined);
+      },
+      cancel() {
+        cancelCalls += 1;
+      }
+    });
+    vi.stubGlobal("fetch", upstreamFetch);
+    const pending = POST(
+      new NextRequest("http://localhost/api/focusproof/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+        signal: inbound.signal
+      }),
+      { params: Promise.resolve({ path: ["sessions"] }) }
+    );
+
+    await bodyStarted;
+    inbound.abort();
+    const response = await Promise.race([
+      pending,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("cancelled body did not settle promptly")), 100))
+    ]);
+
+    expect(response.status).toBe(503);
+    expect(upstreamFetch).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(cancelCalls).toBe(1));
+    expect(body.locked).toBe(false);
+  });
+
   it("BFF preserves non-JSON upstream failures as safe JSON", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("<h1>boom</h1>", { status: 500, headers: { "content-type": "text/html" } })));
     const response = await GET(new NextRequest("http://localhost/api/focusproof/health"), { params: Promise.resolve({ path: ["health"] }) });

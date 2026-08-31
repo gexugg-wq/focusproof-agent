@@ -80,7 +80,8 @@ class SpeechSettings:
     model: Literal["qwen3-asr-flash"]
     base_url: str
     api_key: str = field(repr=False)
-    idempotency_hmac_key: str = field(repr=False)
+    idempotency_hmac_active_version: str
+    idempotency_hmac_keyring: tuple[tuple[str, str], ...] = field(repr=False)
     e2e_timeout_seconds: int = 120
     max_concurrency: int = 4
 
@@ -92,8 +93,18 @@ class SpeechSettings:
         if self.base_url != DASHSCOPE_ASR_BASE_URL:
             raise ValueError("base_url must use the DashScope Beijing compatible endpoint")
         _require_non_blank(self.api_key, "api_key")
-        _require_non_blank(self.idempotency_hmac_key, "idempotency_hmac_key")
-        if self.api_key == self.idempotency_hmac_key:
+        _require_non_blank(
+            self.idempotency_hmac_active_version,
+            "idempotency_hmac_active_version",
+        )
+        keyring = dict(self.idempotency_hmac_keyring)
+        if (
+            len(keyring) != len(self.idempotency_hmac_keyring)
+            or self.idempotency_hmac_active_version not in keyring
+            or any(not version.strip() or not key.strip() for version, key in keyring.items())
+        ):
+            raise ValueError("idempotency HMAC keyring is invalid")
+        if self.api_key in keyring.values():
             raise ValueError("idempotency HMAC key must be distinct from provider credentials")
         if self.e2e_timeout_seconds != 120:
             raise ValueError("e2e_timeout_seconds must be 120 for V1")

@@ -27,7 +27,7 @@ _SPEECH_ERROR_HTTP: dict[SpeechErrorCode, tuple[int, bool]] = {
     SpeechErrorCode.TRANSCRIPTION_RESULT_UNAVAILABLE: (410, False),
     SpeechErrorCode.TRANSCRIPTION_FAILED: (500, True),
     SpeechErrorCode.IDEMPOTENCY_CONFLICT: (409, False),
-    SpeechErrorCode.TRANSCRIPTION_IN_PROGRESS: (409, True),
+    SpeechErrorCode.TRANSCRIPTION_IN_PROGRESS: (409, False),
 }
 
 

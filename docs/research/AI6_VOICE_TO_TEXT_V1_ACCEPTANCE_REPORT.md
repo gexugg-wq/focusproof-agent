@@ -2,12 +2,15 @@
 
 Date: 2026-08-31
 Repository: `focusproof-agent`
-Branch: `ai6-voice-to-text-v1`
+Branch: `ai6-final-review-fixes` (final `main` candidate)
 Task8 baseline: `ab73fbe23f8f3f9b158f5d09b88cf194c0aaf3a0`
 
 ## Decision
 
-Task8 browser-product acceptance passes for the deterministic Chromium journey.
+AI6 browser-product and deterministic backend acceptance pass on the final
+candidate. The seven final-review blockers were closed: inbound cancellation,
+admission finalization, retry classification, HMAC rotation and request
+fingerprinting, bounded database/scanner work, and private temporary-file modes.
 The real provider boundary was accepted during Task7, but the browser-to-real-
 provider journey and the external infrastructure gates were not rerun in this
 Task8 session. This report therefore does not claim public production readiness.
@@ -36,9 +39,10 @@ Evidence action submits text through the existing text Evidence path.
 
 Raw audio and candidate text are ephemeral. They are not persisted in Evidence,
 the speech metadata ledger, OpenHands EventLog, scoring, reviews, logs, reports,
-object storage, or Git. After a retryable API failure, exactly one File remains
-in component memory for a user-triggered, same-mount retry of the same clip with
-a fresh idempotency key; there is no automatic provider retry and only one
+object storage, or Git. Exactly one File remains in component memory only for an
+explicitly safe pre-dispatch timeout or rate-limit result. The learner may
+trigger a same-mount retry of that clip with a fresh idempotency key; there is no
+automatic provider retry and only one
 request may be in flight. A non-retryable or unknown failure clears the File and
 offers no Retry. Success, cancellation, a new recording, or unmount also clears
 that File, media tracks, and any component recording resources. Every failure
@@ -47,24 +51,27 @@ remains zero until the learner edits or accepts it and uses the existing Submit
 Evidence action. Stale responses remain isolated by the existing fence.
 
 The review LLM settings (`FOCUSPROOF_LLM_*`) are distinct from the ASR settings
-(`FOCUSPROOF_ASR_*`, `DASHSCOPE_API_KEY`). Enabled speech requires the real
-provider, HMAC key, Clamd, and MediaInfo; production also uses the configured
+(`FOCUSPROOF_ASR_*`, `DASHSCOPE_API_KEY`). Enabled speech requires an explicit
+active HMAC version and retained keyring, so historical idempotency metadata
+remains verifiable during rotation. It also requires the real provider, Clamd,
+and MediaInfo; production uses the configured
 bubblewrap boundary. SQLite supports single-process development, including
 speech. PostgreSQL is required for production multi-worker or cross-process
 quota and concurrency enforcement. Fake ASR and fake-clean scanning are
 deterministic test doubles only.
 
-## Fresh Task8 evidence
+## Final deterministic evidence
 
 | Area | Command | Result |
 |---|---|---|
-| Speech/API focused backend | `.venv/bin/pytest agent-server/tests/api/test_speech_admission.py agent-server/tests/api/test_speech_api.py agent-server/tests/api/test_speech_recovery.py agent-server/tests/speech_adapters/test_dashscope_asr.py agent-server/tests/speech_core/test_transcription_service.py -q` | 92 passed; 1 existing deprecation warning |
-| Speech/composer focused frontend | `cd frontend && npm test -- --run features/evidence/SpeechRecorderControl.test.tsx features/evidence/speech-recorder-reducer.test.ts tests/unified-evidence-composer.test.tsx tests/api-boundary.test.ts` | 88 passed |
-| Full frontend unit suite | `cd frontend && npm test -- --run` | 181 passed |
+| Final-review focused backend | `.venv/bin/python -m pytest -q` on the eight changed speech/API/repository contract files | 153 passed; 1 existing deprecation warning |
+| Full deterministic backend | `.venv/bin/python -m pytest -q` | 2150 passed, 9 skipped, 24 deselected |
+| Final cancellation/retry frontend | `cd frontend && npm test -- --run features/evidence/SpeechRecorderControl.test.tsx tests/api-boundary.test.ts` | 77 passed |
+| Full frontend unit suite | `cd frontend && npm test` | 186 passed |
 | Frontend static/build gate | `cd frontend && npm run lint && npm run typecheck && npm run build` | Passed; Next 15.5.21 production build completed |
 | Chromium product journey | `cd frontend && npm run test:e2e -- speech-evidence.spec.ts` | 20 passed across Chromium, desktop-1280, mobile, and mobile-360 |
-| Backend static gate | `.venv/bin/ruff check agent-server scripts` | Passed |
-| Backend strict types | `.venv/bin/mypy agent-server/focusproof` | Passed; 119 source files |
+| Backend static gate | `.venv/bin/ruff check agent-server/focusproof agent-server/tests scripts/run_real_speech_gate.py` | Passed |
+| Backend strict types | `.venv/bin/mypy --strict agent-server/focusproof scripts/run_real_speech_gate.py` | Passed; 121 source files |
 
 The primary E2E verifies one unified textarea and microphone control; candidate
 insertion preserves the raw response; Evidence submission count stays zero
@@ -86,13 +93,10 @@ DashScope call was made in Task8 because no authorized clips, credentials, and
 healthy Clamd setup were supplied. The Task7 real boundary acceptance above is
 inherited evidence, not a fresh Task8 browser-to-provider run.
 
-The requested deterministic backend regression was also run from the clean
-baseline. It reported 1426 passed, 4 skipped, 24 deselected, and 11 failures
-before a long-running test ended with KeyboardInterrupt. Those failures were
-pre-existing clean-baseline issues outside the Task8 browser journey:
-release-artifact fixture redaction/count drift, disabled-media import audit
-drift, and legacy FakeUow compatibility with the shared scan-slot refactor.
-They were not changed or represented as green in this closeout.
+The previously reported historical deterministic-suite failures were repaired
+without changing the public Evidence, scoring, or OpenHands contracts. The final
+candidate completed the full deterministic backend suite with 2150 passed,
+9 infrastructure-gated skips, and 24 explicitly deselected external tests.
 
 ## Reproduction
 
@@ -124,7 +128,7 @@ does not create Evidence or prove the manual browser Submit Evidence action.
 ## Six-axis review
 
 1. Requirements: the frozen composer-only, no-auto-submit, explicit same-mount retry, raw-candidate, 120-second, cleanup, and privacy boundaries are represented in implementation and tests.
-2. Logic: speech error mapping requires explicit retryability instead of inferring it from HTTP status; reducer fences generation/session/composer revision; retry reuses one retained File with a fresh idempotency key; submission is disabled while speech is active; stale late results are ignored.
+2. Logic: same-clip retry is limited to explicit pre-dispatch timeout/rate-limit results; reducer fences generation/session/composer revision; retry uses a fresh idempotency key; submission is disabled while speech is active; stale late results are ignored.
 3. Edge cases: permission denial, unsupported recorder, stop/cancel, duplicate start/retry, provider failure, existing-text preservation, retry success, unmount, and mobile projects are covered.
 4. Quality: focused and full frontend tests, lint, typecheck, build, focused backend tests, Ruff, and strict MyPy passed.
 5. Tests: deterministic fake-media/fake-provider coverage passes; real provider/scanner coverage is inherited from Task7 and explicitly separated.

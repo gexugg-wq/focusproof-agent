@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from hashlib import sha256
 from pathlib import Path
 from typing import Annotated, Any, Protocol, cast
@@ -26,6 +27,34 @@ from focusproof.speech_core.errors import SpeechError, SpeechErrorCode
 from focusproof.speech_core.models import LanguageHint, MAX_AUDIO_BYTES
 
 _CHUNK_BYTES = 64 * 1024
+_PRIVATE_DIRECTORY_MODE = 0o700
+_PRIVATE_FILE_MODE = 0o600
+
+
+def _open_private_upload(destination: Path) -> Any:
+    parent = destination.parent
+    parent.mkdir(parents=True, mode=_PRIVATE_DIRECTORY_MODE, exist_ok=True)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    directory_fd = os.open(parent, directory_flags)
+    try:
+        os.fchmod(directory_fd, _PRIVATE_DIRECTORY_MODE)
+        file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        file_flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        file_fd = os.open(
+            destination.name,
+            file_flags,
+            _PRIVATE_FILE_MODE,
+            dir_fd=directory_fd,
+        )
+        try:
+            os.fchmod(file_fd, _PRIVATE_FILE_MODE)
+            return os.fdopen(file_fd, "wb")
+        except BaseException:
+            os.close(file_fd)
+            raise
+    finally:
+        os.close(directory_fd)
 
 
 class SpeechService(Protocol):
@@ -43,7 +72,6 @@ def _error(status: int, code: str, *, retryable: bool = False) -> JSONResponse:
         status_code=status,
         content={"code": code, "retryable": retryable},
     )
-
 
 
 class SuffixAwareAudioInspector:
@@ -64,9 +92,7 @@ class SuffixAwareAudioInspector:
         deadline: float,
     ) -> Any:
         suffix = (
-            self._SUFFIXES.get(declared_media_type)
-            if declared_media_type is not None
-            else None
+            self._SUFFIXES.get(declared_media_type) if declared_media_type is not None else None
         )
         if suffix is None:
             return await self._inspector.inspect(
@@ -100,7 +126,7 @@ class StreamingSpeechUpload:
     ) -> UploadedSpeechFile:
         digest = sha256()
         byte_size = 0
-        handle = await asyncio.to_thread(destination.open, "xb")
+        handle = await asyncio.to_thread(_open_private_upload, destination)
         try:
             while True:
                 async with asyncio.timeout_at(deadline):

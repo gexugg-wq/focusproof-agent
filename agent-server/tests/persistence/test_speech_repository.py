@@ -127,6 +127,36 @@ def test_duplicate_semantics_and_explicit_new_key(uow_factory: object) -> None:
     assert replacement.request_id != terminal_token.request_id
 
 
+def test_real_entry_can_atomically_bind_request_fingerprint_during_upload(
+    uow_factory: object,
+) -> None:
+    factory = _factory(uow_factory)
+    with factory() as uow:
+        uow.sessions.create(_session())
+        token = uow.speech_requests.admit(
+            owner_user_id="dev-anonymous-user",
+            session_id="sess_1",
+            idempotency_key=str(uuid4()),
+            request_fingerprint=None,
+            lease_owner="worker-a",
+        )
+        uploading = uow.speech_requests.transition(token, "uploading")
+        fingerprint = "a" * 64
+        uow.speech_requests.transition(
+            uploading,
+            "scanning",
+            request_fingerprint=fingerprint,
+        )
+        uow.commit()
+
+    with factory() as uow:
+        row = uow._require_session().get(
+            SpeechTranscriptionRequestModel, token.request_id
+        )
+        assert row is not None
+        assert row.request_fingerprint == fingerprint
+
+
 def test_session_lifetime_quota_is_charged_for_every_request(uow_factory: object) -> None:
     factory = _factory(uow_factory)
     with factory() as uow:

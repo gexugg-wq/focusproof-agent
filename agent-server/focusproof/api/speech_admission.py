@@ -128,9 +128,7 @@ class SpeechAdmissionMiddleware:
             await _response(503, "identity_unavailable")(scope, receive, send)
             return
         except SQLAlchemyError:
-            await _response(503, "database_unavailable", retryable=True)(
-                scope, receive, send
-            )
+            await _response(503, "database_unavailable", retryable=True)(scope, receive, send)
             return
         raw_key = Headers(scope=scope).get("idempotency-key")
         try:
@@ -177,9 +175,7 @@ class SpeechAdmissionMiddleware:
             await _response(503, "speech_disabled")(scope, receive, send)
             return
         except (SQLAlchemyError, RuntimeError):
-            await _response(503, "database_unavailable", retryable=True)(
-                scope, receive, send
-            )
+            await _response(503, "database_unavailable", retryable=True)(scope, receive, send)
             return
         state = scope.setdefault("state", {})
         state["verified_identity"] = identity
@@ -230,6 +226,17 @@ class SpeechAdmissionMiddleware:
                 raise TimeoutError
             async with asyncio.timeout(remaining):
                 await asyncio.shield(task)
+            # The service finalizes successful and handled execution paths with a
+            # newer lease generation.  A normal return that still owns the
+            # admission token is therefore an early rejection (multipart
+            # validation, body overflow, or unavailable composition).  The CAS
+            # makes this fallback a no-op after a real service finalization.
+            await self._finalize_admission(
+                token,
+                state="failed_terminal",
+                outcome_code="upload_failed",
+                deadline=entry_deadline,
+            )
         except _SpeechClientDisconnected:
             await self._cancel_and_finalize(
                 task,
@@ -247,9 +254,7 @@ class SpeechAdmissionMiddleware:
                 deadline=entry_deadline,
             )
             if not response_started:
-                await _response(504, "transcription_timeout", retryable=True)(
-                    scope, receive, send
-                )
+                await _response(504, "transcription_timeout", retryable=True)(scope, receive, send)
         except asyncio.CancelledError:
             await self._cancel_and_finalize(
                 task,
@@ -430,9 +435,7 @@ class SpeechRecoverySweeper:
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    async def recover_once(
-        self, *, now: datetime | None = None
-    ) -> SpeechRecoveryCounters:
+    async def recover_once(self, *, now: datetime | None = None) -> SpeechRecoveryCounters:
         actual_now = now or datetime.now(UTC)
         counters = await asyncio.to_thread(self._recover_sync, actual_now)
         _LOGGER.info(
@@ -477,7 +480,10 @@ class SpeechRecoverySweeper:
         cutoff = now.timestamp() - self._stale_after_seconds
         self._temp_dir.mkdir(parents=True, exist_ok=True)
         for candidate in self._temp_dir.iterdir():
-            if candidate.suffix not in {".audio", ".wav", ".mp3", ".webm"} or candidate.is_symlink():
+            if (
+                candidate.suffix not in {".audio", ".wav", ".mp3", ".webm"}
+                or candidate.is_symlink()
+            ):
                 continue
             try:
                 UUID(candidate.stem)

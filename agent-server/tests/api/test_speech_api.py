@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import stat
 import time
 from pathlib import Path
 from typing import Any
@@ -32,6 +34,7 @@ class _Service:
         self.languages: list[LanguageHint] = []
         self.deadlines: list[float] = []
         self.uploaded: list[UploadedSpeechFile] = []
+        self.temp_modes: list[tuple[int, int]] = []
 
     async def execute(
         self,
@@ -46,8 +49,12 @@ class _Service:
         assert not await disconnect_probe()
         destination = self.tmp_path / f"{admission.token.request_id}.wav"
         destination.parent.mkdir(parents=True, exist_ok=True)
-        self.uploaded.append(
-            await upload.write_to(destination, deadline=admission.deadline - 5)
+        self.uploaded.append(await upload.write_to(destination, deadline=admission.deadline - 5))
+        self.temp_modes.append(
+            (
+                stat.S_IMODE(destination.parent.stat().st_mode),
+                stat.S_IMODE(destination.stat().st_mode),
+            )
         )
         destination.unlink(missing_ok=True)
         if self.failure is not None:
@@ -67,9 +74,7 @@ def _admission(deadline: float | None = None) -> SpeechExecutionAdmission:
         session_id="sess-1",
         lease_owner="worker-1",
         lease_generation=1,
-        lease_expires_at=__import__("datetime").datetime.now(
-            __import__("datetime").UTC
-        ),
+        lease_expires_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
     )
     return SpeechExecutionAdmission(
         token=token,
@@ -207,7 +212,7 @@ def test_capability_disabled_fails_closed_before_service(tmp_path: Path) -> None
         (SpeechErrorCode.TRANSCRIPTION_RESULT_UNAVAILABLE, 410, False),
         (SpeechErrorCode.TRANSCRIPTION_FAILED, 500, True),
         (SpeechErrorCode.IDEMPOTENCY_CONFLICT, 409, False),
-        (SpeechErrorCode.TRANSCRIPTION_IN_PROGRESS, 409, True),
+        (SpeechErrorCode.TRANSCRIPTION_IN_PROGRESS, 409, False),
     ],
 )
 def test_stable_speech_errors_have_typed_status_and_no_private_detail(
@@ -240,6 +245,21 @@ def test_single_file_stream_enforces_10_mib_without_second_service_call(
     assert service.calls == 1
 
 
+def test_streaming_upload_forces_private_directory_and_file_modes(
+    tmp_path: Path,
+) -> None:
+    service = _Service(tmp_path)
+    previous_umask = os.umask(0)
+    try:
+        with _client(service) as client:
+            response = _post(client)
+    finally:
+        os.umask(previous_umask)
+
+    assert response.status_code == 200
+    assert service.temp_modes == [(0o700, 0o600)]
+
+
 def test_create_app_registers_speech_route_and_admission_before_multipart(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -249,9 +269,10 @@ def test_create_app_registers_speech_route_and_admission_before_multipart(
     monkeypatch.setenv("FOCUSPROOF_MEDIA_ENABLED", "false")
     application = create_app()
 
-    assert str(
-        application.url_path_for("create_speech_transcription", session_id="sess-1")
-    ) == "/sessions/sess-1/transcriptions"
+    assert (
+        str(application.url_path_for("create_speech_transcription", session_id="sess-1"))
+        == "/sessions/sess-1/transcriptions"
+    )
     middleware_classes = [item.cls for item in application.user_middleware]
     assert SpeechAdmissionMiddleware in middleware_classes
 

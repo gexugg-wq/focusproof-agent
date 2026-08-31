@@ -25,10 +25,14 @@ const mimeCandidates: SpeechTranscriptionCapabilityEnabled["formats"] = ["audio/
 const isBusy = (status: string) => ["requesting_permission", "recording", "stopping", "transcribing"].includes(status);
 const isAbort = (error: unknown) => error instanceof DOMException && error.name === "AbortError";
 const formatDuration = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+const isSafeSameClipRetry = (error: unknown) =>
+  isApiError(error)
+  && error.retryable === true
+  && (error.code === "transcription_timeout" || error.code === "transcription_rate_limited");
 
 function errorMessage(error: unknown): string {
   if (isApiError(error)) {
-    const recovery = error.retryable ? "Retry this clip or record a new clip." : "Record a new clip.";
+    const recovery = isSafeSameClipRetry(error) ? "Retry this clip or record a new clip." : "Record a new clip.";
     if (error.code === "transcription_in_progress") return `Transcription is already in progress. ${recovery}`;
     if (error.code === "idempotency_conflict") return `This transcription request conflicts with a prior request. ${recovery}`;
     if (error.code === "transcription_ambiguous") return `The recording is ambiguous. ${recovery}`;
@@ -117,7 +121,7 @@ export function SpeechRecorderControl({
       activeFence.current = null;
     } catch (error) {
       if (!isCurrent(fence) || isAbort(error)) return;
-      if (!isApiError(error) || !error.retryable) clearRetainedFile();
+      if (!isSafeSameClipRetry(error)) clearRetainedFile();
       dispatch({ type: "REQUEST_FAILED", fence, message: errorMessage(error) });
       activeFence.current = null;
     } finally {

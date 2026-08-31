@@ -281,9 +281,7 @@ class SqlMediaTransactionRepository:
             select(
                 MediaIngestionReservationModel.owner_id,
                 MediaIngestionReservationModel.session_id,
-            ).where(
-                MediaIngestionReservationModel.reservation_id == intent.staged.reservation_id
-            )
+            ).where(MediaIngestionReservationModel.reservation_id == intent.staged.reservation_id)
         ).one_or_none()
         if identity is None:
             raise MediaLeaseStateError("media reference intent is unavailable")
@@ -534,10 +532,12 @@ class SqlMediaTransactionRepository:
 
     def _find_artifact(self, owner_id: str, normalized_sha256: str) -> MediaArtifactModel | None:
         return self._session.scalar(
-            select(MediaArtifactModel).where(
+            select(MediaArtifactModel)
+            .where(
                 MediaArtifactModel.owner_id == owner_id,
                 MediaArtifactModel.normalized_sha256 == normalized_sha256,
-            ).with_for_update()
+            )
+            .with_for_update()
         )
 
     def _require_artifact(self, reservation: MediaIngestionReservationModel) -> MediaArtifactModel:
@@ -605,9 +605,7 @@ class SqlMediaTransactionRepository:
         request: FinalizeMediaRequest,
     ) -> None:
         if not (
-            request.staged_media_item_id
-            == request.lease.media_item_id
-            == reservation.media_item_id
+            request.staged_media_item_id == request.lease.media_item_id == reservation.media_item_id
         ):
             raise MediaLeaseStateError("staged media item does not match lease")
 
@@ -910,7 +908,9 @@ class SqlSecurityAuditRepository:
             return 0
         result = cast(
             CursorResult[Any],
-            self._session.execute(delete(SecurityAuditEventModel).where(SecurityAuditEventModel.id.in_(expired_ids))),
+            self._session.execute(
+                delete(SecurityAuditEventModel).where(SecurityAuditEventModel.id.in_(expired_ids))
+            ),
         )
         return int(result.rowcount or 0)
 
@@ -1077,15 +1077,22 @@ class SqlEvidenceRepository:
                 (EvidenceModel.session_id == LearningSessionModel.session_id)
                 & (EvidenceModel.evidence_id == evidence_id),
             )
-            .outerjoin(MediaArtifactModel, EvidenceModel.artifact_id == MediaArtifactModel.media_item_id)
+            .outerjoin(
+                MediaArtifactModel, EvidenceModel.artifact_id == MediaArtifactModel.media_item_id
+            )
             .outerjoin(
                 MediaIngestionReservationModel,
                 (MediaIngestionReservationModel.session_id == EvidenceModel.session_id)
                 & (MediaIngestionReservationModel.evidence_id == EvidenceModel.evidence_id)
                 & (MediaIngestionReservationModel.status == "COMPLETED"),
             )
-            .outerjoin(MediaScanAttemptModel, MediaScanAttemptModel.idempotency_key == stable_scan_key)
-            .outerjoin(MediaCleanReceiptModel, MediaCleanReceiptModel.attempt_id == MediaScanAttemptModel.attempt_id)
+            .outerjoin(
+                MediaScanAttemptModel, MediaScanAttemptModel.idempotency_key == stable_scan_key
+            )
+            .outerjoin(
+                MediaCleanReceiptModel,
+                MediaCleanReceiptModel.attempt_id == MediaScanAttemptModel.attempt_id,
+            )
             .where(LearningSessionModel.session_id == session_id)
         ).one_or_none()
         if row is None:
@@ -1463,6 +1470,8 @@ class SpeechRequestRepository(Protocol):
         media_type: str | None = None,
         byte_size: int | None = None,
         duration_ms: int | None = None,
+        request_fingerprint: str | None = None,
+        timeout_ms: int | None = None,
     ) -> SpeechAdmissionToken: ...
 
     def mark_dispatching(
@@ -1471,6 +1480,7 @@ class SpeechRequestRepository(Protocol):
         *,
         now: datetime | None = None,
         lease_seconds: int = 120,
+        timeout_ms: int | None = None,
     ) -> SpeechAdmissionToken: ...
 
     def finalize(
@@ -1481,6 +1491,7 @@ class SpeechRequestRepository(Protocol):
         outcome_code: str | None = None,
         latency_ms: int | None = None,
         now: datetime | None = None,
+        timeout_ms: int | None = None,
     ) -> bool: ...
 
     def recover_expired(self, *, now: datetime | None = None) -> int: ...
@@ -1598,14 +1609,9 @@ class SqlSpeechRequestRepository:
         actual_keys = dict(hmac_keys or {})
         if active_hmac_key_version is not None and not active_hmac_key_version.strip():
             raise ValueError("active HMAC key version must not be blank")
-        if (
-            active_hmac_key_version is not None
-            and active_hmac_key_version not in actual_keys
-        ):
+        if active_hmac_key_version is not None and active_hmac_key_version not in actual_keys:
             raise ValueError("active HMAC key material is unavailable")
-        if any(
-            not version.strip() or not key for version, key in actual_keys.items()
-        ):
+        if any(not version.strip() or not key for version, key in actual_keys.items()):
             raise ValueError("HMAC keyring entries must be non-empty")
         self._session = session
         self._active_hmac_key_version = active_hmac_key_version
@@ -1629,8 +1635,8 @@ class SqlSpeechRequestRepository:
             raise SpeechHmacReadinessError("speech HMAC keyring is not configured")
 
         UUID(idempotency_key)
-        if request_fingerprint is not None and len(request_fingerprint) != 64:
-            raise ValueError("request fingerprint must be a SHA-256 hex digest")
+        if request_fingerprint is not None:
+            self._validate_request_fingerprint(request_fingerprint)
         if not lease_owner.strip() or lease_seconds <= 0:
             raise ValueError("speech lease must be bounded and owned")
         actual_now = _aware(now or datetime.now(UTC))
@@ -1655,8 +1661,7 @@ class SqlSpeechRequestRepository:
             self._session.scalar(
                 select(func.count(SpeechTranscriptionRequestModel.request_id)).where(
                     SpeechTranscriptionRequestModel.owner_user_id == owner_user_id,
-                    SpeechTranscriptionRequestModel.created_at
-                    >= actual_now - timedelta(hours=1),
+                    SpeechTranscriptionRequestModel.created_at >= actual_now - timedelta(hours=1),
                 )
             )
             or 0
@@ -1673,9 +1678,7 @@ class SqlSpeechRequestRepository:
             request_id=request_id,
             session_id=session_id,
             owner_user_id=owner_user_id,
-            idempotency_key_hash=self._hash(
-                active_version, idempotency_key
-            ),
+            idempotency_key_hash=self._hash(active_version, idempotency_key),
             hmac_key_version=active_version,
             request_fingerprint=request_fingerprint,
             state=TranscriptionState.ADMITTED.value,
@@ -1723,7 +1726,12 @@ class SqlSpeechRequestRepository:
         media_type: str | None = None,
         byte_size: int | None = None,
         duration_ms: int | None = None,
+        request_fingerprint: str | None = None,
+        timeout_ms: int | None = None,
     ) -> SpeechAdmissionToken:
+        _configure_postgres_transaction(
+            self._session, timeout_ms if timeout_ms is not None else self._lock_timeout_ms
+        )
         if state not in {
             TranscriptionState.UPLOADING.value,
             TranscriptionState.SCANNING.value,
@@ -1733,6 +1741,18 @@ class SqlSpeechRequestRepository:
         row = self._cas_row(token)
         if row is None or _NEXT_SPEECH_STATE.get(row.state) != state:
             raise SpeechLeaseStateError("speech transition is stale or illegal")
+        if request_fingerprint is not None:
+            self._validate_request_fingerprint(request_fingerprint)
+        if state == TranscriptionState.SCANNING.value:
+            if request_fingerprint is None and row.request_fingerprint is None:
+                raise SpeechLeaseStateError("scanning requires a bound request fingerprint")
+            if request_fingerprint is not None and row.request_fingerprint not in {
+                None,
+                request_fingerprint,
+            }:
+                raise SpeechLeaseStateError("request fingerprint is already bound")
+        elif request_fingerprint is not None:
+            raise SpeechLeaseStateError("request fingerprint may only bind before scanning")
         actual_now = _aware(now or datetime.now(UTC))
         values: dict[str, object] = {
             "state": state,
@@ -1746,6 +1766,8 @@ class SqlSpeechRequestRepository:
             values["byte_size"] = byte_size
         if duration_ms is not None:
             values["duration_ms"] = duration_ms
+        if request_fingerprint is not None:
+            values["request_fingerprint"] = request_fingerprint
         if not self._cas_update(token, values):
             raise SpeechLeaseStateError("speech transition lost its lease")
         return SpeechAdmissionToken(
@@ -1763,7 +1785,11 @@ class SqlSpeechRequestRepository:
         *,
         now: datetime | None = None,
         lease_seconds: int = 120,
+        timeout_ms: int | None = None,
     ) -> SpeechAdmissionToken:
+        _configure_postgres_transaction(
+            self._session, timeout_ms if timeout_ms is not None else self._lock_timeout_ms
+        )
         row = self._cas_row(token)
         if row is None or row.state != TranscriptionState.INSPECTING.value:
             raise SpeechLeaseStateError("only inspected audio may be dispatched")
@@ -1798,7 +1824,11 @@ class SqlSpeechRequestRepository:
         outcome_code: str | None = None,
         latency_ms: int | None = None,
         now: datetime | None = None,
+        timeout_ms: int | None = None,
     ) -> bool:
+        _configure_postgres_transaction(
+            self._session, timeout_ms if timeout_ms is not None else self._lock_timeout_ms
+        )
         if state not in _TERMINAL_SPEECH_STATES:
             raise SpeechLeaseStateError("speech final state is not terminal")
         row = self._cas_row(token)
@@ -1852,11 +1882,7 @@ class SqlSpeechRequestRepository:
                 if dispatched
                 else TranscriptionState.FAILED_TERMINAL.value
             )
-            outcome = (
-                "lease_expired_post_dispatch"
-                if dispatched
-                else "lease_expired_pre_dispatch"
-            )
+            outcome = "lease_expired_post_dispatch" if dispatched else "lease_expired_pre_dispatch"
             if self.finalize(token, state=state, outcome_code=outcome, now=actual_now):
                 recovered += 1
         return recovered
@@ -1894,22 +1920,21 @@ class SqlSpeechRequestRepository:
         row: SpeechTranscriptionRequestModel,
         request_fingerprint: str | None,
     ) -> None:
+        if row.state in _ACTIVE_SPEECH_STATES and request_fingerprint is None:
+            raise SpeechAdmissionError(SpeechErrorCode.TRANSCRIPTION_IN_PROGRESS)
         if row.request_fingerprint != request_fingerprint:
             raise SpeechAdmissionError(SpeechErrorCode.IDEMPOTENCY_CONFLICT)
         if row.state in _ACTIVE_SPEECH_STATES:
             raise SpeechAdmissionError(SpeechErrorCode.TRANSCRIPTION_IN_PROGRESS)
         raise SpeechAdmissionError(SpeechErrorCode.TRANSCRIPTION_RESULT_UNAVAILABLE)
 
-    def _cas_row(
-        self, token: SpeechAdmissionToken
-    ) -> SpeechTranscriptionRequestModel | None:
+    def _cas_row(self, token: SpeechAdmissionToken) -> SpeechTranscriptionRequestModel | None:
         return self._session.scalar(
             select(SpeechTranscriptionRequestModel)
             .where(
                 SpeechTranscriptionRequestModel.request_id == token.request_id,
                 SpeechTranscriptionRequestModel.lease_owner == token.lease_owner,
-                SpeechTranscriptionRequestModel.lease_generation
-                == token.lease_generation,
+                SpeechTranscriptionRequestModel.lease_generation == token.lease_generation,
             )
             .with_for_update()
         )
@@ -1926,8 +1951,7 @@ class SqlSpeechRequestRepository:
                 .where(
                     SpeechTranscriptionRequestModel.request_id == token.request_id,
                     SpeechTranscriptionRequestModel.lease_owner == token.lease_owner,
-                    SpeechTranscriptionRequestModel.lease_generation
-                    == token.lease_generation,
+                    SpeechTranscriptionRequestModel.lease_generation == token.lease_generation,
                 )
                 .values(**values)
             ),
@@ -1940,6 +1964,15 @@ class SqlSpeechRequestRepository:
             idempotency_key.encode(),
             hashlib.sha256,
         ).hexdigest()
+
+    @staticmethod
+    def _validate_request_fingerprint(request_fingerprint: str) -> None:
+        if len(request_fingerprint) != 64:
+            raise ValueError("request fingerprint must be a SHA-256 hex digest")
+        try:
+            bytes.fromhex(request_fingerprint)
+        except ValueError as exc:
+            raise ValueError("request fingerprint must be a SHA-256 hex digest") from exc
 
     @staticmethod
     def _token(row: SpeechTranscriptionRequestModel) -> SpeechAdmissionToken:

@@ -756,8 +756,13 @@ def create_app(
                 if settings is None:
                     raise RuntimeConfigurationError
                 uow_factory.configure_speech(
-                    active_hmac_key_version="v1",
-                    hmac_keys={"v1": settings.idempotency_hmac_key.encode("utf-8")},
+                    active_hmac_key_version=(
+                        settings.idempotency_hmac_active_version
+                    ),
+                    hmac_keys={
+                        version: key.encode("utf-8")
+                        for version, key in settings.idempotency_hmac_keyring
+                    },
                 )
                 with uow_factory() as speech_uow:
                     readiness_check = getattr(

@@ -27,7 +27,10 @@ def real_asr_env() -> dict[str, str]:
         "DASHSCOPE_API_KEY": "placeholder",
         "FOCUSPROOF_ASR_E2E_TIMEOUT_SECONDS": "120",
         "FOCUSPROOF_ASR_MAX_CONCURRENCY": "4",
-        "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEY": "test-hmac-secret",
+        "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_ACTIVE_VERSION": "v2",
+        "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEYRING_JSON": (
+            '{"v1":"retained-test-secret","v2":"test-hmac-secret"}'
+        ),
     }
 
 
@@ -89,10 +92,35 @@ def test_speech_settings_are_frozen_and_keep_secrets_out_of_repr() -> None:
     assert settings.e2e_timeout_seconds == 120
     assert settings.business_timeout_seconds == 115
     assert settings.max_concurrency == 4
+    assert settings.idempotency_hmac_active_version == "v2"
+    assert dict(settings.idempotency_hmac_keyring) == {
+        "v1": "retained-test-secret",
+        "v2": "test-hmac-secret",
+    }
     assert "placeholder" not in repr(settings)
     assert "test-hmac-secret" not in repr(settings)
     with pytest.raises(FrozenInstanceError):
         settings.model = "different"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [
+        real_asr_env()
+        | {"FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_ACTIVE_VERSION": "v3"},
+        real_asr_env()
+        | {"FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEYRING_JSON": "not-json"},
+        real_asr_env()
+        | {"FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEYRING_JSON": "{}"},
+    ],
+)
+def test_invalid_hmac_keyring_configuration_fails_closed(
+    environment: dict[str, str],
+) -> None:
+    capability = build_speech_capability(environment)
+
+    assert capability["enabled"] is False
+    assert capability["reasonCode"] == "asr_configuration_invalid"
 
 
 def test_transcription_value_objects_preserve_candidate_text_exactly() -> None:

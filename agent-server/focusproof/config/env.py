@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import json
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,8 @@ _ENV_KEYS = (
     "FOCUSPROOF_ASR_BASE_URL",
     "FOCUSPROOF_ASR_E2E_TIMEOUT_SECONDS",
     "FOCUSPROOF_ASR_MAX_CONCURRENCY",
-    "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEY",
+    "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_ACTIVE_VERSION",
+    "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEYRING_JSON",
 )
 _ASR_ACTIVATION_KEYS = tuple(key for key in _ENV_KEYS if key.startswith("FOCUSPROOF_ASR_"))
 
@@ -76,7 +78,8 @@ def load_speech_settings(environ: Mapping[str, str]) -> SpeechSettings | None:
         "DASHSCOPE_API_KEY",
         "FOCUSPROOF_ASR_E2E_TIMEOUT_SECONDS",
         "FOCUSPROOF_ASR_MAX_CONCURRENCY",
-        "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEY",
+        "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_ACTIVE_VERSION",
+        "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEYRING_JSON",
     )
     if any(not environ.get(key) for key in required):
         raise ValueError("speech configuration is incomplete")
@@ -90,12 +93,35 @@ def load_speech_settings(environ: Mapping[str, str]) -> SpeechSettings | None:
         or environ["FOCUSPROOF_ASR_MODEL"] != "qwen3-asr-flash"
     ):
         raise ValueError("speech provider or model is invalid")
+    try:
+        decoded_keyring = json.loads(
+            environ["FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEYRING_JSON"]
+        )
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("speech HMAC configuration is invalid") from exc
+    active_hmac_version = environ[
+        "FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_ACTIVE_VERSION"
+    ]
+    if (
+        not isinstance(decoded_keyring, dict)
+        or not decoded_keyring
+        or active_hmac_version not in decoded_keyring
+        or any(
+            not isinstance(version, str)
+            or not version.strip()
+            or not isinstance(key, str)
+            or not key.strip()
+            for version, key in decoded_keyring.items()
+        )
+    ):
+        raise ValueError("speech HMAC configuration is invalid")
     return SpeechSettings(
         provider="dashscope",
         model="qwen3-asr-flash",
         base_url=environ["FOCUSPROOF_ASR_BASE_URL"],
         api_key=environ["DASHSCOPE_API_KEY"],
-        idempotency_hmac_key=environ["FOCUSPROOF_SPEECH_IDEMPOTENCY_HMAC_KEY"],
+        idempotency_hmac_active_version=active_hmac_version,
+        idempotency_hmac_keyring=tuple(decoded_keyring.items()),
         e2e_timeout_seconds=e2e_timeout_seconds,
         max_concurrency=max_concurrency,
     )

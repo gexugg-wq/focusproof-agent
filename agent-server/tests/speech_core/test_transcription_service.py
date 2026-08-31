@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import stat
+import threading
 import time
 from collections.abc import Awaitable, Callable, Iterator
 from datetime import UTC, datetime
@@ -34,6 +37,7 @@ from focusproof.speech_core.errors import (
     SpeechErrorCode,
     SpeechProviderError,
 )
+from focusproof.speech_core.idempotency import request_fingerprint
 from focusproof.speech_core.models import (
     AudioFacts,
     AudioFormat,
@@ -97,13 +101,17 @@ def _seed(factory: UnitOfWorkFactory) -> None:
         uow.commit()
 
 
-def _admit(factory: UnitOfWorkFactory) -> SpeechAdmissionToken:
+def _admit(
+    factory: UnitOfWorkFactory,
+    *,
+    request_fingerprint: str | None = None,
+) -> SpeechAdmissionToken:
     with factory() as uow:
         token = uow.speech_requests.admit(
             owner_user_id="user_1",
             session_id="sess_1",
             idempotency_key=str(uuid4()),
-            request_fingerprint="f" * 64,
+            request_fingerprint=request_fingerprint,
             lease_owner="worker-1",
         )
         uow.commit()
@@ -291,10 +299,15 @@ def _service(
     )
 
 
-def _admission(factory: UnitOfWorkFactory, *, deadline: float | None = None):
+def _admission(
+    factory: UnitOfWorkFactory,
+    *,
+    deadline: float | None = None,
+    request_fingerprint: str | None = None,
+):
     admission_type = _application_types()[0]
     return admission_type(
-        token=_admit(factory),
+        token=_admit(factory, request_fingerprint=request_fingerprint),
         deadline=deadline if deadline is not None else time.monotonic() + 120,
     )
 
@@ -335,6 +348,12 @@ async def test_success_commits_dispatch_before_one_call_then_cleans_resources(
     assert row.state == "succeeded"
     assert row.provider_attempts == 1
     assert row.duration_ms == 800
+    expected_fingerprint = request_fingerprint(
+        payload_sha256=sha256(b"RIFF-private-audio").hexdigest(),
+        language_hint=LanguageHint.EN,
+        media_type="audio/wav",
+    )
+    assert row.request_fingerprint == expected_fingerprint
     assert "private candidate" not in repr(row.__dict__)
     _assert_resources_cleared(uow_factory, temp_dir)
 
@@ -583,6 +602,7 @@ async def test_provider_response_then_success_commit_failure_is_ambiguous(
         outcome_code: str | None = None,
         latency_ms: int | None = None,
         now: datetime | None = None,
+        timeout_ms: int | None = None,
     ) -> bool:
         if state == "succeeded":
             raise RuntimeError("private candidate success commit failed")
@@ -593,6 +613,7 @@ async def test_provider_response_then_success_commit_failure_is_ambiguous(
             outcome_code=outcome_code,
             latency_ms=latency_ms,
             now=now,
+            timeout_ms=timeout_ms,
         )
 
     monkeypatch.setattr(SqlSpeechRequestRepository, "finalize", fail_success_finalize)
@@ -629,6 +650,150 @@ async def test_exhausted_business_window_never_dispatches(
     row = _speech_row(uow_factory)
     assert row.state == "failed_terminal"
     assert row.provider_attempts == 0
+    _assert_resources_cleared(uow_factory, temp_dir)
+
+
+async def test_database_transition_is_fenced_by_remaining_business_deadline(
+    tmp_path: Path,
+    uow_factory: UnitOfWorkFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from focusproof.persistence.repositories import SqlSpeechRequestRepository
+
+    original_transition = SqlSpeechRequestRepository.transition
+    observed_timeouts: list[int | None] = []
+    release = threading.Event()
+
+    def blocked_transition(
+        self: SqlSpeechRequestRepository,
+        token: SpeechAdmissionToken,
+        state: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> SpeechAdmissionToken:
+        observed_timeouts.append(kwargs.get("timeout_ms"))
+        release.wait(timeout=0.5)
+        return original_transition(self, token, state, *args, **kwargs)
+
+    monkeypatch.setattr(SqlSpeechRequestRepository, "transition", blocked_transition)
+    service = _service(uow_factory, tmp_path / "speech")
+    timer = threading.Timer(0.5, release.set)
+    timer.start()
+    started = time.monotonic()
+    try:
+        with pytest.raises(SpeechProviderError) as caught:
+            await service.execute(
+                _admission(
+                    uow_factory,
+                    deadline=time.monotonic() + 5.1,
+                ),
+                FakeUpload(),
+                LanguageHint.AUTO,
+                _connected,
+            )
+    finally:
+        release.set()
+        timer.cancel()
+
+    assert time.monotonic() - started < 0.35
+    assert caught.value.code is SpeechErrorCode.TRANSCRIPTION_TIMEOUT
+    assert observed_timeouts
+    assert all(timeout is not None and 1 <= timeout <= 150 for timeout in observed_timeouts)
+    await asyncio.sleep(0.05)
+    assert _speech_row(uow_factory).state == "failed_terminal"
+    _assert_resources_cleared(uow_factory, tmp_path / "speech")
+
+
+async def test_success_finalize_is_fenced_by_remaining_total_deadline(
+    tmp_path: Path,
+    uow_factory: UnitOfWorkFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from focusproof.persistence.repositories import SqlSpeechRequestRepository
+
+    now = [time.monotonic()]
+    entry_deadline = now[0] + 120
+    release = threading.Event()
+    observed_timeouts: list[int | None] = []
+    finalize_started_at: list[float] = []
+    release_timers: list[threading.Timer] = []
+    original_finalize = SqlSpeechRequestRepository.finalize
+
+    def blocked_success_finalize(
+        self: SqlSpeechRequestRepository,
+        token: SpeechAdmissionToken,
+        *,
+        state: str,
+        outcome_code: str | None = None,
+        latency_ms: int | None = None,
+        now: datetime | None = None,
+        timeout_ms: int | None = None,
+    ) -> bool:
+        if state == "succeeded":
+            observed_timeouts.append(timeout_ms)
+            finalize_started_at.append(time.monotonic())
+            release_timer = threading.Timer(0.5, release.set)
+            release_timers.append(release_timer)
+            release_timer.start()
+            release.wait(timeout=0.5)
+        return original_finalize(
+            self,
+            token,
+            state=state,
+            outcome_code=outcome_code,
+            latency_ms=latency_ms,
+            now=now,
+            timeout_ms=timeout_ms,
+        )
+
+    class AdvancingProvider(FakeProvider):
+        async def transcribe(
+            self,
+            request: TranscriptionRequest,
+            *,
+            deadline: float,
+        ) -> TranscriptionResult:
+            result = await super().transcribe(request, deadline=deadline)
+            now[0] = entry_deadline - 5.1
+            return result
+
+    monkeypatch.setattr(
+        SqlSpeechRequestRepository,
+        "finalize",
+        blocked_success_finalize,
+    )
+    provider = AdvancingProvider(uow_factory)
+    temp_dir = tmp_path / "speech"
+    service = _service(
+        uow_factory,
+        temp_dir,
+        provider=provider,
+        clock=lambda: now[0],
+    )
+    try:
+        with pytest.raises(SpeechProviderError) as caught:
+            await service.execute(
+                _admission(uow_factory, deadline=entry_deadline),
+                FakeUpload(),
+                LanguageHint.AUTO,
+                _connected,
+            )
+    finally:
+        release.set()
+        for release_timer in release_timers:
+            release_timer.cancel()
+
+    assert finalize_started_at
+    assert time.monotonic() - finalize_started_at[0] < 0.3
+    assert caught.value.code is SpeechErrorCode.TRANSCRIPTION_RESULT_UNAVAILABLE
+    assert observed_timeouts
+    assert all(timeout is not None and 1 <= timeout <= 150 for timeout in observed_timeouts)
+    for _ in range(50):
+        if _speech_row(uow_factory).state == "ambiguous":
+            break
+        await asyncio.sleep(0.01)
+    assert _speech_row(uow_factory).state == "ambiguous"
+    assert provider.calls == 1
     _assert_resources_cleared(uow_factory, temp_dir)
 
 
@@ -779,9 +944,18 @@ async def test_dispatch_commit_crossing_business_deadline_is_ambiguous_without_c
     )
     original_mark_dispatching = service._mark_dispatching
 
-    def mark_and_cross_deadline(token: SpeechAdmissionToken) -> SpeechAdmissionToken:
-        updated = original_mark_dispatching(token)
-        now[0] = deadline - 5
+    async def mark_and_cross_deadline(
+        token: SpeechAdmissionToken,
+        *,
+        deadline: float,
+        cleanup_deadline: float,
+    ) -> SpeechAdmissionToken:
+        updated = await original_mark_dispatching(
+            token,
+            deadline=deadline,
+            cleanup_deadline=cleanup_deadline,
+        )
+        now[0] = cleanup_deadline - 5
         return updated
 
     monkeypatch.setattr(service, "_mark_dispatching", mark_and_cross_deadline)
@@ -997,3 +1171,139 @@ async def test_asr_slot_passes_business_and_cleanup_repository_timeouts(
     assert release_timeouts
     assert all(timeout is not None and 1 <= timeout <= 115_000 for timeout in claim_timeouts)
     assert all(timeout is not None and 1 <= timeout <= 120_000 for timeout in release_timeouts)
+
+
+async def test_service_forces_private_temp_directory_mode_independent_of_umask(
+    tmp_path: Path,
+    uow_factory: UnitOfWorkFactory,
+) -> None:
+    temp_dir = tmp_path / "speech"
+    service = _service(uow_factory, temp_dir)
+    previous_umask = os.umask(0)
+    try:
+        await service.execute(
+            _admission(uow_factory),
+            FakeUpload(),
+            LanguageHint.AUTO,
+            _connected,
+        )
+    finally:
+        os.umask(previous_umask)
+
+    assert stat.S_IMODE(temp_dir.stat().st_mode) == 0o700
+
+
+async def test_scan_cancellation_waits_for_worker_fence_before_cleanup_returns(
+    tmp_path: Path,
+    uow_factory: UnitOfWorkFactory,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingScanner(FakeScanner):
+        def scan(self, source: ReadOnlyMediaSource) -> MalwareScanVerdict:
+            started.set()
+            release.wait(timeout=1)
+            return super().scan(source)
+
+    temp_dir = tmp_path / "speech"
+    service = _service(
+        uow_factory,
+        temp_dir,
+        scanner=BlockingScanner(deadline_ms=1000),
+    )
+    task = asyncio.create_task(
+        service.execute(
+            _admission(uow_factory),
+            FakeUpload(),
+            LanguageHint.AUTO,
+            _connected,
+        )
+    )
+    assert await asyncio.to_thread(started.wait, 1)
+
+    task.cancel()
+    await asyncio.sleep(0.05)
+    try:
+        assert not task.done()
+    finally:
+        release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    with uow_factory() as uow:
+        session = uow._require_session()
+        scan_slot = session.scalar(
+            select(SpeechResourceSlotModel).where(SpeechResourceSlotModel.resource_kind == "scan")
+        )
+        attempt_count = session.scalar(select(func.count()).select_from(MediaScanAttemptModel))
+        assert scan_slot is not None
+        assert scan_slot.lease_owner_token is None
+        assert attempt_count == 0
+    assert _speech_row(uow_factory).state == "cancelled"
+
+
+async def test_symlink_temp_directory_fails_closed_without_writing_target(
+    tmp_path: Path,
+    uow_factory: UnitOfWorkFactory,
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "keep.txt"
+    marker.write_bytes(b"keep")
+    temp_dir = tmp_path / "speech"
+    temp_dir.symlink_to(outside, target_is_directory=True)
+    service = _service(uow_factory, temp_dir)
+
+    with pytest.raises(SpeechProviderError) as caught:
+        await service.execute(
+            _admission(uow_factory),
+            FakeUpload(),
+            LanguageHint.AUTO,
+            _connected,
+        )
+
+    assert caught.value.code is SpeechErrorCode.TRANSCRIPTION_FAILED
+    assert marker.read_bytes() == b"keep"
+    assert list(outside.iterdir()) == [marker]
+    assert _speech_row(uow_factory).state == "failed_terminal"
+
+
+async def test_preexisting_audio_symlink_is_rejected_and_unlinked_without_target_write(
+    tmp_path: Path,
+    uow_factory: UnitOfWorkFactory,
+) -> None:
+    from starlette.datastructures import Headers, UploadFile
+
+    from focusproof.api.speech_routes import StreamingSpeechUpload
+
+    temp_dir = tmp_path / "speech"
+    temp_dir.mkdir(mode=0o700)
+    target = tmp_path / "target.audio"
+    target.write_bytes(b"do-not-overwrite")
+    admission = _admission(uow_factory)
+    request_path = temp_dir / f"{admission.token.request_id}.audio"
+    request_path.symlink_to(target)
+    upload_file = UploadFile(
+        file=BytesIO(b"RIFF-private-audio"),
+        filename="voice.wav",
+        headers=Headers({"content-type": "audio/wav"}),
+    )
+    service = _service(uow_factory, temp_dir)
+
+    with pytest.raises(SpeechProviderError) as caught:
+        await service.execute(
+            admission,
+            StreamingSpeechUpload(upload_file),
+            LanguageHint.AUTO,
+            _connected,
+        )
+
+    assert caught.value.code is SpeechErrorCode.TRANSCRIPTION_FAILED
+    assert target.read_bytes() == b"do-not-overwrite"
+    assert not request_path.exists()
+    row = _speech_row(uow_factory)
+    assert row.state == "failed_terminal"
+    assert row.outcome_code == "upload_failed"
+    _assert_resources_cleared(uow_factory, temp_dir)

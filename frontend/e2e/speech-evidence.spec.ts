@@ -241,7 +241,7 @@ test("retries the retained clip only after user action and submits only edited t
     onTranscription: async (route, attempt) => {
       idempotencyKeys.push(route.request().headers()["idempotency-key"] ?? "");
       if (attempt === 1) {
-        await route.fulfill({ status: 503, json: { code: "transcription_provider_unavailable", retryable: true } });
+        await route.fulfill({ status: 504, json: { code: "transcription_timeout", retryable: true } });
         return;
       }
       await retryCanFinish;

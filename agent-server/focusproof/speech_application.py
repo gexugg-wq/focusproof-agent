@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -23,13 +25,14 @@ from focusproof.persistence.repositories import (
     SpeechAdmissionToken,
     SpeechLeaseStateError,
 )
-from focusproof.persistence.unit_of_work import UnitOfWorkFactory
+from focusproof.persistence.unit_of_work import UnitOfWork, UnitOfWorkFactory
 from focusproof.speech_core.errors import (
     SpeechAmbiguousError,
     SpeechError,
     SpeechErrorCode,
     SpeechProviderError,
 )
+from focusproof.speech_core.idempotency import request_fingerprint
 from focusproof.speech_core.models import (
     LanguageHint,
     TranscriptionRequest,
@@ -42,6 +45,7 @@ _CLEANUP_RESERVE_SECONDS = 5.0
 _SCAN_DEADLINE_MARGIN_SECONDS = 0.25
 _SLOT_POLL_SECONDS = 0.01
 _T = TypeVar("_T")
+_SLOT_RELEASE_WAIT_SECONDS = 0.1
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +93,20 @@ class _StageFailure(SpeechProviderError):
         self.outcome_code = outcome_code
 
 
+class _DatabaseDeadlineError(SpeechProviderError):
+    def __init__(self) -> None:
+        super().__init__(SpeechErrorCode.TRANSCRIPTION_TIMEOUT)
+
+
+class _DatabaseOperationCancelled(RuntimeError):
+    pass
+
+
+class _ResultCommitUnavailable(SpeechProviderError):
+    def __init__(self) -> None:
+        super().__init__(SpeechErrorCode.TRANSCRIPTION_RESULT_UNAVAILABLE)
+
+
 class TranscriptionService:
     def __init__(
         self,
@@ -128,14 +146,19 @@ class TranscriptionService:
         business_deadline = admission.deadline - _CLEANUP_RESERVE_SECONDS
         asr_lease: ResourceSlotLease | None = None
         dispatched = False
+        provider_result_received = False
         success_committed = False
         cleanup_error: SpeechProviderError | None = None
         ambiguous_classified = False
         try:
-            self._temp_dir.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(self._prepare_temp_directory)
             self._ensure_business_time(business_deadline)
             await self._check_disconnect(disconnect_probe)
-            token = self._transition(token, TranscriptionState.UPLOADING)
+            token = await self._transition(
+                token,
+                TranscriptionState.UPLOADING,
+                deadline=business_deadline,
+            )
             try:
                 uploaded = await self._run_before_deadline(
                     upload.write_to(request_path, deadline=business_deadline),
@@ -147,18 +170,25 @@ class TranscriptionService:
                 raise _StageFailure(SpeechErrorCode.TRANSCRIPTION_FAILED, "upload_failed") from None
             self._ensure_business_time(business_deadline)
             await self._check_disconnect(disconnect_probe)
-            token = self._transition(
+            token = await self._transition(
                 token,
                 TranscriptionState.SCANNING,
                 media_type=upload.declared_media_type,
                 byte_size=uploaded.byte_size,
+                request_fingerprint_value=request_fingerprint(
+                    payload_sha256=uploaded.streaming_sha256,
+                    language_hint=language_hint,
+                    media_type=(upload.declared_media_type or "application/octet-stream"),
+                ),
+                deadline=business_deadline,
             )
             try:
                 await self._scan(
-                    token.request_id,
+                    token,
                     request_path,
                     uploaded,
                     content_type=upload.declared_media_type or "application/octet-stream",
+                    cleanup_deadline=admission.deadline,
                     deadline=business_deadline,
                 )
             except SpeechError:
@@ -184,12 +214,13 @@ class TranscriptionService:
                 raise _StageFailure(
                     SpeechErrorCode.TRANSCRIPTION_FAILED, "inspection_failed"
                 ) from None
-            token = self._transition(
+            token = await self._transition(
                 token,
                 TranscriptionState.INSPECTING,
                 media_type=facts.media_type,
                 byte_size=facts.byte_size,
                 duration_ms=facts.duration_ms,
+                deadline=business_deadline,
             )
             self._ensure_business_time(business_deadline)
             await self._check_disconnect(disconnect_probe)
@@ -202,7 +233,11 @@ class TranscriptionService:
                 raise SpeechProviderError(SpeechErrorCode.TRANSCRIPTION_TIMEOUT)
             self._ensure_business_time(business_deadline)
             await self._check_disconnect(disconnect_probe)
-            token = self._mark_dispatching(token)
+            token = await self._mark_dispatching(
+                token,
+                deadline=business_deadline,
+                cleanup_deadline=admission.deadline,
+            )
             dispatched = True
             if self._clock() >= business_deadline:
                 raise SpeechAmbiguousError()
@@ -224,60 +259,71 @@ class TranscriptionService:
                 if exc.code is SpeechErrorCode.TRANSCRIPTION_TIMEOUT:
                     raise SpeechAmbiguousError() from None
                 raise
+            provider_result_received = True
             latency_ms = max(0, round((self._clock() - provider_started) * 1000))
-            if not self._finalize(
+            if not await self._finalize(
                 token,
                 state=TranscriptionState.SUCCEEDED,
                 latency_ms=latency_ms,
+                deadline=business_deadline,
+                cleanup_deadline=admission.deadline,
+                cleanup_lease=asr_lease,
             ):
-                raise SpeechProviderError(SpeechErrorCode.TRANSCRIPTION_RESULT_UNAVAILABLE)
+                raise _ResultCommitUnavailable()
             success_committed = True
             return result
         except asyncio.CancelledError:
             if dispatched:
                 ambiguous_classified = True
-                self._finalize(
+                await self._finalize(
                     token,
                     state=TranscriptionState.AMBIGUOUS,
                     outcome_code=SpeechErrorCode.TRANSCRIPTION_AMBIGUOUS.value,
+                    deadline=admission.deadline,
                 )
                 raise SpeechAmbiguousError() from None
-            self._finalize(
+            await self._finalize(
                 token,
                 state=TranscriptionState.CANCELLED,
                 outcome_code="client_cancelled",
+                deadline=admission.deadline,
             )
             raise
         except SpeechAmbiguousError:
             ambiguous_classified = True
-            self._finalize(
+            await self._finalize(
                 token,
                 state=TranscriptionState.AMBIGUOUS,
                 outcome_code=SpeechErrorCode.TRANSCRIPTION_AMBIGUOUS.value,
+                deadline=admission.deadline,
             )
             raise
         except SpeechError as exc:
-            self._finalize(
-                token,
-                state=TranscriptionState.FAILED_TERMINAL,
-                outcome_code=(
-                    exc.outcome_code if isinstance(exc, _StageFailure) else exc.code.value
-                ),
-            )
+            if not isinstance(exc, (_DatabaseDeadlineError, _ResultCommitUnavailable)):
+                await self._finalize(
+                    token,
+                    state=TranscriptionState.FAILED_TERMINAL,
+                    outcome_code=(
+                        exc.outcome_code if isinstance(exc, _StageFailure) else exc.code.value
+                    ),
+                    deadline=admission.deadline,
+                )
             raise
         except Exception:
             if dispatched:
                 ambiguous_classified = True
-                self._finalize(
+                await self._finalize(
                     token,
                     state=TranscriptionState.AMBIGUOUS,
                     outcome_code=SpeechErrorCode.TRANSCRIPTION_AMBIGUOUS.value,
+                    deadline=admission.deadline,
                 )
                 raise SpeechAmbiguousError() from None
-            self._finalize(
+            await self._finalize(
                 token,
                 state=TranscriptionState.FAILED_TERMINAL,
                 outcome_code=SpeechErrorCode.TRANSCRIPTION_FAILED.value,
+                deadline=admission.deadline,
             )
             raise SpeechProviderError(SpeechErrorCode.TRANSCRIPTION_FAILED) from None
         finally:
@@ -291,14 +337,14 @@ class TranscriptionService:
                 cleanup_error = exc
             if cleanup_error is not None and ambiguous_classified:
                 cleanup_error = SpeechAmbiguousError()
-            if cleanup_error is not None and success_committed:
+            if cleanup_error is not None and (success_committed or provider_result_received):
                 cleanup_error = SpeechProviderError(
                     SpeechErrorCode.TRANSCRIPTION_RESULT_UNAVAILABLE
                 )
             if cleanup_error is not None:
                 raise cleanup_error
 
-    def _transition(
+    async def _transition(
         self,
         token: SpeechAdmissionToken,
         state: TranscriptionState,
@@ -306,55 +352,239 @@ class TranscriptionService:
         media_type: str | None = None,
         byte_size: int | None = None,
         duration_ms: int | None = None,
+        request_fingerprint_value: str | None = None,
+        deadline: float,
     ) -> SpeechAdmissionToken:
-        with self._uow_factory() as uow:
-            updated = uow.speech_requests.transition(
+        def operation(uow: UnitOfWork, timeout_ms: int) -> SpeechAdmissionToken:
+            return uow.speech_requests.transition(
                 token,
                 state.value,
                 media_type=media_type,
                 byte_size=byte_size,
                 duration_ms=duration_ms,
+                request_fingerprint=request_fingerprint_value,
+                timeout_ms=timeout_ms,
             )
-            uow.commit()
-            return updated
 
-    def _mark_dispatching(self, token: SpeechAdmissionToken) -> SpeechAdmissionToken:
-        with self._uow_factory() as uow:
-            updated = uow.speech_requests.mark_dispatching(token)
-            uow.commit()
-            return updated
+        return await self._run_db_operation(
+            operation,
+            timeout_fallback=self._terminal_fallback(
+                token,
+                state=TranscriptionState.FAILED_TERMINAL,
+                outcome_code=SpeechErrorCode.TRANSCRIPTION_TIMEOUT.value,
+            ),
+            deadline=deadline,
+            cleanup_deadline=deadline + _CLEANUP_RESERVE_SECONDS,
+        )
 
-    def _finalize(
+    async def _mark_dispatching(
+        self,
+        token: SpeechAdmissionToken,
+        *,
+        deadline: float,
+        cleanup_deadline: float,
+    ) -> SpeechAdmissionToken:
+        def operation(uow: UnitOfWork, timeout_ms: int) -> SpeechAdmissionToken:
+            return uow.speech_requests.mark_dispatching(
+                token,
+                timeout_ms=timeout_ms,
+            )
+
+        return await self._run_db_operation(
+            operation,
+            timeout_fallback=self._terminal_fallback(
+                token,
+                state=TranscriptionState.FAILED_TERMINAL,
+                outcome_code=SpeechErrorCode.TRANSCRIPTION_TIMEOUT.value,
+            ),
+            deadline=deadline,
+            cleanup_deadline=cleanup_deadline,
+        )
+
+    async def _finalize(
         self,
         token: SpeechAdmissionToken,
         *,
         state: TranscriptionState,
         outcome_code: str | None = None,
         latency_ms: int | None = None,
+        deadline: float,
+        cleanup_deadline: float | None = None,
+        cleanup_lease: ResourceSlotLease | None = None,
     ) -> bool:
+
+        def operation(uow: UnitOfWork, timeout_ms: int) -> bool:
+            return uow.speech_requests.finalize(
+                token,
+                state=state.value,
+                outcome_code=outcome_code,
+                latency_ms=latency_ms,
+                timeout_ms=timeout_ms,
+            )
+
+        fallback_state = state
+        fallback_outcome = outcome_code
+        if state is TranscriptionState.SUCCEEDED:
+            fallback_state = TranscriptionState.AMBIGUOUS
+            fallback_outcome = SpeechErrorCode.TRANSCRIPTION_AMBIGUOUS.value
+        try:
+            return await self._run_db_operation(
+                operation,
+                timeout_fallback=self._terminal_fallback(
+                    token,
+                    cleanup_lease=cleanup_lease,
+                    state=fallback_state,
+                    outcome_code=fallback_outcome,
+                    latency_ms=latency_ms if fallback_state is state else None,
+                ),
+                deadline=deadline,
+                cleanup_deadline=cleanup_deadline or deadline,
+            )
+        except (_DatabaseDeadlineError, SpeechLeaseStateError):
+            return False
+
+    def _prepare_temp_directory(self) -> None:
+        self._temp_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        descriptor = os.open(self._temp_dir, flags)
+        try:
+            os.fchmod(descriptor, 0o700)
+        finally:
+            os.close(descriptor)
+
+    def _terminal_fallback(
+        self,
+        token: SpeechAdmissionToken,
+        *,
+        state: TranscriptionState,
+        outcome_code: str | None,
+        latency_ms: int | None = None,
+        cleanup_lease: ResourceSlotLease | None = None,
+    ) -> Callable[[UnitOfWork, int], bool]:
+        def finalize(uow: UnitOfWork, timeout_ms: int) -> bool:
+            finalized = uow.speech_requests.finalize(
+                token,
+                state=state.value,
+                outcome_code=outcome_code,
+                latency_ms=latency_ms,
+                timeout_ms=timeout_ms,
+            )
+            if cleanup_lease is not None:
+                uow.resource_slots.release(
+                    cleanup_lease,
+                    timeout_ms=timeout_ms,
+                )
+            return finalized
+
+        return finalize
+
+    async def _run_db_operation(
+        self,
+        operation: Callable[[UnitOfWork, int], _T],
+        *,
+        timeout_fallback: Callable[[UnitOfWork, int], object],
+        deadline: float,
+        cleanup_deadline: float,
+    ) -> _T:
+        remaining = deadline - self._clock()
+        if remaining <= 0:
+            fallback_task = asyncio.create_task(
+                asyncio.to_thread(
+                    self._run_timeout_fallback,
+                    timeout_fallback,
+                    deadline=cleanup_deadline,
+                )
+            )
+            fallback_task.add_done_callback(self._consume_background_task)
+            raise _DatabaseDeadlineError()
+        timeout_ms = max(1, math.ceil(remaining * 1000) - 25)
+        abandoned = threading.Event()
+        timed_out = threading.Event()
+
+        def run() -> _T:
+            try:
+                with self._uow_factory() as uow:
+                    result = operation(uow, timeout_ms)
+                    if abandoned.is_set():
+                        raise _DatabaseOperationCancelled
+                    uow.commit()
+                    return result
+            except _DatabaseOperationCancelled:
+                if timed_out.is_set():
+                    self._run_timeout_fallback(
+                        timeout_fallback,
+                        deadline=cleanup_deadline,
+                    )
+                raise
+
+        task = asyncio.create_task(asyncio.to_thread(run))
+        try:
+            async with asyncio.timeout(remaining):
+                return await asyncio.shield(task)
+        except TimeoutError:
+            timed_out.set()
+            abandoned.set()
+            task.add_done_callback(self._consume_background_task)
+            raise _DatabaseDeadlineError() from None
+        except asyncio.CancelledError:
+            abandoned.set()
+            task.add_done_callback(self._consume_background_task)
+            raise
+
+    def _run_timeout_fallback(
+        self,
+        fallback: Callable[[UnitOfWork, int], object],
+        *,
+        deadline: float,
+    ) -> None:
+        remaining = deadline - self._clock()
+        if remaining <= 0:
+            return
         try:
             with self._uow_factory() as uow:
-                finalized = uow.speech_requests.finalize(
-                    token,
-                    state=state.value,
-                    outcome_code=outcome_code,
-                    latency_ms=latency_ms,
-                )
+                fallback(uow, max(1, math.ceil(remaining * 1000)))
                 uow.commit()
-                return finalized
-        except SpeechLeaseStateError:
-            return False
+        except (SpeechLeaseStateError, RuntimeError):
+            return
+
+    @staticmethod
+    def _consume_background_task(task: asyncio.Task[object]) -> None:
+        try:
+            task.exception()
+        except BaseException:
+            pass
+
+    async def _await_scan_fence(
+        self,
+        task: asyncio.Task[MalwareScanStatus],
+        *,
+        deadline: float,
+    ) -> None:
+        while not task.done():
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                return
+            try:
+                async with asyncio.timeout(remaining):
+                    await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                return
 
     async def _scan(
         self,
-        request_id: str,
+        token: SpeechAdmissionToken,
         path: Path,
         uploaded: UploadedSpeechFile,
         *,
         content_type: str,
         deadline: float,
+        cleanup_deadline: float,
     ) -> None:
         snapshot = self._scanner.audit_snapshot
+        request_id = token.request_id
         if (
             self._clock() + self._scanner.max_duration_seconds + _SCAN_DEADLINE_MARGIN_SECONDS
             >= deadline
@@ -376,9 +606,17 @@ class TranscriptionService:
                 return verdict.status
 
         started_at = datetime.now(UTC)
+        scan_task = asyncio.create_task(asyncio.to_thread(scan))
         try:
-            status = await self._run_before_deadline(asyncio.to_thread(scan), deadline)
+            status = await self._run_before_deadline(
+                asyncio.shield(scan_task),
+                deadline,
+            )
+        except asyncio.CancelledError:
+            await self._await_scan_fence(scan_task, deadline=cleanup_deadline)
+            raise
         except SpeechProviderError:
+            await self._await_scan_fence(scan_task, deadline=cleanup_deadline)
             raise
         except Exception:
             status = "error"
@@ -410,9 +648,21 @@ class TranscriptionService:
             finished_at=finished_at,
             idempotency_key=audit_key,
         )
-        with self._uow_factory() as uow:
+
+        def record_attempt(uow: UnitOfWork, timeout_ms: int) -> None:
+            del timeout_ms
             uow.scan_audit.record_attempt(attempt)
-            uow.commit()
+
+        await self._run_db_operation(
+            record_attempt,
+            timeout_fallback=self._terminal_fallback(
+                token,
+                state=TranscriptionState.FAILED_TERMINAL,
+                outcome_code="scan_unavailable",
+            ),
+            deadline=deadline,
+            cleanup_deadline=cleanup_deadline,
+        )
 
         if status == "clean":
             return
@@ -450,25 +700,39 @@ class TranscriptionService:
                 uow.commit()
             if lease is not None:
                 if self._clock() >= deadline:
-                    self._release_slot(lease, deadline=release_deadline)
+                    await self._release_slot(lease, deadline=release_deadline)
                     return None
                 return lease
             await asyncio.sleep(min(_SLOT_POLL_SECONDS, max(0.0, remaining)))
         return None
 
-    def _release_slot(
+    async def _release_slot(
         self,
         lease: ResourceSlotLease,
         *,
         deadline: float,
     ) -> bool:
-        with self._uow_factory() as uow:
-            released = uow.resource_slots.release(
-                lease,
-                timeout_ms=max(1, math.ceil(max(0.0, deadline - self._clock()) * 1000)),
-            )
-            uow.commit()
-            return released
+        remaining = max(0.0, deadline - self._clock())
+
+        def release() -> bool:
+            with self._uow_factory() as uow:
+                released = uow.resource_slots.release(
+                    lease,
+                    timeout_ms=max(1, math.ceil(remaining * 1000)),
+                )
+                uow.commit()
+                return released
+
+        task = asyncio.create_task(asyncio.to_thread(release))
+        if remaining <= 0:
+            task.add_done_callback(self._consume_background_task)
+            return False
+        try:
+            async with asyncio.timeout(min(remaining, _SLOT_RELEASE_WAIT_SECONDS)):
+                return await asyncio.shield(task)
+        except TimeoutError:
+            task.add_done_callback(self._consume_background_task)
+            return False
 
     async def _cleanup(
         self,
@@ -478,9 +742,10 @@ class TranscriptionService:
         deadline: float,
     ) -> None:
         async def actions() -> None:
-            if lease is not None and not self._release_slot(lease, deadline=deadline):
-                raise RuntimeError("resource slot cleanup failed")
+            released = lease is None or await self._release_slot(lease, deadline=deadline)
             await self._file_remover(path)
+            if not released:
+                raise RuntimeError("resource slot cleanup failed")
 
         cleanup_deadline = min(
             deadline,
